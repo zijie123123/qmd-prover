@@ -25,8 +25,8 @@ thm-main-asymptotic-limit
 The `main` prefix means that the statement is a user-given fact to be proved;
 it does not mean that the fact is already known to be true. The user then asks
 an agent in natural language to prove one theorem or all open theorems. The
-agent follows the project instructions and repeatedly applies project skills
-and their bundled Node scripts until it reaches a terminal state.
+agent follows the project instructions and repeatedly applies the centralized
+`math-doc-reader` skill until it reaches a terminal state.
 
 During this iterative proof-search workflow, agents may:
 
@@ -49,8 +49,8 @@ The system combines:
 6. Interactive theorem navigation and dependency graphs.
 
 Humans are not expected to invoke scripts. Natural language is the human
-interface. Deterministic operations are Node scripts bundled inside the
-project skills that document when and how agents should use them.
+interface. Deterministic operations are subcommands of one Node dispatcher
+bundled with the globally installed `math-doc-reader` skill.
 
 The system is an agentic informal prover, not initially a formal proof assistant such as Lean. "Verified" means accepted by the configured verification backend. The architecture should allow a formal backend to be added later.
 
@@ -100,13 +100,13 @@ No proof may rely on assumptions supplied only by surrounding narrative prose.
 
 ### 2.7 The system should feel like a compiler
 
-The `inspect-project` skill's structural checker:
+The centralized skill's project inspection command:
 
 ```bash
-node .agents/skills/inspect-project/scripts/check.mjs
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-project
 ```
 
-should play a role analogous to `tsc`:
+includes a structural check that should play a role analogous to `tsc`:
 
 - Parse every module.
 - Resolve imports.
@@ -118,9 +118,9 @@ should play a role analogous to `tsc`:
 - Detect illegal mutation of user goals.
 - Produce precise, source-located diagnostics.
 
-Agents invoke this script only after reading the owning skill. It is not part
-of the normal human workflow and there is no project-wide qmd-prover
-executable.
+Agents invoke this dispatcher only after reading the skill. It is not part of
+the normal human workflow, and the mathematical project does not contain its
+own executable or skill folders.
 
 ### 2.8 Natural language is the user interface
 
@@ -131,8 +131,8 @@ Prove all the open main theorems in this project. Use several workers, keep
 the theorem statements unchanged, and continue repairing rejected proofs.
 ```
 
-The agent interprets the request, reads `AGENTS.md`, selects the required
-skills, and invokes their bundled Node scripts when needed. Human-facing
+The agent interprets the request, reads `AGENTS.md`, loads the
+`math-doc-reader` skill, and invokes its dispatcher when needed. Human-facing
 documentation should describe goals and outcomes, not require the user to
 learn script paths or arguments.
 
@@ -140,14 +140,15 @@ learn script paths or arguments.
 
 ## 3. User experience
 
-A project is initialized with a dedicated `AGENTS.md`, project skills, and the
-standard directory structure. Project setup may itself be performed by an
-agent. The user writes several goals:
+A project starts with a dedicated `AGENTS.md` and any mathematical files the
+user already has. Project setup may itself be performed by an agent. The user
+writes several goals, either at the root or in subject folders that make sense
+for the mathematics:
 
 ```text
-goals/uniform-index.qmd
-goals/matroid-bound.qmd
-goals/asymptotic-limit.qmd
+uniform-index.qmd
+matroids/bound.qmd
+asymptotics/limit.qmd
 ```
 
 Each goal contains a `thm-main-*` theorem block with a statement and an empty
@@ -166,8 +167,8 @@ Prove @thm-main-uniform-index. Try the local class-group approach first and
 record useful failed approaches so a later session can continue.
 ```
 
-The agent reads `AGENTS.md`, inspects the goals through project skills, runs
-structural checks, coordinates any workers, submits candidate proofs for
+The agent reads `AGENTS.md`, inspects the goals through the centralized skill,
+runs structural checks, coordinates any workers, submits candidate proofs for
 verification, and repairs rejected attempts. The user may ask for status,
 reports, graphs, or a rendered site in ordinary language at any time.
 
@@ -184,90 +185,21 @@ When the user asks the agent to render the accepted work, the website provides:
 
 ## 4. Project structure
 
+The project reserves exactly one auxiliary directory: `.qmd-prover/`. It does
+not require `goals/`, `modules/`, `generated/`, `.agents/`, or another fixed
+content taxonomy.
+
 ```text
 my-math-project/
 ├── AGENTS.md
-├── qmd-prover.yml
-├── _quarto.yml
-├── README.md
-│
-├── goals/
-│   ├── uniform-index.qmd
-│   ├── matroid-bound.qmd
-│   └── asymptotic-limit.qmd
-│
-├── modules/
-│   ├── foundations/
-│   │   ├── notation.qmd
-│   │   └── definitions.qmd
-│   ├── lemmas/
-│   │   ├── local-finiteness.qmd
-│   │   └── determinant-bound.qmd
-│   └── results/
-│       └── auxiliary-results.qmd
-│
-├── exposition/
-│   ├── introduction.qmd
-│   └── examples.qmd
-│
-├── references/
-│   ├── references.bib
-│   └── literature-notes.qmd
-│
-├── generated/
-│   ├── graphs/
-│   ├── reports/
-│   └── indexes/
-│
-├── .agents/
-│   └── skills/
-│       ├── inspect-project/
-│       │   ├── SKILL.md
-│       │   └── scripts/
-│       │       ├── check.mjs
-│       │       ├── index.mjs
-│       │       ├── goals.mjs
-│       │       └── status.mjs
-│       ├── inspect-module/
-│       │   ├── SKILL.md
-│       │   └── scripts/
-│       │       ├── view.mjs
-│       │       ├── deps.mjs
-│       │       ├── imports.mjs
-│       │       └── graph.mjs
-│       ├── decompose-goal/
-│       │   └── SKILL.md
-│       ├── search-mathematics/
-│       │   └── SKILL.md
-│       ├── construct-examples/
-│       │   └── SKILL.md
-│       ├── construct-counterexamples/
-│       │   └── SKILL.md
-│       ├── direct-proving/
-│       │   └── SKILL.md
-│       ├── submit-proof/
-│       │   ├── SKILL.md
-│       │   └── scripts/
-│       │       ├── propose.mjs
-│       │       ├── submit.mjs
-│       │       └── revoke.mjs
-│       ├── repair-proof/
-│       │   ├── SKILL.md
-│       │   └── scripts/
-│       │       └── show-verification.mjs
-│       ├── coordinate-workers/
-│       │   ├── SKILL.md
-│       │   └── scripts/
-│       │       ├── assign.mjs
-│       │       ├── start.mjs
-│       │       └── stop.mjs
-│       └── render-project/
-│           ├── SKILL.md
-│           └── scripts/
-│               ├── report.mjs
-│               └── render.mjs
-│
+├── uniform-index.qmd
+├── matroids/                 # optional; created when useful
+│   └── bound.qmd
+├── asymptotics/              # optional; created when useful
+│   └── limit.qmd
 ├── .qmd-prover/
+│   ├── config.yml
+│   ├── _quarto.yml
 │   ├── manifest.json
 │   ├── graph.json
 │   ├── goal-locks.json
@@ -284,43 +216,35 @@ my-math-project/
 │   ├── accepted/
 │   ├── rejected/
 │   ├── dead-ends/
+│   ├── reports/
+│   ├── graphs/
+│   ├── site/
 │   └── cache/
-│
-├── tests/
-│   ├── fixtures/
-│   └── integration/
-│
-└── _site/
 ```
 
 ### 4.1 Canonical versus runtime content
 
-Canonical, version-controlled content:
+Canonical, version-controlled content consists only of `AGENTS.md` and the
+human-readable mathematical sources. Their organization is project-specific:
 
 ```text
 AGENTS.md
-qmd-prover.yml
-goals/
-modules/
-exposition/
-references/
-.agents/skills/
+*.qmd
+optional subject folders created according to AGENTS.md
 ```
 
-Generated but potentially publishable:
-
-```text
-generated/
-_site/
-```
-
-Runtime content:
+All configuration, indexes, worker state, proposals, verifier records,
+generated graphs, reports, rendered output, and caches live under:
 
 ```text
 .qmd-prover/
 ```
 
-The runtime directory should normally be ignored by Git, except when a project explicitly wants to preserve proof-search traces.
+The agent may create a subject folder such as `matroids/` when several related
+theorems should live together, but it must follow the organization rules in
+`AGENTS.md` rather than a framework-imposed directory scheme. `.qmd-prover/`
+should normally be ignored by Git unless the project explicitly preserves
+proof-search traces or generated artifacts.
 
 ---
 
@@ -430,7 +354,7 @@ The presence of a proof makes the block a candidate, not automatically verified.
 
 ```markdown
 ::: {.theorem-imports}
-from: ../modules/foundations/local-groups.qmd
+from: foundations/local-groups.qmd
 use:
   - @def-local-class-group
   - @thm-local-class-group-finite
@@ -441,7 +365,7 @@ Aliases may be supported:
 
 ```markdown
 ::: {.theorem-imports}
-from: ../modules/foundations/local-groups.qmd
+from: foundations/local-groups.qmd
 use:
   - ref: @thm-local-class-group-finite
     as: @thm-local-finiteness
@@ -531,7 +455,7 @@ Example manifest entry:
   "kind": "theorem",
   "goal": true,
   "origin": "user",
-  "file": "goals/uniform-index.qmd",
+  "file": "uniform-index.qmd",
   "title": "Uniform index theorem",
   "statement": "...",
   "statement_hash": "sha256:...",
@@ -548,15 +472,15 @@ Example manifest entry:
 }
 ```
 
-### 8.1 Structural-check script
+### 8.1 Structural checking during project inspection
 
-After reading its `SKILL.md`, an agent may invoke:
+After loading the `math-doc-reader` skill, an agent invokes:
 
 ```bash
-node .agents/skills/inspect-project/scripts/check.mjs
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-project
 ```
 
-The script must validate:
+As part of inspection, the dispatcher must validate:
 
 - QMD parseability.
 - Semantic block shape.
@@ -578,7 +502,7 @@ The script must validate:
 Example diagnostic:
 
 ```text
-goals/uniform-index.qmd:41:8 QMDP1004
+uniform-index.qmd:41:8 QMDP1004
 Proof references @lem-local-bound, but that result is not imported into
 this module.
 
@@ -655,7 +579,7 @@ The main agent coordinates all goals.
 Responsibilities:
 
 - Read the project `AGENTS.md` before changing mathematics.
-- Apply the project inspection skill to check structure and status.
+- Run the centralized `inspect-project` command to check structure and status.
 - Inspect every open `thm-main-*` goal.
 - Decide which goals can be attempted independently.
 - Decompose goals into subgoals.
@@ -685,20 +609,18 @@ Target: @thm-main-uniform-index
 
 Investigate whether the desired uniform bound follows from finiteness of
 local class groups. Construct and prove any precise intermediate lemma
-needed. Search existing project modules before creating a duplicate result.
+needed. Search existing project mathematics before creating a duplicate result.
 ```
 
-Workers follow `AGENTS.md` and use project skills, which may invoke their
-bundled Node scripts, to:
+Workers follow `AGENTS.md` and use the centralized skill and dispatcher to:
 
 - Inspect the target.
-- Inspect relevant modules.
+- Inspect relevant mathematical files.
 - View dependency closures.
 - Search previous attempts and dead ends.
-- Construct examples and counterexamples.
 - Write isolated proposals.
 - Submit proofs.
-- Repair rejected submissions.
+- Read verifier reports for rejected submissions.
 
 ### 10.3 Verifier agent
 
@@ -745,201 +667,80 @@ After a natural-language proof request, the coordinating agent and each worker
 follow this loop:
 
 ```text
-1. Inspect assignment
-2. Read `AGENTS.md` and run the project inspection skill
-3. View target module
-4. Query dependencies and existing results
-5. Review previous attempts and dead ends
-6. Select a proof strategy
-7. Search, calculate, or construct examples
-8. Propose intermediate results if necessary
-9. Write candidate proof in isolated proposal
-10. Run local structural validation through the `submit-proof` skill
-11. Submit to verifier
-12. If rejected, repair from concrete feedback
-13. If accepted, continue toward parent theorem
-14. Stop only when target is verified, refuted, blocked, or cancelled
+1. Read AGENTS.md
+2. Load the math-doc-reader skill
+3. Run inspect-project
+4. Inspect the assigned theorem and its dependency context
+5. Review previous attempts and verifier reports
+6. Develop the mathematics and write an isolated candidate proposal
+7. Run submit-proof
+8. If rejected, revise from the concrete verifier report and resubmit
+9. If accepted, continue toward the parent theorem
+10. Stop only when the target is verified, refuted, blocked, or cancelled
 ```
 
 Workers should not restart from zero between sessions. Their local memory and the shared project event log provide continuity.
 
 ---
 
-## 12. Skills
+## 12. Centralized skill
 
-Every initialized project contains dedicated, agent-facing skills. Skills are
-the stable operational interface for Codex and Claude: they explain when to use
-a capability, what context to gather, which bundled script to invoke, and how
-to interpret its output.
-
-Each skill follows the standard skill layout:
+qmd-prover is delivered as one standard Codex skill installed outside the
+mathematical project:
 
 ```text
-skill-name/
+~/.codex/skills/math-doc-reader/
 ├── SKILL.md
+├── agents/
+│   └── openai.yaml
 └── scripts/
-    └── operation.mjs
+    └── qmd-prover.mjs
 ```
 
-Pure reasoning skills may omit `scripts/`. Repeated or deterministic operations
-belong in `scripts/` and are invoked directly with Node. There is no global
-`qmd-prover` command, and these script examples are not instructions for the
-human user.
-
-### 12.1 `inspect-project`
-
-Bundled scripts:
-
-```bash
-node .agents/skills/inspect-project/scripts/status.mjs
-node .agents/skills/inspect-project/scripts/goals.mjs
-node .agents/skills/inspect-project/scripts/check.mjs
-node .agents/skills/inspect-project/scripts/index.mjs
-```
-
-Purpose:
-
-- Understand open goals.
-- See worker assignments.
-- See verified and rejected results.
-- Detect structural errors.
-
-### 12.2 `inspect-module`
-
-Bundled scripts:
-
-```bash
-node .agents/skills/inspect-module/scripts/view.mjs @thm-main-uniform-index
-node .agents/skills/inspect-module/scripts/deps.mjs @thm-main-uniform-index
-node .agents/skills/inspect-module/scripts/imports.mjs goals/uniform-index.qmd
-node .agents/skills/inspect-module/scripts/graph.mjs @thm-main-uniform-index
-```
-
-`view.mjs` should produce a bounded context bundle containing:
-
-- The target statement.
-- Relevant definitions.
-- Direct dependencies.
-- Imported theorem statements.
-- Existing proof, if any.
-- Verification history.
-- Nearby unresolved subgoals.
-
-It should not dump the entire project indiscriminately.
-
-### 12.3 `decompose-goal`
-
-Purpose:
-
-- Generate several materially different proof plans.
-- Turn useful subgoals into candidate lemma proposals.
-- Record which parent theorem needs each lemma.
-
-### 12.4 `search-mathematics`
-
-Purpose:
-
-- Search local modules first.
-- Search trusted external sources if needed.
-- Capture exact statements and applicability conditions.
-- Record bibliographic metadata.
-
-### 12.5 `construct-examples`
-
-Purpose:
-
-- Test definitions and hypotheses.
-- Develop intuition.
-- Identify necessary assumptions.
-
-### 12.6 `construct-counterexamples`
-
-Purpose:
-
-- Test whether a user goal or proposed lemma may be false.
-- Produce a precise refutation when possible.
-
-### 12.7 `direct-proving`
-
-Purpose:
-
-- Write detailed candidate proofs.
-- Cite every semantic dependency explicitly.
-
-### 12.8 `submit-proof`
-
-Bundled scripts:
-
-```bash
-node .agents/skills/submit-proof/scripts/propose.mjs PROPOSAL_FILE
-node .agents/skills/submit-proof/scripts/submit.mjs PROPOSAL_ID
-node .agents/skills/submit-proof/scripts/revoke.mjs @thm-main-ID --reason "..."
-```
-
-Purpose:
-
-- Validate the proposal.
-- Materialize dependencies.
-- Send it to the verifier.
-- Merge only after acceptance.
-
-### 12.9 `repair-proof`
-
-Bundled script:
-
-```bash
-node .agents/skills/repair-proof/scripts/show-verification.mjs SUBMISSION_ID
-```
-
-Purpose:
-
-- Read verification errors.
-- Determine whether the repair is local or strategic.
-- Produce a revised proposal.
-- Resubmit without discarding valid progress.
-
-### 12.10 `coordinate-workers`
-
-Bundled scripts:
-
-```bash
-node .agents/skills/coordinate-workers/scripts/assign.mjs WORKER_ID @thm-main-ID
-node .agents/skills/coordinate-workers/scripts/start.mjs WORKER_ID
-node .agents/skills/coordinate-workers/scripts/stop.mjs WORKER_ID
-```
-
-Purpose:
-
-- Assign independent proof directions without duplicating work.
-- Start and stop isolated workers.
-- Preserve task state for later sessions.
-
-### 12.11 `render-project`
-
-Bundled scripts:
-
-```bash
-node .agents/skills/render-project/scripts/report.mjs @thm-main-ID
-node .agents/skills/render-project/scripts/render.mjs
-```
-
-Purpose:
-
-- Generate human-readable proof reports.
-- Render the Quarto site and dependency views.
+`SKILL.md` tells the agent when to inspect a project, inspect one theorem,
+submit a candidate, read verification output, or render results. All
+deterministic behavior is centralized in `qmd-prover.mjs`; project directories
+do not contain copies of the skill or its scripts.
 
 ---
 
-## 13. Skill script interface
+## 13. Centralized command interface
 
-Each deterministic operation is implemented by a Node script owned by the
-skill that explains its use. The uniform invocation form is:
+The uniform invocation form is:
 
 ```bash
-node .agents/skills/<skill-name>/scripts/<operation>.mjs [arguments]
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs <subcommand> [arguments]
 ```
 
-Script requirements:
+The initial interface has five top-level subcommands:
+
+```bash
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-project
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-theorem @thm-main-ID
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs submit-proof PROPOSAL_FILE
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs verification show SUBMISSION_ID
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs render
+```
+
+- `inspect-project` discovers all QMD files regardless of folder layout,
+  rebuilds the manifest and graph, performs structural validation, and returns
+  goal and verification status.
+- `inspect-theorem` returns a bounded context bundle containing the statement,
+  imports, dependency closure, current proof, and verification history.
+- `submit-proof` validates a candidate, materializes its dependencies, sends it
+  to a fresh verifier, and atomically merges it only after acceptance.
+- `verification show` returns the stored verifier report for a submission.
+- `render` generates reports, dependency graphs, and the Quarto site under
+  `.qmd-prover/`.
+
+The `verification` namespace may also support controlled revocation without
+adding another top-level command:
+
+```bash
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs verification revoke @thm-ID --reason "..."
+```
+
+Dispatcher requirements:
 
 - Run from the project root.
 - Accept explicit positional arguments or documented flags.
@@ -951,18 +752,18 @@ Script requirements:
 - Never modify a user-owned `thm-main-*` statement.
 - Never set authoritative verification state directly.
 - Be independently testable with Node.
+- Keep all project-owned auxiliary output inside `.qmd-prover/`.
 
-There is no `qmd-prover` executable, command dispatcher, or `prove` script.
-Proof search is the reasoning loop described by `AGENTS.md` and the skills;
-scripts provide deterministic inspection, state, validation, proposal, and
-rendering operations within that loop.
+There is no separate `check`, `status`, `goals`, `deps`, `graph`, worker, or
+`prove` command. Those behaviors are either folded into the five operations
+above or remain part of the agent workflow described by `AGENTS.md`.
 
 ### 13.1 Goal-context operation
 
-After reading the `inspect-module` skill, an agent may invoke:
+After loading the skill, an agent may invoke:
 
 ```bash
-node .agents/skills/inspect-module/scripts/view.mjs @thm-main-uniform-index
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-theorem @thm-main-uniform-index
 ```
 
 Output:
@@ -981,19 +782,15 @@ Latest rejection: missing justification in the codimension-three case
 It should optionally emit a machine-readable JSON bundle:
 
 ```bash
-node .agents/skills/inspect-module/scripts/view.mjs @thm-main-uniform-index --json
+node ~/.codex/skills/math-doc-reader/scripts/qmd-prover.mjs inspect-theorem @thm-main-uniform-index --json
 ```
 
-### 13.2 Dependency-graph operation
+### 13.2 Rendered dependency graph
 
-```bash
-node .agents/skills/inspect-module/scripts/graph.mjs @thm-main-uniform-index
-```
-
-must compute the theorem’s transitive dependency closure and generate:
+`render` computes each main theorem's transitive dependency closure and writes:
 
 ```text
-generated/graphs/thm-main-uniform-index.qmd
+.qmd-prover/graphs/thm-main-uniform-index.qmd
 ```
 
 ---
@@ -1043,7 +840,8 @@ Accepted or rejected
 On acceptance:
 
 - Existing theorem proof: atomically replace only the proof section.
-- New lemma: create an appropriately named canonical QMD module.
+- New lemma: create an appropriately named canonical QMD file in the location
+  dictated by `AGENTS.md` and the surrounding mathematics.
 - Record verification metadata separately.
 - Rebuild the manifest and dependency graph.
 - Preserve the user-owned statement exactly.
@@ -1065,8 +863,8 @@ Multiple workers may operate simultaneously, but:
 - Each proposal has a unique identifier.
 - Canonical writes use file locks.
 - Accepted results merge through one controlled path.
-- A worker must reapply the `inspect-project` skill's structural check against
-  the latest project state before submission.
+- A worker must rerun centralized `inspect-project` against the latest project
+  state before submission.
 - If a dependency changed after the proposal was created, submission is rejected as stale.
 - Every state transition is appended to:
 
@@ -1116,15 +914,19 @@ Do not assume Mermaid or Graphviz automatically turns `@thm-*` text into Quarto 
 
 ## 17. Configuration
 
-Example `qmd-prover.yml`:
+Example `.qmd-prover/config.yml`:
 
 ```yaml
 project:
   name: uniform-index
-  source-dirs:
-    - goals
-    - modules
-    - exposition
+  root: ..
+  discover-qmd-recursively: true
+  exclude:
+    - .qmd-prover
+
+organization:
+  source: AGENTS.md
+  fixed-content-directories: false
 
 goals:
   id-prefix: thm-main-
@@ -1159,7 +961,7 @@ workers:
 render:
   graph-engine: graphviz
   hover-previews: true
-  output-dir: _site
+  output-dir: .qmd-prover/site
 ```
 
 Do not hardcode model names. Codex and Claude backends must be configurable.
@@ -1173,6 +975,10 @@ normative instruction file for any Codex, Claude, or other coding-agent session
 working on the mathematics. A fresh agent must be able to operate the project
 correctly by reading this file and the referenced skill instructions, without
 requiring the user to explain script paths or arguments.
+
+`AGENTS.md` also defines how canonical mathematics is organized. The agent may
+create a new subject folder for a coherent group of related theorems, but no
+folder taxonomy is imposed by qmd-prover.
 
 At minimum, `AGENTS.md` must define the following contract.
 
@@ -1257,31 +1063,31 @@ Proof-writing rules:
 
 `AGENTS.md` must instruct the agent to:
 
-1. Read `AGENTS.md` and the relevant project skills before acting.
-2. Inspect project status and structurally check the current tree through the
-   skills.
+1. Read `AGENTS.md` and load the centralized `math-doc-reader` skill before
+   acting.
+2. Run `inspect-project` to discover all QMD files, inspect status, and
+   structurally validate the current tree.
 3. Discover the requested open `thm-main-*` goals and protect their statements.
-4. Search existing modules, imports, accepted results, and prior failed
+4. Search existing mathematical files, imports, accepted results, and prior failed
    approaches before introducing new mathematics.
-5. Develop one or more proof strategies; use examples and counterexamples to
-   test fragile claims.
+5. Develop the proof using ordinary agent reasoning.
 6. Create precise intermediate lemmas only when they advance a main goal.
 7. Write work in an isolated proposal when concurrency or verification requires
    it.
-8. Structurally validate the proposal, then submit it through the
-   `submit-proof` skill for independent verification.
+8. Submit the proposal through the centralized `submit-proof` command for
+   structural validation and independent verification.
 9. Repair concrete gaps without discarding valid progress, and record
    meaningful dead ends for later sessions.
 10. Continue until the assigned goal is verified, refuted, genuinely blocked,
     cancelled, or explicitly stopped by the user.
 
-### 18.4 Skill and script boundary
+### 18.4 Skill and command boundary
 
-`AGENTS.md` lists the skills available in the project and tells agents when to
-use each one. Skills may invoke their own bundled Node scripts, but
-`AGENTS.md` must not instruct the human to run those scripts. Agents should
-translate script output into concise natural-language status, decisions, and
-requests for user input when needed.
+`AGENTS.md` tells agents to use the globally installed `math-doc-reader` skill.
+The skill may invoke its centralized `qmd-prover.mjs` dispatcher, but
+`AGENTS.md` must not instruct the human to run that command. Agents translate
+command output into concise natural-language status, decisions, and requests
+for user input when needed.
 
 The contract must also state that agents cannot mark their own mathematics
 verified and cannot bypass the proposal, verification, or controlled merge
@@ -1352,9 +1158,10 @@ Implement tests for:
 - Clickable graph nodes.
 - Hover-preview metadata.
 - HTML escaping.
-- Natural-language proof requests selecting the correct project skills.
-- Skill-mediated invocation of bundled Node scripts without requiring human
-  script input.
+- Natural-language proof requests triggering the centralized skill.
+- Centralized dispatcher invocation without requiring human command input.
+- Recursive QMD discovery in arbitrary agent-organized subject folders.
+- All auxiliary writes remaining inside `.qmd-prover/`.
 - Agent workflow from open goal to accepted proof.
 
 Provide a complete end-to-end fixture with:
@@ -1382,7 +1189,7 @@ Implement:
 - Reference resolution.
 - Manifest.
 - Dependency graph.
-- Skill-owned `check.mjs`, `view.mjs`, and `graph.mjs` Node scripts.
+- Centralized `qmd-prover.mjs` with `inspect-project` and `inspect-theorem`.
 
 ### Phase 2: Proposal and verification system
 
@@ -1401,7 +1208,7 @@ Implement:
 Implement:
 
 - A complete project `AGENTS.md`, including proof-writing format and workflow.
-- Agent-facing skills with bundled Node scripts for deterministic operations.
+- The centralized `math-doc-reader` skill and dispatcher.
 - Worker workspaces.
 - Task assignment.
 - Persistent local and shared state.
@@ -1435,11 +1242,12 @@ Implement:
 
 The implementation is complete when a user can:
 
-1. Open a project that contains its own `AGENTS.md` and agent skills.
+1. Open a project that contains `AGENTS.md`, mathematical QMD files, and no
+   required framework folders other than `.qmd-prover/`.
 2. Write several facts needing proof as empty `thm-main-*` theorem blocks.
 3. Ask Codex or Claude in natural language to prove one named goal or all open
    goals, without learning script paths or arguments.
-4. Have the agent read `AGENTS.md`, select the appropriate skills, inspect the
+4. Have the agent read `AGENTS.md`, load the centralized skill, inspect the
    project, and protect every user-owned theorem statement.
 5. Ask the agent to use several workers when proof directions are independent.
 6. Have workers create precisely formatted intermediate lemmas and candidate
@@ -1470,7 +1278,7 @@ Prioritize:
 2. Protected user goals.
 3. Deterministic dependency checking.
 4. Safe proposal and verification workflow.
-5. A precise `AGENTS.md` proof-writing contract and useful agent skills.
+5. A precise `AGENTS.md` proof-writing contract and one centralized skill.
 6. Multi-agent resumability.
 7. Readable Quarto output.
 8. Interactive dependency navigation.
@@ -1482,6 +1290,20 @@ After implementation:
 - Launch at least one complete proof workflow using a test or mock verifier.
 - Render the site.
 - Verify graph clicking and hovering in a browser.
-- Document natural-language usage for humans and bundled script behavior for
-  skill authors.
+- Document natural-language usage for humans and dispatcher behavior for skill
+  authors.
 - Report remaining limitations honestly.
+
+---
+
+## 24. Future directions
+
+Future versions may add optional proof-guidance tools:
+
+- `decompose-goal` and `search-mathematics` for planning and literature search.
+- `construct-examples` and `construct-counterexamples` for testing claims.
+- `direct-proving` and `repair-proof` for drafting or revising arguments.
+
+These tools are not part of the initial command interface or project structure.
+They should be considered only after the centralized inspection, submission,
+verification, and rendering workflow is reliable.
