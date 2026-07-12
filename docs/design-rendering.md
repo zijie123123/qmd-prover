@@ -205,8 +205,8 @@ user-authored mathematics. They must not:
 
 - become the authoritative copy of a theorem or proof;
 - require users to edit generated status by hand;
-- embed verification metadata inside mathematical proof prose, other than the
-  reserved leading `OPEN` or `REJECTED` control paragraph; or
+- embed verification metadata inside mathematical proof prose, other than
+  reserved `OPEN`, `REJECTED`, `VERIFIED`, or `REVOKED` control markers; or
 - make canonical QMD unusable when the generated files are absent.
 
 Deleting generated rendering inputs must not lose mathematics or verification

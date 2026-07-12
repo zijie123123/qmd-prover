@@ -22,10 +22,13 @@ The project has four components:
 
 1. [Discipline](design-discipline.md) defines the rules for mathematical QMD
    and for agents working on it.
-2. [Inspector](design-inspector.md) parses the project, checks the mechanically
-   enforceable discipline, and exposes theorem dependencies and status.
-3. [Proving utilities](design-proving.md) help the host agent prepare,
-   independently verify, repair, and safely accept a proof.
+2. [Inspector](design-inspector.md) checks individual facts, paths, and
+   workspaces; combines programmatic reference checks with an independent AI
+   sufficiency check; and supports dependency analysis, search, and staleness
+   invalidation.
+3. [Proving utilities](design-proving.md) prepare candidates and own protected
+   verification records, marker updates, promotion, and atomic canonical
+   writes.
 4. [Rendering](design-rendering.md) uses Quarto to present the QMD project and
    any generated observability material.
 
@@ -231,30 +234,22 @@ The files have different ownership:
   verification JSON retains accepted and rejected checks of provisional work.
 - Other `.qmd-prover/` files contain derived indexes and caches.
 
-## Workspace QMD format and inspection
+## Semantic QMD and inspection
 
-Workspace files remain ordinary QMD. The inspector parses them through Pandoc
-JSON and gives special meaning only to recognized semantic blocks and
-`qmd-prover` front matter. Prose, equations, figures, code cells, and
-bibliographic citations continue to behave as normal Quarto content.
+The inspector parses ordinary canonical and workspace QMD through Pandoc JSON.
+It recognizes definitions, lemmas, theorems, their linked proofs, semantic
+imports and exports, and the reserved `OPEN`, `REJECTED`, `VERIFIED`, and
+`REVOKED` markers. All other Quarto content remains ordinary document content.
 
-### What the inspector recognizes
+A semantic `@` reference inside a definition construction or linked proof is a
+logical dependency. The inspector first checks by program that the referenced
+fact exists, is unique, is available through local scope or an explicit import,
+and has usable status. It then asks an independent AI checker whether the
+referenced facts are sufficient for that exact construction or proof. A
+reference in ordinary exposition is navigational, and a bibliographic citation
+is not a theorem dependency.
 
-- A definition or result block has a semantic ID and class, a `name`, an ISO
-  introduction `date="YYYY-MM-DD"`, and its statement as the body. Quarto uses
-  `name` as the caption. The date is informational and does not affect the
-  statement's identity or status.
-- A `.proof` block names the result it proves with `of`. Definitions use the
-  same metadata as results but are declarations rather than propositions that
-  require proof.
-- A semantic `@` reference inside a linked proof is a logical dependency.
-  References in ordinary exposition are only navigational, and bibliographic
-  citations remain Quarto citations.
-- The `qmd-prover.imports` field in QMD front matter declares which exported
-  results from other files are available to a proof.
-
-For example, the inspector reads these blocks as one lemma with a linked proof
-and a direct dependency on `@def-even-integer`:
+For example, the proof below has direct dependencies on both referenced facts:
 
 ```markdown
 ::: {#lem-square-of-double .lemma name="Square of a double" date="2026-07-12" export="square-of-double"}
@@ -262,98 +257,91 @@ If \(n=2k\) for integers \(n,k\), then \(n^2=4k^2\).
 :::
 
 ::: {.proof of="lem-square-of-double"}
-Using @def-even-integer, calculate \(n^2=(2k)^2=4k^2\).
+Using @def-even-integer and @lem-product-calculation, calculate
+\(n^2=(2k)^2=4k^2\).
 :::
 ```
 
-Definitions, lemmas, propositions, theorems, and corollaries use their
-corresponding semantic classes and ID prefixes. The `export` attribute makes a
-result eligible for import by another file.
+Cross-file availability remains explicit and individual:
 
-A top-level goal uses a protected `thm-main-*` ID and the `.goal` class. Its
-result block contains the user-owned title, hypotheses, quantifiers, and
-statement; the agent may add a proof but may not change those protected parts:
-
-```markdown
-::: {#thm-main-even-square .theorem .goal name="Even squares" date="2026-07-12"}
-For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-:::
-```
-
-### How proof status is derived
-
-The inspector combines the current statement and proof with retained
-verification records. A proof may begin with a first nonempty paragraph
-containing exactly `OPEN`, `REJECTED`, `VERIFIED`, or `REVOKED`. This control
-paragraph is not part of the mathematical proof and is excluded from proof
-identity and verifier input. `VERIFIED` and `REVOKED` record claimed source
-statuses, but neither marker can establish its status alone: the inspector must
-confirm the corresponding verification or revocation record for the exact
-current statement and proof.
-
-- `open`: no proof is present, or the proof begins with `OPEN`.
-- `candidate`: an unmarked proof is present but no accepted record matches its
-  current identity.
-- `rejected`: the proof begins with `REJECTED`, or a matching rejection record
-  exists. A rejected submission does not change canonical QMD.
-- `verified`: the proof begins with `VERIFIED`, and the inspector confirms that
-  the current statement and proof exactly match the accepted verification
-  record associated with that result.
-- `revoked`: the proof begins with `REVOKED`, and the inspector confirms that a
-  matching earlier acceptance was withdrawn with a recorded concrete reason.
-
-A workspace may retain several `OPEN`, `REJECTED`, or `REVOKED` attempts for
-one result, but at most one unmarked candidate or `VERIFIED` proof may be
-active. Canonical QMD may contain an accepted proof marked `VERIFIED` or a
-previously accepted proof marked `REVOKED`. A missing, stale, or nonmatching
-record makes either record-backed marker invalid and produces a diagnostic.
-Adding `VERIFIED` cannot establish a claim, adding `REVOKED` cannot revoke one,
-and removing either marker cannot erase its record; changing the mathematical
-text creates a new proof identity. Formal verification and human review are
-recorded separately; an informal LLM verdict is neither.
-
-A candidate for a protected canonical goal therefore contains only the linked
-proof; it does not copy the statement into the workspace:
-
-```markdown
-::: {.proof of="thm-main-even-square"}
-Let \(n\) be even. By @def-even-integer, write \(n=2k\). Then
-@lem-square-of-double gives \(n^2=4k^2\), so \(4\) divides \(n^2\).
-:::
-```
-
-An agent-created intermediate result uses the same result-plus-proof structure
-as the lemma above. No separate proposal file type or directory is needed.
-
-### How dependencies are resolved
-
-A proof may use a result only when it cites the result with a semantic `@`
-reference, the result is available in the same file or through an explicit
-import, and its verification status is acceptable for the operation. A
-cross-file import names individual exported results in ordinary QMD front
-matter:
-
-```markdown
----
-title: "Parity results"
+```yaml
 qmd-prover:
   imports:
     - from: foundations.qmd
       use:
         - def-even-integer
-        - lem-square-of-double
----
+        - lem-product-calculation
 ```
 
-Wildcard imports are not supported. Each imported ID must exist in the named
-file and be exported there; results in the same file need no import. Imports
-control availability, while references in the linked proof identify the
-dependencies actually used.
+Wildcard imports are not supported. Imports determine availability; semantic
+references determine the dependency edges actually used.
 
-After checking availability and status, the inspector constructs a directed
-graph. An edge from theorem A to lemma B means that A's proof cites B. The graph
-provides both the dependency closure needed to inspect A and the reverse
-dependencies that may be affected if B changes.
+### Inspection scopes
+
+The inspector supports four related scopes:
+
+- one theorem, lemma, or definition;
+- every fact in one file or recursively discovered folder;
+- every mathematical QMD file in a workspace; and
+- graph analysis and search over the latest complete snapshot.
+
+Each broader scope runs the same fact-level programmatic and AI checks. Stable
+JSON is the default output. `--print` selects a human-readable report containing
+statuses, diagnostics, dependency paths, frontiers, and relevant graph edges;
+it does not change the check result.
+
+### Verification status
+
+`OPEN` and `REJECTED` are conservative workflow markers. `VERIFIED` and
+`REVOKED` are record-backed markers and are excluded from the mathematical
+identity checked by AI.
+
+- `open`: a required proof or construction is absent or begins with `OPEN`;
+- `candidate`: complete unmarked mathematics awaits checking;
+- `rejected`: the retained attempt begins with `REJECTED` or has a matching
+  rejection report;
+- `verified`: `VERIFIED` matches the exact statement or construction, proof,
+  dependency snapshot, and accepted record; and
+- `revoked`: `REVOKED` matches a prior acceptance and a revocation record with
+  a concrete reason.
+
+The inspector may cause `VERIFIED` to be added only after every reference check
+passes, the independent AI check reports no critical errors or gaps, the exact
+cache and record are stored, and post-write inspection confirms the result. A
+missing, corrupt, stale, or nonmatching record makes a record-backed marker
+unusable.
+
+### Dependency analysis and search
+
+An edge points from a definition or result to the fact cited by its construction
+or proof. From the graph, the inspector provides direct and transitive
+dependencies, reverse dependencies, paths, cycles, impact analysis, and proof
+frontiers. The frontier of a selected theorem contains its lowest unresolved
+claims, rather than every unverified node in its closure.
+
+Search can match semantic ID, title, mathematical text, kind, file or folder,
+status, and canonical or workspace origin. Graph-aware search can restrict
+results to dependencies, reverse dependencies, frontier nodes, stale facts, or
+cycle members.
+
+### Staleness and transitive invalidation
+
+Successful inspection caches the exact statement or definition construction,
+proof, referenced fact identities, scope, dependency snapshot, AI check, and
+verification record. Before relying on `VERIFIED`, the inspector reparses the
+requested scope and compares the current mathematics with that cache.
+
+If a checked fact changed, qmd-prover removes its `VERIFIED` marker and marks
+its record stale. It then follows reverse-dependency edges and removes
+`VERIFIED` from every fact that directly or transitively relied on the changed
+fact. Upstream premises are not invalidated merely because a downstream fact
+changed. Marker removals, stale-record updates, and graph publication are one
+atomic operation and roll back together on failure.
+
+Staleness does not add `REVOKED`; explicit revocation requires a concrete
+recorded reason. The canonical mathematical-project `AGENTS.md` contract
+requires the stale check before using verified mathematics and forbids agents
+from manually adding or restoring `VERIFIED`.
 
 ## How proof work proceeds
 
@@ -362,26 +350,25 @@ For a typical request, the host agent follows this loop:
 1. Load the qmd-prover skill.
 2. Read the project's `AGENTS.md` and confirm that its managed qmd-prover
    contract matches the canonical contract shipped with the skill.
-3. Ask the inspector for the project state and the selected theorem's bounded
-   context.
-4. Stop on structural errors that make proof work unsafe, such as a changed
-   protected statement or an unresolved dependency.
+3. Run the stale check before relying on any `VERIFIED` fact.
+4. Inspect the selected fact, file or folder, or complete workspace. Stop on
+   programmatic reference errors or unsafe stale state.
 5. Create or resume the workspace for the selected goal, recording the exact
    canonical target and dependency snapshot.
-6. Develop the argument in workspace QMD. Introduce intermediate results,
-   examples, alternative approaches, and notes as needed.
-7. Inspect the workspace graph to identify the next unproved dependency and to
-   avoid treating conjectural workspace claims as established premises.
-8. Select a complete workspace result or proof and use the proving utilities
-   to check its structure and cited dependencies.
-9. Send that result and its bounded mathematical context to an independent
-   verifier, which may itself be implemented with a fresh sub-agent.
-10. If rejected, preserve the report in verification JSON, retain the rejected
-    proof with its `REJECTED` marker when useful, repair the result, and repeat.
-11. If accepted, recheck that the target and dependencies are current, mark the
-    proof `VERIFIED`, promote the result or proof into canonical QMD, and
-    publish its matching project verification record atomically.
-12. Continue until the original main theorem is accepted or the work reaches
+6. Use dependency search and frontier analysis to choose the lowest useful
+   unresolved claim.
+7. Develop its construction or proof in workspace QMD, citing each dependency
+   with a semantic reference at its point of use.
+8. Inspect that fact. The programmatic reference check must pass before the
+   independent AI sufficiency check runs.
+9. If the AI check reports a critical error or gap, preserve the report, retain
+   the rejected attempt when useful, repair the mathematics, and inspect again.
+10. If both checks pass, atomically cache the exact mathematics and dependency
+    snapshot, store the matching record, add `VERIFIED`, and confirm the result
+    by reinspection.
+11. Use the proving utilities to promote accepted workspace mathematics into
+    canonical QMD through the protected atomic write path.
+12. Continue until the original main theorem is verified or the work reaches
     another legitimate stopping condition.
 13. Run `quarto render` when the user wants a rendered document or project
     view.
@@ -440,10 +427,17 @@ Preserve the statement, verify the candidate independently, and repair any
 concrete gaps before accepting it.
 ```
 
-For project status:
+For project status and dependency analysis:
 
 ```text
-Use qmd-prover to show the open goals and the dependency context of
+Use qmd-prover to inspect this workspace, print the dependency information, and
+show the proof frontier of @thm-main-even-square.
+```
+
+For search:
+
+```text
+Use qmd-prover to find unverified lemmas used transitively by
 @thm-main-even-square.
 ```
 
@@ -471,17 +465,47 @@ the mathematical project root, let the installed skill path be:
 QMD_PROVER_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover"
 ```
 
-Inspect the project:
+Inspect the canonical project and print its dependency information:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect-project
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect-project --print
 ```
 
-Inspect one theorem and its bounded dependency context:
+Inspect one theorem, lemma, or definition:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  inspect-theorem @thm-main-even-square
+  inspect-theorem @thm-main-even-square --print
+```
+
+Inspect one file or folder:
+
+```bash
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+  inspect-path foundations/ --print
+```
+
+Inspect every mathematical file in the workspace:
+
+```bash
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+  workspace inspect --print
+```
+
+Find a proof frontier or search the dependency graph:
+
+```bash
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+  dependency frontier @thm-main-even-square --print
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+  dependency search "local exponent" --kind lemma --print
+```
+
+Check cached identities and invalidate stale verification transitively:
+
+```bash
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+  check-staleness --print
 ```
 
 Submit the selected candidate from workspace QMD:
@@ -540,8 +564,8 @@ depend on rendering.
 
 - [Discipline design](design-discipline.md) explains policy ownership,
   categories of rules, and contract evolution.
-- [Inspector design](design-inspector.md) explains Pandoc parsing, scope
-  resolution, dependency construction, diagnostics, and theorem bundles.
+- [Inspector design](design-inspector.md) explains fact, path, and workspace
+  inspection; dependency analysis and search; and stale-marker invalidation.
 - [Proving utilities design](design-proving.md) explains candidate submission,
   independent verification, rejection, stale checks, and atomic acceptance.
 - [Rendering design](design-rendering.md) explains how observability integrates

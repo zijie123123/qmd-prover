@@ -74,10 +74,11 @@ project representation, including:
 - protected main-statement identity;
 - explicit imports and exports;
 - association of every proof with one semantic result;
-- recognition of the reserved leading `OPEN` and `REJECTED` proof markers;
+- recognition of the reserved `OPEN`, `REJECTED`, `VERIFIED`, and `REVOKED`
+  control markers;
 - availability and status of results cited by proofs;
 - selection of one active, unmarked candidate for submission;
-- stale-submission checks; and
+- cached-statement checks and transitive stale-verification invalidation; and
 - rejection-safe, atomic acceptance.
 
 Mechanical enforcement is deliberately conservative. If a required fact
@@ -149,7 +150,7 @@ The skill instructs the host agent to:
 - respond to every concrete verification gap;
 - produce a precise refutation when a statement appears false; and
 - keep search notes, confidence claims, and verifier metadata out of proofs,
-  except for the reserved leading `OPEN` or `REJECTED` control paragraph.
+  except for reserved qmd-prover control markers.
 
 These rules shape the reasoning loop even when they are not completely
 machine-decidable.
@@ -188,7 +189,11 @@ protected. The introduction date is informational and does not alter statement
 identity. The absence of a linked proof, or a proof whose first nonempty
 paragraph is `OPEN`, means the result is open. A proof beginning with `REJECTED`
 is inactive. An unmarked proof is still only a candidate until independently
-accepted; source QMD cannot assert `VERIFIED`.
+checked. `VERIFIED` is valid only with a matching record for the current
+statement, proof or construction, and dependency snapshot. `REVOKED` is valid
+only with a matching revocation record and concrete reason. Before relying on
+`VERIFIED`, the inspector checks the cached identities and removes stale
+markers transitively along reverse-dependency edges.
 
 ### Example: semantic and nonsemantic references
 

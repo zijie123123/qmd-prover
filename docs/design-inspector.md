@@ -2,410 +2,375 @@
 
 ## Role
 
-The inspector gives the host agent a semantic view of a QMD project. It checks
-the mechanically enforceable part of the discipline, finds proof obligations,
-and makes logical dependencies visible.
-
-It is a structural analyzer, not a mathematician. It can establish that a proof
-cites an unavailable lemma; it cannot establish that the cited lemma really
-implies the next sentence.
-
-## Inputs and outputs
-
-The inspector has two explicit source modes. Canonical inspection reads the
-project's QMD files outside `.qmd-prover/`. Workspace inspection reads the
-ordinary working QMD under `.qmd-prover/workspaces/`, together with the
-protected canonical target and canonical results made available to that
-workspace. It does not treat the machine-managed `.workspaces/` child as
-ordinary mathematical source.
-
-In either mode, the inspector also reads:
-
-- the root `AGENTS.md` preflight result;
-- qmd-prover configuration, when present; and
-- retained verification records needed to determine proof status.
-
-Its primary outputs are:
-
-- a deterministic semantic manifest;
-- a dependency graph;
-- source-located diagnostics;
-- a summary of open, candidate, verified, rejected, or revoked results; and
-- a bounded context bundle for a selected theorem.
-
-The outputs are machine-readable so that the host agent can reason from them
-without scraping prose. A human may also run the same Node utility directly.
-This script interface is not a separate CLI product.
-
-### Example project
-
-Consider two mathematical files. `foundations.qmd` exports a definition:
-
-```markdown
-::: {#def-even-integer .definition name="Even integer" date="2026-07-12" export="even-integer"}
-An integer \(n\) is even if there is an integer \(k\) with \(n=2k\).
-:::
-```
-
-`main.qmd` imports it and contains an open goal:
-
-```markdown
----
-qmd-prover:
-  imports:
-    - from: foundations.qmd
-      use:
-        - def-even-integer
----
-
-::: {#thm-main-even-square .theorem .goal name="Even squares" date="2026-07-12"}
-For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-:::
-```
-
-The inspector discovers two semantic nodes, resolves the import, and reports
-`@thm-main-even-square` as open. No dependency edge exists yet because the open
-goal has no associated proof block.
-
-## Parsing model
-
-Pandoc JSON is the semantic parser. The inspector asks Pandoc to parse each QMD
-file and walks the resulting abstract syntax tree.
-
-Regular expressions must not be the primary semantic parser. They may be used
-for narrowly bounded source-location or source-preservation tasks after the
-semantic block has been identified through Pandoc.
-
-The inspector recognizes:
-
-- definitions, lemmas, theorems, propositions, and corollaries;
-- `thm-main-*` proof obligations;
-- `.proof` blocks linked to results through an `of` attribute;
-- ISO introduction dates on semantic statement blocks;
-- leading `OPEN` and `REJECTED` proof-control paragraphs;
-- qmd-prover import metadata in the QMD front matter;
-- exports; and
-- semantic `@def-*`, `@lem-*`, `@thm-*`, `@prp-*`, and `@cor-*` references.
-
-Nonsemantic QMD is left alone.
-
-For a definition or result block, the `name` attribute supplies the display
-title, `date` records its introduction date, and the block content is the
-statement. Quarto natively renders `name` as the caption. Definitions are
-declarations and do not require associated proofs. A `.proof` block names the
-result it proves with `of="semantic-id"`. If its first nonempty paragraph is
-exactly `OPEN` or `REJECTED`, the inspector records that control marker
-separately and excludes it from mathematical proof identity and verifier input.
-
-A workspace may retain multiple marked proofs for the same result but at most
-one unmarked active proof. A missing proof or `OPEN` proof means `open`; a
-`REJECTED` proof is inactive; an unmarked proof is a candidate unless an exact
-accepted verification record says otherwise. Canonical QMD may contain only
-the one accepted, unmarked proof associated with a result; an unmarked
-canonical proof without a matching accepted record is reported as a candidate
-and as a canonical-boundary error. Empty, orphaned, ambiguous, or multiply
-active proofs are structural errors. A workspace proof may point through `of`
-to the protected canonical target without copying its statement into the
-working file.
-
-## Inspection pipeline
-
-### 1. Discover sources
-
-In canonical mode, the inspector recursively discovers project QMD files while
-excluding `.qmd-prover/`. In workspace mode, it discovers visible QMD under
-`.qmd-prover/workspaces/` while excluding the machine-managed
-`.qmd-prover/workspaces/.workspaces/` child. Mathematical folder names and the
-placement of `progress.qmd` files are project organization, not semantic
-conventions.
-
-### 2. Extract semantic results
-
-For every recognized result, the inspector records at least:
-
-- semantic ID and kind;
-- title;
-- introduction date;
-- source file and location;
-- statement and proof identity;
-- whether a proof is present;
-- any reserved proof-control marker;
-- semantic dependencies cited by the associated proof; and
-- export information.
-
-Statement and title identities allow later utilities to protect user-owned
-content. Proof identity associates verification with the exact proof that was
-checked.
-
-An abbreviated manifest entry for the open goal could look like:
-
-```json
-{
-  "id": "thm-main-even-square",
-  "kind": "theorem",
-  "file": "main.qmd",
-  "title": "Even squares",
-  "date": "2026-07-12",
-  "statement_hash": "sha256:...",
-  "proof_hash": "sha256:...",
-  "proof_present": false,
-  "dependencies": [],
-  "status": "open"
-}
-```
-
-Hashes stand for exact normalized identities computed by the implementation;
-they are not written into mathematical QMD.
-
-### 3. Resolve scope
-
-A result may use definitions and results in its own file plus individually
-imported exports. The inspector resolves every import relative to the importing
-file and rejects ambiguous, missing, non-exported, wildcard, or cyclic imports
-according to the discipline.
-
-The result is an explicit set of available semantic IDs for each source file.
-
-#### Example: an unresolved import
-
-If `main.qmd` instead contains:
-
-```yaml
-qmd-prover:
-  imports:
-    - from: foundations.qmd
-      use:
-        - lem-square-of-double
-```
-
-but `foundations.qmd` does not define that ID, inspection reports an import
-error at `main.qmd`. The inspector does not search the internet, invent a
-lemma, or assume that a similarly titled theorem was intended.
-
-### 4. Check dependencies
-
-The inspector associates each `.proof` block with the result named by its `of`
-attribute, separates any reserved leading marker, and extracts semantic
-references from the remaining mathematical proof. It reports:
-
-- a proof whose `of` target does not exist or is ambiguous;
-- a premise that does not exist;
-- a cross-file premise that was not imported;
-- an imported ID that was not exported; and
-- a premise whose verification status is insufficient.
-
-A reference in ordinary exposition is navigational and does not create a proof
-dependency. Dependency edges come from the semantic proof context.
-
-#### Example: dependency diagnostics
-
-Suppose the candidate in `main.qmd` says:
-
-```markdown
-::: {.proof of="thm-main-even-square"}
-By @def-even-integer, write \(n=2k\). Then @lem-square-of-double gives
-\(n^2=4k^2\).
-:::
-```
-
-The inspector can return a source-located diagnostic such as:
-
-```json
-{
-  "severity": "error",
-  "code": "DEPENDENCY_UNAVAILABLE",
-  "message": "@lem-square-of-double is cited by the proof but is not local or imported",
-  "file": "main.qmd",
-  "line": 18,
-  "id": "thm-main-even-square"
-}
-```
-
-The repair is to import the exported lemma or place it in the same file. The
-proof already declares the dependency through its reference, so no separate
-dependency list needs editing.
-
-### 5. Build the graph
-
-Each semantic result becomes a node. Each semantic result cited by its active
-proof becomes a directed edge from the dependent result to the premise. Marked
-proofs may be inspected as history but do not create active dependency edges.
-
-The graph supports:
-
-- direct-dependency lookup;
-- transitive dependency closure;
-- reverse-dependency lookup;
-- cycle detection; and
-- observability material for Quarto rendering.
-
-The graph represents declared project structure. It does not infer hidden
-mathematical dependencies from prose.
-
-#### Example: graph construction
-
-For these declarations:
-
-```text
-@thm-main-even-square uses @lem-square-of-double
-@lem-square-of-double uses @def-even-integer
-```
-
-the graph contains:
-
-```json
-{
-  "nodes": [
-    { "id": "thm-main-even-square", "status": "candidate" },
-    { "id": "lem-square-of-double", "status": "verified" },
-    { "id": "def-even-integer", "kind": "definition", "origin": "canonical" }
-  ],
-  "edges": [
-    { "from": "thm-main-even-square", "to": "lem-square-of-double" },
-    { "from": "lem-square-of-double", "to": "def-even-integer" }
-  ]
-}
-```
-
-The direct dependency of the main theorem is the lemma. Its transitive closure
-also contains the definition. The definition's reverse-dependency closure
-contains both results.
-
-### 6. Determine status
-
-For propositions that require proof, status is derived from the current
-statement, proof marker, and retained verification record. Verification applies
-only when its stored identities still match the current semantic result.
-
-At minimum, the inspector distinguishes:
-
-- `open`: no proof is present or the proof begins with `OPEN`;
-- `candidate`: an unmarked proof is present but not accepted for its current
-  identity;
-- `verified`: the current statement and proof match an accepted record;
-- `rejected`: the proof begins with `REJECTED` or the latest matching candidate
-  was rejected while canonical mathematics remained unchanged; and
-- `revoked`: prior acceptance was explicitly withdrawn.
-
-These status values are the same in canonical and workspace inspection. Origin
-and workspace location are separate fields; the inspector does not invent
-parallel values such as `workspace-candidate`. A canonical `candidate` is also
-a structural diagnostic because unaccepted proof work belongs in the
-workspace. Definitions are declarations, so their authority or availability is
-reported separately rather than pretending that they acquired proof status
-from a proof block.
-
-Formal-verification and human-review labels are separate metadata, not aliases
-for `verified`.
-
-### 7. Produce diagnostics
-
-Diagnostics contain a stable code, severity, explanation, and source location
-where available. They should say what invariant failed and what kind of repair
-is needed.
-
-Open goals are normal project state, not structural errors. Errors that make
-dependency or statement protection unreliable prevent proof submission.
-
-## Theorem context
-
-For one selected theorem, the inspector returns a bounded bundle containing:
-
-- its exact title and statement;
-- current proof and status;
+The inspector checks mathematical facts in QMD at four scopes: one fact, a
+file or folder, the mathematical workspace, and the dependency graph. A fact is
+a theorem, lemma, or definition with a semantic ID.
+
+For every inspected fact, the inspector performs two different checks:
+
+- a programmatic check establishes that semantic references exist, are unique,
+  are available in scope, and have usable status; and
+- an independent AI check judges whether the referenced facts are sufficient
+  for the definition construction or proof in which they are used.
+
+The inspector uses Pandoc JSON to parse QMD and extracts dependency edges only
+from semantic references in a definition construction or linked proof.
+Ordinary exposition and bibliographic citations do not create dependency
+edges.
+
+Inspection returns stable JSON by default. The optional `--print` flag selects
+a human-readable dependency report. It changes presentation only: the facts
+checked, diagnostics produced, graph constructed, and verification decision
+must be identical with or without the flag.
+
+`VERIFIED` is record-backed. The inspector may cause qmd-prover to add it only
+after all programmatic checks pass, the AI check reports no critical error or
+gap, and the exact check is stored. A source marker without its matching record
+has no authority. `REVOKED` likewise requires a matching revocation record and
+concrete reason.
+
+## 1. Inspect a theorem, lemma, or definition
+
+Single-fact inspection accepts one semantic ID and returns the check result for
+that fact together with the part of the dependency graph needed to explain the
+result.
+
+### Select and parse the fact
+
+- Resolve the requested ID to exactly one theorem, lemma, or definition.
+- Record its kind, title, statement or construction, linked proof when
+  applicable, source file, and source location.
+- Reject a missing or ambiguous ID instead of guessing from a similar title.
+- Preserve the exact semantic identities used by verification and later stale
+  checks.
+
+### Check references programmatically
+
+For every semantic reference in the definition construction or proof, check
+that:
+
+- the referenced ID exists and is unique;
+- its kind and semantic block are valid;
+- it is local or explicitly imported from an exported source;
+- its `VERIFIED` marker, when required, matches its current record and cached
+  identity; and
+- it is not rejected, revoked, stale, cyclic, or otherwise unavailable.
+
+Missing, ambiguous, unavailable, and insufficiently verified references are
+blocking diagnostics. The inspector must still retain their unresolved graph
+edges so the failure can be explained.
+
+### Check sufficiency with AI
+
+After programmatic checks succeed, send the exact fact and its referenced facts
+to an independent AI checker.
+
+For a definition, the checker determines whether the cited definitions and
+results make the construction meaningful, supply every required object or
+operation, and avoid an unjustified circular construction.
+
+For a theorem or lemma, the checker determines whether:
+
+- each cited fact applies under the stated hypotheses;
+- the proof uses the cited conclusion correctly;
+- the cited facts and explicit reasoning cover every case and quantifier; and
+- the proof establishes the exact statement rather than a weakened variant.
+
+The AI result must distinguish critical errors, gaps, and nonblocking comments.
+Any critical error or gap prevents `VERIFIED`. If the AI checker is unavailable
+or returns malformed output, inspection fails closed and leaves the fact
+unverified.
+
+### Record the result and marker
+
+If both checks pass, qmd-prover:
+
+- stores the exact statement or construction, proof, referenced fact
+  identities, dependency snapshot, and AI report;
+- adds `VERIFIED` to the inspected fact through the protected write path; and
+- reinspects the result to confirm that the marker and record match.
+
+A failed check stores its diagnostic report but must not add `VERIFIED`.
+`REJECTED` may be used for a retained failed attempt. Explicit withdrawal of a
+previous acceptance uses `REVOKED`, not ordinary staleness invalidation.
+
+### Construct the related dependency graph
+
+The single-fact graph contains:
+
+- the inspected fact;
+- its direct referenced facts;
+- the transitive dependency closure needed to judge those references;
+- unresolved references as broken edges;
+- the status and source location of every node; and
+- the nearest reverse dependencies needed to show immediate impact.
+
+An edge points from the fact being constructed or proved to the fact it cites.
+Each edge records whether existence, scope, status, and AI sufficiency checks
+passed.
+
+### `--print` report
+
+With `--print`, display:
+
+- the inspected fact and its final status;
+- programmatic and AI check results;
+- direct and transitive dependencies;
+- unresolved, stale, rejected, or revoked facts;
+- dependency paths explaining every blocker; and
+- the related graph as a readable tree or edge list.
+
+## 2. Inspect a file or folder
+
+File and folder inspection applies single-fact inspection to every theorem,
+lemma, and definition discovered in the requested path.
+
+### Source discovery
+
+- A file request inspects that QMD file only.
+- A folder request recursively discovers QMD files below the folder.
+- Configured generated directories, machine state, and ignored paths are
+  excluded.
+- Discovery order is deterministic so repeated inspection produces stable
+  output.
+
+### Aggregate checks
+
+- Parse every discovered file through Pandoc JSON.
+- Detect duplicate IDs, malformed semantic blocks, ambiguous proof links,
+  invalid imports or exports, and cycles spanning multiple files.
+- Run the programmatic reference check for every fact.
+- Run the AI sufficiency check for each fact whose programmatic checks succeed.
+- Keep each fact's result independent so one failure does not hide diagnostics
+  for the remaining facts.
+- Report the overall operation as unsuccessful when any blocking diagnostic
+  remains.
+
+### Aggregate dependency graph
+
+Combine the per-fact graphs into one graph for the requested path. Preserve
+cross-file edges and external edges to facts outside the path. An external node
+is included as context but is not reinspected unless it falls within the
+requested scope.
+
+### `--print` report
+
+With `--print`, display:
+
+- files and facts inspected;
+- counts by kind and status;
+- verified, open, rejected, revoked, and stale facts;
+- missing or unavailable references;
+- dependency cycles and cross-file edges;
+- the unresolved proof frontier within the requested path; and
+- a dependency summary grouped by file and semantic ID.
+
+## 3. Inspect the workspace
+
+Workspace inspection runs file inspection over every mathematical QMD file in
+the selected workspace and combines the results with the canonical facts made
+available to that workspace.
+
+### Workspace discovery
+
+- Discover every visible workspace QMD file recursively.
+- Exclude hidden machine-managed workspace state, verification records,
+  generated indexes, and rendered output from mathematical source discovery.
+- Read the protected canonical target and cached workspace base identities as
+  machine state rather than ordinary mathematics.
+- Distinguish canonical facts from workspace facts in every result and graph
+  node.
+
+### Workspace checks
+
+- Run the staleness check before treating any `VERIFIED` fact as usable.
+- Run file inspection for every discovered workspace file.
+- Check workspace IDs for collisions with canonical IDs, except for an
+  intentional proof linked to its protected canonical target.
+- Check that every canonical fact used by workspace mathematics is explicitly
+  available and current.
+- Allow provisional workspace facts to appear in the graph, but never treat an
+  open, candidate, rejected, revoked, or stale fact as an established premise.
+- Preserve diagnostics for abandoned or alternative routes without allowing
+  them to block unrelated active mathematics.
+
+### Workspace dependency graph
+
+The workspace graph combines:
+
+- workspace definitions, lemmas, and theorems;
+- imported canonical facts;
+- active proof and construction dependencies;
+- unresolved references; and
+- verification and staleness state.
+
+The graph is rebuilt as one complete snapshot. A failed rebuild must not
+replace the last valid snapshot.
+
+### `--print` report
+
+With `--print`, display:
+
+- workspace-wide counts and diagnostics;
+- all active proof obligations;
+- the verified and provisional dependency closures;
+- unresolved and stale dependency chains;
+- the current proof frontier for each active goal;
+- canonical facts imported by workspace mathematics; and
+- dependency information grouped by file, goal, or semantic ID.
+
+## 4. Analyze and search the dependency graph
+
+Graph analysis derives useful information from the most recent complete graph
+snapshot. Queries must identify the snapshot they used.
+
+### Dependency queries
+
+For a selected fact, support:
+
 - direct dependencies;
-- verified dependency closure;
-- relevant definitions and statements;
-- import origin and source locations; and
-- prior verification summaries needed for repair.
+- transitive dependency closure;
+- direct and transitive reverse dependencies;
+- paths between two facts;
+- cycle detection with the complete cycle path; and
+- impact analysis showing which verified facts rely on a selected fact.
 
-The bundle should be sufficient for the host agent to begin focused proof work
-without loading the entire repository. It is descriptive context, not a prompt
-that attempts to prove the theorem.
+### Find the proof frontier
 
-### Example theorem bundle
+For a selected theorem or lemma:
 
-An abbreviated inspection result might be:
+1. Traverse its active dependency closure.
+2. Find every fact that is open, candidate, rejected, revoked, stale, missing,
+   or otherwise unusable.
+3. Remove a blocked fact from the frontier when a lower unresolved dependency
+   already explains why it is blocked.
+4. Return the lowest unresolved claims together with paths from the selected
+   result to each claim.
 
-```json
-{
-  "target": {
-    "id": "thm-main-even-square",
-    "title": "Even squares",
-    "file": "main.qmd",
-    "status": "open"
-  },
-  "source": {
-    "statement": "For every even integer n, n^2 is divisible by 4.",
-    "proof": ""
-  },
-  "available_results": [
-    {
-      "id": "def-even-integer",
-      "statement": "An integer n is even if n=2k for some integer k.",
-      "status": "verified",
-      "imported_from": "foundations.qmd"
-    }
-  ],
-  "diagnostics": []
-}
-```
+The frontier is the set of useful next proof obligations, not merely every
+unverified node in the transitive closure.
 
-The host agent can now reason from the exact target and available definition
-without reading unrelated QMD chapters.
+### Additional graph findings
 
-## Inspecting an agent workspace
+The inspector may derive:
 
-Canonical-project inspection excludes `.qmd-prover/`, but the inspector also
-supports explicit inspection of the shared mathematical workspace. The two
-modes must not be confused:
+- unused imports and exports;
+- isolated or unreachable workspace facts;
+- verified facts depending on an invalid marker or stale record;
+- candidate results whose dependency closure is otherwise ready for AI check;
+- heavily reused facts whose change would have broad impact; and
+- alternative dependency paths to the same target.
 
-- canonical inspection reports accepted project mathematics;
-- workspace inspection reports provisional agent-generated mathematics plus
-  the canonical results imported into that workspace.
+### Search
 
-A workspace result records its origin and ordinary semantic status separately.
-For example:
+Search facts by:
 
-```json
-{
-  "id": "lem-local-exponent-bound",
-  "origin": "workspace",
-  "workspace": ".qmd-prover/workspaces",
-  "file": "local-theory/exponent-bounds.qmd",
-  "status": "candidate",
-  "dependencies": [
-    "thm-canonical-local-class-group-finite",
-    "lem-completion-preserves-index"
-  ]
-}
-```
+- exact or partial semantic ID;
+- title;
+- statement, construction, or proof text;
+- theorem, lemma, or definition kind;
+- source file or folder;
+- current status; and
+- canonical or workspace origin.
 
-The inspector may find that the first dependency is a verified canonical
-result while the second is still an unproved workspace claim. It then exposes
-the latter as part of the proof frontier instead of reporting the parent lemma
-as established.
+Search also supports graph-aware filters, including:
 
-The target theorem is a special intentional overlap: each main-proof candidate
-uses the canonical target's semantic ID so statement protection can compare it
-with the original. Newly introduced intermediate IDs must not collide with
-canonical results or with other live workspace results.
+- facts used directly or transitively by a selected result;
+- facts that directly or transitively depend on a selected result;
+- unresolved facts on a selected proof frontier;
+- stale facts affected by a selected change; and
+- facts participating in dependency cycles.
 
-Workspace inspection reads protected target state and provisional verification
-records only from `.qmd-prover/workspaces/.workspaces/` and may atomically
-refresh the derived workspace graph there. The proving utilities, not the
-inspector, create protected target state and verification records. Top-level
-and subject-local `progress.qmd` files are discovered as ordinary workspace QMD
-and may provide resumable context, but they are mathematical project notes
-rather than machine authority. The inspector never merges workspace files into
-the canonical manifest merely because they parse successfully or have
-plausible proofs.
+Search results include source locations and may be passed directly to the
+single-fact, file, folder, frontier, or impact operations. With `--print`, graph
+queries and search produce readable paths, tables, and edge summaries rather
+than only raw JSON.
 
-## Writes and failure behavior
+## 5. Check staleness
 
-Inspection never changes canonical QMD. It may atomically refresh derived
-manifest and graph data under `.qmd-prover/`.
+Staleness checking ensures that `VERIFIED` never survives a change to the exact
+mathematics or dependency snapshot that was checked.
 
-A parse or structural failure must not leave a partially updated index that
-appears valid. Either the new derived snapshot is complete, or the inspector
-reports failure without publishing it as current.
+### Cache accepted identities
+
+When a fact becomes verified, atomically cache:
+
+- its exact statement or definition construction;
+- its exact proof when applicable;
+- its semantic identity and source location;
+- every direct referenced fact and that fact's checked identity;
+- the imports and scope used to resolve those references;
+- the relevant dependency graph snapshot;
+- the AI check result and checker identity; and
+- the matching verification record identity.
+
+The cache is evidence for comparison, not an alternative source of canonical
+mathematics.
+
+### Compare current mathematics with the cache
+
+On a staleness check, reparse the requested scope and compare current identities
+with the cache. A verified fact is stale if any of the following changed or is
+missing:
+
+- statement or definition construction;
+- proof;
+- semantic ID or source association;
+- a referenced fact's statement, construction, proof, or verification status;
+- the dependency edge set;
+- imports or scope;
+- the matching verification record; or
+- the checker contract required by project policy.
+
+A corrupt or incomplete cache is stale. The inspector must never reconstruct a
+missing accepted identity by guessing.
+
+### Invalidate `VERIFIED` transitively
+
+When a checked fact is stale:
+
+1. Remove `VERIFIED` from the changed fact.
+2. Mark its retained verification record stale without deleting its history.
+3. Follow reverse-dependency edges to every fact that directly or transitively
+   relied on it.
+4. Remove `VERIFIED` from every affected dependent fact and mark each matching
+   record stale.
+5. Rebuild the graph and report the exact invalidation paths.
+
+The direction is important: if B depends on A and A changes, B is invalidated.
+A is not invalidated merely because B changes. In this document, “invalidate
+all dependencies” therefore means invalidate all dependent facts reached
+through the reverse-dependency graph, not unrelated upstream premises.
+
+Staleness removes `VERIFIED`; it does not add `REVOKED`. `REVOKED` is reserved
+for an explicit withdrawal with a recorded concrete reason.
+
+### Atomicity and failure behavior
+
+- Compute the complete invalidation set before changing any source marker.
+- Acquire the protected project write lock.
+- Update source markers, stale records, caches, and graph data atomically.
+- Roll back every change if any write or post-write inspection fails.
+- If safe marker removal cannot be completed, fail closed and report all
+  affected facts as unusable.
+
+### `--print` report
+
+With `--print`, display:
+
+- each changed identity and the reason it is stale;
+- previous and current identities;
+- every fact that lost `VERIFIED`;
+- the reverse-dependency path explaining each invalidation;
+- records retained as stale history; and
+- the facts that must be inspected again before `VERIFIED` can return.
+
+### Agent contract requirement
+
+The canonical mathematical-project `AGENTS.md` contract must require agents to:
+
+- run staleness checking before relying on `VERIFIED` mathematics;
+- permit qmd-prover to remove stale markers transitively;
+- never add or restore `VERIFIED` manually;
+- treat missing or corrupt caches and records as unverified; and
+- repeat the complete programmatic and AI checks before `VERIFIED` returns.

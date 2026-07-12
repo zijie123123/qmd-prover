@@ -98,10 +98,12 @@ calculations or search notes may accompany the mathematics, but are not
 submitted as proof text.
 
 A partial proof begins with a first nonempty paragraph exactly equal to `OPEN`.
-A proof retained after rejection begins with `REJECTED`. These control
+A proof retained after rejection begins with `REJECTED`; accepted and revoked
+proofs begin with `VERIFIED` and `REVOKED`, respectively. These control
 paragraphs are excluded from proof identity and verifier input. A workspace may
-retain multiple marked proofs for one result, but only one unmarked proof may be
-active. No source marker may assert `VERIFIED`.
+retain multiple inactive marked proofs for one result, but only one unmarked
+candidate or `VERIFIED` proof may be active. Record-backed markers have no
+authority without their exact matching records.
 
 Useful assistance may include:
 
@@ -141,7 +143,8 @@ Before independent verification, the utility confirms that:
 - the proof's `of` attribute resolves to its canonical or workspace result;
 - an existing target's protected result block was not redefined;
 - the proof body is nonempty;
-- the proof has neither an `OPEN` nor `REJECTED` control paragraph;
+- the candidate proof has no `OPEN`, `REJECTED`, `VERIFIED`, or `REVOKED`
+  control paragraph;
 - every dependency exists and is available through local scope or an explicit
   import; and
 - every premise required to support an accepted proof has the required
@@ -293,9 +296,11 @@ For a current submission, the utility:
 
 1. acquires the canonical-write lock;
 2. replaces only the permitted proof content;
-3. records verification for the exact accepted statement and proof;
+3. adds `VERIFIED` and records the exact accepted statement, proof or
+   construction, dependencies, and graph snapshot;
 4. rebuilds and checks the semantic project state; and
-5. commits the files atomically, rolling back on any failure.
+5. commits the marker, cache, record, and canonical files atomically, rolling
+   back on any failure.
 
 The host agent cannot bypass this path merely because it authored the proof.
 
@@ -313,6 +318,12 @@ inspect the new dependency context and submit again.
 By contrast, an unrelated prose edit outside all semantic blocks does not
 change the target or dependency identities and need not invalidate the
 submission.
+
+After acceptance, every inspection compares `VERIFIED` facts with their cached
+identities. A changed fact loses `VERIFIED`; the inspector follows reverse
+dependencies and removes `VERIFIED` from every result that relied on it. The
+historical records remain but are marked stale. Staleness does not add
+`REVOKED`, which is reserved for explicit withdrawal with a concrete reason.
 
 ## Records
 
