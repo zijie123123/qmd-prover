@@ -273,7 +273,7 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(skill, /Do not reread the files before every QMD read/);
   assert.match(skill, /Every independent worker must perform this preflight/);
   assert.match(skill, /Never create, replace, or synchronize `AGENTS\.md` without user approval/);
-  assert.match(contract, /<!-- qmd-prover-contract:start version=2 -->/);
+  assert.match(contract, /<!-- qmd-prover-contract:start version=3 -->/);
   assert.match(contract, /<!-- qmd-prover-contract:end -->/);
   assert.match(contract, /name="Uniform index theorem"/);
   assert.match(contract, /\.proof of="thm-main-uniform-index"/);

@@ -26,42 +26,50 @@ inspect target
 The loop ends when the selected goal is verified, precisely refuted, genuinely
 blocked, cancelled, or explicitly stopped by the user.
 
-## Goal-scoped agent workspace
+## Mathematical agent workspace
 
-Proof development takes place in a persistent workspace associated with the
-target theorem, not in the canonical Quarto sources. This matters when one
-short user-given statement expands into a large body of agent-generated
-mathematics.
+Proof development takes place in the persistent mathematical workspace, not in
+the canonical Quarto sources. The workspace may support one goal or a related
+family of goals. This matters when one short user-given statement expands into
+a large body of agent-generated mathematics.
 
 For example, work on `@thm-main-uniform-index` may eventually contain:
 
 ```text
-.qmd-prover/workspaces/thm-main-uniform-index/
-├── workspace.json
-├── target.qmd
+.qmd-prover/workspaces/
+├── .workspaces/
+│   ├── workspace.json
+│   ├── target.qmd
+│   ├── graph.json
+│   └── verification/
+│       ├── lem-local-exponent-bound.json
+│       └── thm-main-uniform-index.json
 ├── progress.qmd
 ├── context/
+│   ├── progress.qmd
 │   └── imported-results.qmd
 ├── reductions/
+│   ├── progress.qmd
 │   ├── reduce-to-strata.qmd
 │   └── specialization.qmd
 ├── local-theory/
+│   ├── progress.qmd
 │   ├── local-class-groups.qmd
 │   └── exponent-bounds.qmd
-├── attempts/
-│   ├── main-0001.qmd
-│   └── main-0002-repaired.qmd
-├── dead-ends/
-│   └── uniform-generator.qmd
-└── proposals/
-    ├── lem-local-exponent-bound.qmd
-    └── thm-main-uniform-index.qmd
+└── main-proof.qmd
 ```
 
-`target.qmd` preserves the assigned statement and `workspace.json` records the
-canonical identities on which the work began. The other QMD files are
-noncanonical working mathematics. They may contain proposed definitions,
-lemmas, theorems, examples, or alternative proof routes.
+The visible QMD files are noncanonical working mathematics. They may contain
+definitions, lemmas, theorems, examples, partial proofs, rejected proofs, or
+alternative routes. Top-level `progress.qmd` records the overall frontier; a
+subject directory may add its own `progress.qmd` for local context.
+
+The hidden `.workspaces/` directory separates machine-managed state from that
+mathematics. `target.qmd` preserves the assigned statement, `workspace.json`
+records the canonical identities on which work began, `graph.json` records the
+provisional dependency graph, and `verification/` retains exact checks of
+workspace candidates. Accepted canonical records remain in the project-level
+`.qmd-prover/verification/` cache.
 
 The inspector maintains a provisional dependency graph for this workspace. A
 workspace result may depend on verified canonical results or other workspace
@@ -69,23 +77,33 @@ claims, but a conjectural claim cannot silently become an accepted premise.
 The agent follows unproved edges until it closes the required dependency
 closure, replaces a failed claim, or records a genuine dead end.
 
-The directory layout inside a workspace may grow with the proof. It should
-group coherent mathematical developments rather than create one file for every
-transient thought. Resuming agents use `progress.qmd`, the graph, previous
-attempts, and verifier reports to recover the proof frontier.
+The visible directory layout may grow with the proof. It should group coherent
+mathematical developments rather than create a file or directory type for every
+transient thought. Resuming agents use the nearest `progress.qmd`, the hidden
+graph, marked partial or rejected proofs, and verifier reports to recover the
+proof frontier.
 
 ## Preparing a candidate
 
 The host agent begins from the inspector's bounded theorem context. A utility
 may create a proof scaffold linked to the canonical result by semantic ID. The
-statement is not copied into each attempt, so the agent cannot accidentally
-rewrite protected content while drafting a proof.
+statement is not copied beside each proof, so the agent cannot accidentally
+rewrite protected content while drafting.
 
-A proposal for an existing result contains one `.proof` block with an `of`
-attribute. A proposal for a new intermediate result contains one result block
-and its linked proof block. Proposals are stored outside canonical QMD while
-they are developed. Supporting calculations or search notes may accompany
-them, but are not submitted as proof text.
+An existing result needs an active `.proof` block with an `of` attribute. A new
+intermediate result needs one dated result block and its linked proof. Both live
+in ordinary workspace QMD. Submission selects the active semantic unit; there
+is no proposal file type or required proposal directory. Supporting
+calculations or search notes may accompany the mathematics, but are not
+submitted as proof text.
+
+A partial proof begins with a first nonempty paragraph exactly equal to `OPEN`.
+A proof retained after rejection begins with `REJECTED`; accepted and revoked
+proofs begin with `VERIFIED` and `REVOKED`, respectively. These control
+paragraphs are excluded from proof identity and verifier input. A workspace may
+retain multiple inactive marked proofs for one result, but only one unmarked
+candidate or `VERIFIED` proof may be active. Record-backed markers have no
+authority without their exact matching records.
 
 Useful assistance may include:
 
@@ -99,10 +117,10 @@ Useful assistance may include:
 These are aids to the host agent. They do not synthesize an autonomous work
 plan or maintain a qmd-prover worker model.
 
-### Example proposal
+### Example candidate
 
-Starting from an open goal, the host agent writes only the proof in an isolated
-`proposal.qmd`:
+Starting from an open goal, the host agent writes the active proof in an
+ordinary workspace file such as `main-proof.qmd`:
 
 ```markdown
 ::: {.proof of="thm-main-even-square"}
@@ -112,18 +130,21 @@ that \(n=2k\). Hence \(n^2=(2k)^2=4k^2\), so \(4\mid n^2\).
 ```
 
 The utility obtains the exact title and statement from canonical QMD. The
-reference to `@def-even-integer` is the proof's dependency declaration. This
-file becomes eligible for acceptance only after preflight and independent
-verification.
+reference to `@def-even-integer` is the proof's dependency declaration. The
+selected block becomes eligible for acceptance only after preflight and
+independent verification.
 
 ## Candidate preflight
 
 Before independent verification, the utility confirms that:
 
-- the proposal contains exactly one proof and at most one new result;
-- the proof's `of` attribute resolves to its canonical or proposed result;
+- the selected semantic unit contains exactly one active proof and at most one
+  new result;
+- the proof's `of` attribute resolves to its canonical or workspace result;
 - an existing target's protected result block was not redefined;
 - the proof body is nonempty;
+- the candidate proof has no `OPEN`, `REJECTED`, `VERIFIED`, or `REVOKED`
+  control paragraph;
 - every dependency exists and is available through local scope or an explicit
   import; and
 - every premise required to support an accepted proof has the required
@@ -134,7 +155,7 @@ It does not imply correctness.
 
 ### Example preflight failure
 
-If the proposal links its proof to a nonexistent or misspelled target:
+If the selected proof links to a nonexistent or misspelled target:
 
 ```markdown
 ::: {.proof of="thm-main-even-squares"}
@@ -144,7 +165,7 @@ Let \(n=2k\). Then \(n^2=4k^2\).
 
 preflight rejects it because `@thm-main-even-squares` does not exist. The host
 agent must link the proof to `thm-main-even-square`. There is no duplicated
-statement in the proposal to edit or compare.
+statement beside the proof to edit or compare.
 
 ## Independent verification
 
@@ -181,7 +202,7 @@ The record must not describe an informal verifier result as formal proof.
 
 ### Example verifier packet
 
-An abbreviated packet for the proposal above could be:
+An abbreviated packet for the candidate above could be:
 
 ```json
 {
@@ -213,9 +234,10 @@ that the author is confident or that a previous attempt almost passed.
 On rejection:
 
 - canonical QMD is unchanged;
-- the candidate and complete verifier report are retained;
+- the candidate is retained with a leading `REJECTED` marker and the complete
+  verifier report is retained in workspace verification JSON;
 - the host agent reads every critical error and gap;
-- repair occurs in a new or updated isolated proposal; and
+- repair occurs in ordinary workspace QMD; and
 - the repaired candidate is checked and verified again in a fresh context.
 
 The utility does not hide earlier reports or replace them with a summary that
@@ -274,9 +296,11 @@ For a current submission, the utility:
 
 1. acquires the canonical-write lock;
 2. replaces only the permitted proof content;
-3. records verification for the exact accepted statement and proof;
+3. adds `VERIFIED` and records the exact accepted statement, proof or
+   construction, dependencies, and graph snapshot;
 4. rebuilds and checks the semantic project state; and
-5. commits the files atomically, rolling back on any failure.
+5. commits the marker, cache, record, and canonical files atomically, rolling
+   back on any failure.
 
 The host agent cannot bypass this path merely because it authored the proof.
 
@@ -295,21 +319,28 @@ By contrast, an unrelated prose edit outside all semantic blocks does not
 change the target or dependency identities and need not invalidate the
 submission.
 
+After acceptance, every inspection compares `VERIFIED` facts with their cached
+identities. A changed fact loses `VERIFIED`; the inspector follows reverse
+dependencies and removes `VERIFIED` from every result that relied on it. The
+historical records remain but are marked stale. Staleness does not add
+`REVOKED`, which is reserved for explicit withdrawal with a concrete reason.
+
 ## Records
 
 The proving utilities may retain under `.qmd-prover/`:
 
-- persistent goal-scoped workspaces containing agent-generated QMD;
-- isolated proposals and optional supporting notes;
+- a persistent mathematical workspace containing agent-generated QMD;
+- hidden workspace state under `workspaces/.workspaces/`;
 - the bounded packet sent to the verifier or its stable identity;
-- complete verifier reports;
-- accepted and rejected submission records; and
-- a verification index relating an exact proof to its status.
+- complete workspace verifier reports and accepted or rejected submission
+  records under `workspaces/.workspaces/verification/`; and
+- project verification records relating exact canonical proofs to status under
+  `.qmd-prover/verification/`.
 
 This is mathematical working state and proof provenance, not an agent runtime.
 The core design has no qmd-prover worker registry, scheduler, or inter-agent
 message store. Codex or Claude Code owns the running agent; qmd-prover preserves
-the goal workspace that agent reads and writes.
+the mathematical workspace that agent reads and writes.
 
 ## Invocation model
 
@@ -324,12 +355,12 @@ by the skill.
 
 ### Example direct invocation
 
-From the mathematical project root, a maintainer can submit the isolated
-proposal with:
+From the mathematical project root, a maintainer can submit the selected
+candidate with:
 
 ```bash
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" \
-  submit-proof .qmd-prover/proposals/even-square.qmd
+  submit-proof .qmd-prover/workspaces/main-proof.qmd
 ```
 
 A rejected JSON response directs the host agent to the stored report. An
