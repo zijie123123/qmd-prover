@@ -39,8 +39,6 @@ Consider two mathematical files. `foundations.qmd` exports a definition:
 ::: {#def-even-integer .definition export="even-integer"}
 ## Even integer
 
-### Statement
-
 An integer \(n\) is even if there is an integer \(k\) with \(n=2k\).
 :::
 ```
@@ -48,27 +46,24 @@ An integer \(n\) is even if there is an integer \(k\) with \(n=2k\).
 `main.qmd` imports it and contains an open goal:
 
 ```markdown
-::: {.theorem-imports}
-from: foundations.qmd
-use:
-  - @def-even-integer
-:::
+---
+qmd-prover:
+  imports:
+    - from: foundations.qmd
+      use:
+        - def-even-integer
+---
 
 ::: {#thm-main-even-square .theorem .goal}
 ## Even squares
 
-### Statement
-
 For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-
-### Proof
-
 :::
 ```
 
 The inspector discovers two semantic nodes, resolves the import, and reports
 `@thm-main-even-square` as open. No dependency edge exists yet because the open
-goal has no `Uses` declaration or proof.
+goal has no associated proof block.
 
 ## Parsing model
 
@@ -83,12 +78,20 @@ The inspector recognizes:
 
 - definitions, lemmas, theorems, propositions, and corollaries;
 - `thm-main-*` proof obligations;
-- `Statement`, `Uses`, and `Proof` sections;
-- explicit theorem-import blocks;
+- `.proof` blocks linked to results through an `of` attribute;
+- qmd-prover import metadata in the QMD front matter;
 - exports; and
 - semantic `@def-*`, `@lem-*`, `@thm-*`, `@prp-*`, and `@cor-*` references.
 
 Nonsemantic QMD is left alone.
+
+For a result block, the first heading supplies the display title and the
+remaining block content is the statement. A `.proof` block names its result
+with `of="semantic-id"`; its entire body is proof content. A canonical result
+may have at most one associated proof. A missing proof means `open`, while an
+empty, orphaned, ambiguous, or multiply associated proof is a structural
+error. In an isolated proposal, `of` may point to the protected canonical
+target rather than to a result block copied into the proposal file.
 
 ## Inspection pipeline
 
@@ -107,8 +110,7 @@ For every recognized result, the inspector records at least:
 - source file and location;
 - statement and proof identity;
 - whether a proof is present;
-- declared dependencies;
-- proof references; and
+- semantic dependencies cited by the associated proof; and
 - export information.
 
 Statement and title identities allow later utilities to protect user-owned
@@ -126,7 +128,7 @@ An abbreviated manifest entry for the open goal could look like:
   "statement_hash": "sha256:...",
   "proof_hash": "sha256:...",
   "proof_present": false,
-  "uses": [],
+  "dependencies": [],
   "status": "open"
 }
 ```
@@ -147,12 +149,12 @@ The result is an explicit set of available semantic IDs for each source file.
 
 If `main.qmd` instead contains:
 
-```markdown
-::: {.theorem-imports}
-from: foundations.qmd
-use:
-  - @lem-square-of-double
-:::
+```yaml
+qmd-prover:
+  imports:
+    - from: foundations.qmd
+      use:
+        - lem-square-of-double
 ```
 
 but `foundations.qmd` does not define that ID, inspection reports an import
@@ -161,11 +163,10 @@ lemma, or assume that a similarly titled theorem was intended.
 
 ### 4. Check dependencies
 
-The inspector compares `Uses` with semantic references appearing in the proof.
-It reports:
+The inspector associates each `.proof` block with the result named by its `of`
+attribute and extracts semantic references from that proof. It reports:
 
-- a cited premise missing from `Uses`;
-- a declared premise never cited in the proof;
+- a proof whose `of` target does not exist or is ambiguous;
 - a premise that does not exist;
 - a cross-file premise that was not imported;
 - an imported ID that was not exported; and
@@ -179,14 +180,10 @@ dependency. Dependency edges come from the semantic proof context.
 Suppose the candidate in `main.qmd` says:
 
 ```markdown
-### Uses
-
-- @def-even-integer
-
-### Proof
-
+::: {.proof of="thm-main-even-square"}
 By @def-even-integer, write \(n=2k\). Then @lem-square-of-double gives
 \(n^2=4k^2\).
+:::
 ```
 
 The inspector can return a source-located diagnostic such as:
@@ -194,20 +191,21 @@ The inspector can return a source-located diagnostic such as:
 ```json
 {
   "severity": "error",
-  "code": "PROOF_REFERENCE_UNDECLARED",
-  "message": "@lem-square-of-double is cited in Proof but absent from Uses",
+  "code": "DEPENDENCY_UNAVAILABLE",
+  "message": "@lem-square-of-double is cited by the proof but is not local or imported",
   "file": "main.qmd",
   "line": 18,
   "id": "thm-main-even-square"
 }
 ```
 
-After adding the ID to `Uses`, inspection may still report
-`DEPENDENCY_UNAVAILABLE` until the lemma is local or explicitly imported.
+The repair is to import the exported lemma or place it in the same file. The
+proof already declares the dependency through its reference, so no separate
+dependency list needs editing.
 
 ### 5. Build the graph
 
-Each semantic result becomes a node. Each declared and cited logical premise
+Each semantic result becomes a node. Each semantic result cited by its proof
 becomes a directed edge from the dependent result to the premise.
 
 The graph supports:
@@ -343,7 +341,7 @@ A workspace result records its origin and working status. For example:
   "workspace": "thm-main-uniform-index",
   "file": "local-theory/exponent-bounds.qmd",
   "status": "workspace-candidate",
-  "uses": [
+  "dependencies": [
     "thm-canonical-local-class-group-finite",
     "lem-completion-preserves-index"
   ]

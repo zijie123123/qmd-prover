@@ -188,8 +188,8 @@ sessions.
 Workspace files are not automatically part of the user's Quarto project. A
 workspace result crosses the boundary only through the proving utilities:
 
-1. Select one complete semantic result from the workspace.
-2. Check it against the discipline and its declared dependencies.
+1. Select one complete new result or one proof candidate from the workspace.
+2. Check it against the discipline and the dependencies cited in its proof.
 3. Verify it independently.
 4. Reject it without changing canonical QMD, or accept it atomically.
 5. Place an accepted new lemma in the canonical project according to project
@@ -219,21 +219,38 @@ qmd-prover pays attention only to recognized semantic blocks. The rest of QMD
 remains ordinary Quarto content, including prose, equations, figures, code
 cells, and bibliographic citations.
 
+The semantic format follows the way a mathematical document is normally read:
+
+- a result block contains its title and statement;
+- a proof block contains its proof; and
+- semantic references in the proof identify its logical dependencies.
+
+There are no `Statement`, `Uses`, or `Proof` subheadings. In particular,
+dependencies are not written twice in a separate list and then again in the
+argument. The inspector derives proof dependencies directly from semantic
+references at their points of use.
+
+The format has four structural rules:
+
+1. A result block has a semantic ID, semantic class, one title heading, and the
+   statement as its body.
+2. A proof is a `.proof` block whose `of` attribute names the result it proves.
+3. A missing proof block means an open result; canonical QMD cannot contain two
+   proofs associated with the same result.
+4. Cross-file availability is declared in QMD front matter, while actual proof
+   dependencies are the semantic references found in the proof body.
+
 ### Open main goal
 
 A user creates a top-level proof obligation with a protected `thm-main-*` ID.
-An empty `Proof` section means that the goal is open:
+The result block itself is the statement. The absence of an associated proof
+block means that the goal is open:
 
 ```markdown
 ::: {#thm-main-even-square .theorem .goal}
 ## Even squares
 
-### Statement
-
 For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-
-### Proof
-
 :::
 ```
 
@@ -244,90 +261,104 @@ those protected parts.
 ### Reusable result
 
 Definitions, lemmas, propositions, theorems, and corollaries use corresponding
-semantic classes and ID prefixes. A reusable result declares every logical
-premise in `Uses` and cites the premise where it is applied:
+semantic classes and ID prefixes. A proof is a separate block linked to its
+result by `of`. Each semantic reference inside the proof becomes a dependency:
 
 ```markdown
 ::: {#lem-square-of-double .lemma export="square-of-double"}
 ## Square of a double
 
-### Uses
-
-- @def-even-integer
-
-### Statement
-
 If \(n=2k\) for integers \(n,k\), then \(n^2=4k^2\).
+:::
 
-### Proof
-
+::: {.proof of="lem-square-of-double"}
 Using the representation from @def-even-integer, calculate
 \(n^2=(2k)^2=4k^2\).
 :::
 ```
 
 The `export` attribute makes the result eligible for explicit use from another
-file. Results in the same file are locally available without an import.
+file. The proof's reference to `@def-even-integer` is both readable mathematics
+and the dependency declaration. Results in the same file are locally available
+without an import.
 
 ### Cross-file dependency
 
-A theorem imports individual exported results:
+A QMD file imports individual exported results through ordinary Quarto
+front-matter metadata. The metadata is visible in the source but does not
+become document content when rendered:
 
 ```markdown
-::: {.theorem-imports}
-from: foundations.qmd
-use:
-  - @def-even-integer
-  - @lem-square-of-double
-:::
+---
+title: "Parity results"
+qmd-prover:
+  imports:
+    - from: foundations.qmd
+      use:
+        - def-even-integer
+        - lem-square-of-double
+---
 ```
 
 Wildcard imports are not part of the semantic model. An imported ID must exist
-in the named file and must be exported there.
+in the named file and must be exported there. Import metadata controls which
+results are available; references in proofs determine which available results
+are actually used.
 
 ### Candidate proof
 
-A complete candidate preserves the main goal and makes its dependencies
-explicit:
+A candidate for an existing main goal needs only a linked proof block. The
+protected statement is read from canonical QMD instead of being copied into
+every attempt:
 
 ```markdown
-::: {#thm-main-even-square .theorem .goal}
-## Even squares
-
-### Statement
-
-For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-
-### Uses
-
-- @def-even-integer
-- @lem-square-of-double
-
-### Proof
-
+::: {.proof of="thm-main-even-square"}
 Let \(n\) be even. By @def-even-integer, write \(n=2k\) for an integer
 \(k\). Then @lem-square-of-double gives \(n^2=4k^2\), so \(4\) divides
 \(n^2\).
 :::
 ```
 
-This text is a candidate, not a verified proof. Acceptance requires a separate
-verification step.
+The two semantic references are the candidate's direct dependencies. This text
+is still only a candidate. Acceptance requires a separate verification step.
+On acceptance, the proof block is placed next to the protected theorem block in
+canonical QMD.
+
+### New result proposal
+
+When the agent proposes a new intermediate result, its proposal contains the
+new result block followed by its proof block:
+
+```markdown
+::: {#lem-product-positive .lemma}
+## Product of positive elements
+
+If \(a>0\) and \(b>0\) in an ordered field, then \(ab>0\).
+:::
+
+::: {.proof of="lem-product-positive"}
+Apply @thm-ordered-field-positive-product to \(a\) and \(b\).
+:::
+```
+
+The result block can be promoted into canonical QMD only together with an
+accepted proof and valid dependencies.
 
 ## Dependencies
 
 A logical dependency must satisfy all of the following:
 
-1. It appears in the result's `Uses` section.
-2. It is cited with a semantic `@` reference at the point of use in the proof.
-3. It is defined in the same file or individually imported from another file.
-4. A proof being accepted relies only on dependencies with an acceptable
+1. It is cited with a semantic `@` reference at the point of use in the proof.
+2. It is defined in the same file or individually imported through QMD
+   metadata.
+3. A proof being accepted relies only on dependencies with an acceptable
    verification status.
 
-The inspector checks these conditions and constructs a directed graph. An edge
-from theorem A to lemma B means that A uses B. From this graph the inspector
-can provide both the dependency closure needed to understand A and the reverse
-dependencies that may be affected if B changes.
+The inspector reads references only from the proof block associated through
+`of`. It checks their availability and status, then constructs a directed
+graph. An edge from theorem A to lemma B means that A's proof cites B. From
+this graph the inspector can provide both the dependency closure needed to
+understand A and the reverse dependencies that may be affected if B changes.
 
 Semantic references in ordinary exposition are navigational rather than
 logical dependencies. Bibliographic citations remain Quarto citations and are
@@ -368,8 +399,8 @@ For a typical request, the host agent follows this loop:
    examples, alternative approaches, and notes as needed.
 7. Inspect the workspace graph to identify the next unproved dependency and to
    avoid treating conjectural workspace claims as established premises.
-8. Select a complete workspace result and use the proving utilities to check
-   its structure and declared dependencies.
+8. Select a complete workspace result or proof and use the proving utilities
+   to check its structure and cited dependencies.
 9. Send that result and its bounded mathematical context to an independent
    verifier, which may itself be implemented with a fresh sub-agent.
 10. If rejected, preserve the report in the workspace, repair the result, and
@@ -551,7 +582,7 @@ reproducible from canonical QMD, retained workspaces, and verification records.
 Before verification, the proving utilities validate the candidate and record
 the identities of the target and every dependency. The verifier receives only
 the exact statement, candidate proof, relevant definitions, and statements of
-declared verified dependencies. It does not receive the proving agent's
+cited verified dependencies. It does not receive the proving agent's
 confidence or unrelated narrative.
 
 A typical informal verifier response contains:

@@ -72,8 +72,8 @@ project representation, including:
 - semantic block shape and unique IDs;
 - protected main-statement identity;
 - explicit imports and exports;
-- agreement between `Uses` and proof references;
-- availability and status of dependencies;
+- association of every proof with one semantic result;
+- availability and status of results cited by proofs;
 - isolation of proposals;
 - stale-submission checks; and
 - rejection-safe, atomic acceptance.
@@ -84,30 +84,29 @@ diagnostic rather than guessing.
 
 #### Example: a mechanically detectable dependency error
 
-This proof cites two lemmas but declares only one:
+This proof cites a result that is neither local nor imported:
 
 ```markdown
-### Uses
-
-- @lem-factor-even
-
-### Proof
-
+::: {.proof of="thm-main-even-square"}
 By @lem-factor-even, write \(n=2k\). Applying @lem-square-of-double gives
 \(n^2=4k^2\).
+:::
 ```
 
-The inspector can determine from the syntax that
-`@lem-square-of-double` is missing from `Uses`. The corrected declaration is:
+If only `@lem-factor-even` is available, the inspector reports
+`@lem-square-of-double` as unavailable. The file can import the exported lemma
+through its Quarto metadata:
 
-```markdown
-### Uses
-
-- @lem-factor-even
-- @lem-square-of-double
+```yaml
+qmd-prover:
+  imports:
+    - from: foundations/parity.qmd
+      use:
+        - lem-square-of-double
 ```
 
-No mathematical judgment is required for this correction.
+No mathematical judgment is required for this diagnostic. The reference in the
+proof is already the dependency declaration; no second `Uses` list is needed.
 
 ### Mathematically judged rules
 
@@ -160,12 +159,7 @@ Assume the user supplied:
 ::: {#thm-main-primes-odd .theorem .goal}
 ## Every prime is odd
 
-### Statement
-
 Every prime number is odd.
-
-### Proof
-
 :::
 ```
 
@@ -183,26 +177,22 @@ definitions and results.
 
 Within a semantic result, the discipline distinguishes:
 
-- the title and statement, which say what is claimed;
-- `Uses`, which declares logical premises; and
-- the proof, which cites those premises where they are applied.
+- the result block, whose heading and body say what is claimed; and
+- a linked proof block, whose semantic references declare the logical premises
+  at their points of use.
 
 For `thm-main-*`, the title and statement originate with the user and are
-protected. A nonempty proof is still only a candidate until independently
-accepted.
+protected. The absence of a linked proof block means the result is open. A
+present proof block is still only a candidate until independently accepted.
 
 ### Example: semantic and nonsemantic references
 
 In a semantic proof, the reference below creates a logical dependency:
 
 ```markdown
-### Uses
-
-- @lem-compact-subsequence
-
-### Proof
-
+::: {.proof of="thm-main-convergence"}
 Apply @lem-compact-subsequence to the bounded sequence.
+:::
 ```
 
 In surrounding exposition, the same reference can be navigational:

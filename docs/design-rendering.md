@@ -56,6 +56,11 @@ utilities becomes observable through the next normal Quarto render.
 ```markdown
 ---
 title: "Main results"
+qmd-prover:
+  imports:
+    - from: foundations.qmd
+      use:
+        - def-even-integer
 ---
 
 We use the parity definition from @def-even-integer.
@@ -63,22 +68,18 @@ We use the parity definition from @def-even-integer.
 ::: {#thm-main-even-square .theorem .goal}
 ## Even squares
 
-### Statement
-
 For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
+:::
 
-### Uses
-
-- @def-even-integer
-
-### Proof
-
+::: {.proof of="thm-main-even-square"}
 By @def-even-integer, write \(n=2k\). Then \(n^2=4k^2\).
 :::
 ```
 
-The inspector reads the semantic block, while Quarto renders the page title,
-prose, mathematics, theorem, and references. qmd-prover does not translate this
+The inspector associates the proof through `of` and derives its dependency
+from the semantic reference. Quarto renders a theorem followed by its proof;
+there are no `Statement`, `Uses`, or `Proof` section headings polluting the
+table of contents or visual hierarchy. qmd-prover does not translate this
 source into a separate document format.
 
 ## Observability
@@ -88,7 +89,7 @@ the mathematical prose, including:
 
 - open and verified goals;
 - rejected or revoked status;
-- declared dependencies;
+- dependencies cited by proofs;
 - reverse dependencies;
 - source-located diagnostics; and
 - verification summaries.

@@ -77,13 +77,15 @@ attempts, and verifier reports to recover the proof frontier.
 ## Preparing a candidate
 
 The host agent begins from the inspector's bounded theorem context. A utility
-may create a proposal scaffold containing the exact canonical ID, title, and
-statement so the agent does not reproduce protected content by hand.
+may create a proof scaffold linked to the canonical result by semantic ID. The
+statement is not copied into each attempt, so the agent cannot accidentally
+rewrite protected content while drafting a proof.
 
-A proposal contains exactly one complete semantic result block. It is stored
-outside canonical QMD while it is being developed. Supporting calculations or
-search notes may accompany it, but they are not part of the mathematical proof
-and are not submitted as proof text.
+A proposal for an existing result contains one `.proof` block with an `of`
+attribute. A proposal for a new intermediate result contains one result block
+and its linked proof block. Proposals are stored outside canonical QMD while
+they are developed. Supporting calculations or search notes may accompany
+them, but are not submitted as proof text.
 
 Useful assistance may include:
 
@@ -91,7 +93,7 @@ Useful assistance may include:
 - searching local semantic results by ID, title, or statement text;
 - explaining which import would make a cross-file result available;
 - comparing a draft with the protected canonical statement;
-- comparing `Uses` with proof citations; and
+- checking every semantic reference in a proof for availability and status;
 - retrieving earlier rejected attempts and concrete repair feedback.
 
 These are aids to the host agent. They do not synthesize an autonomous work
@@ -99,41 +101,29 @@ plan or maintain a qmd-prover worker model.
 
 ### Example proposal
 
-Starting from an open goal, the utility can preserve the protected material in
-an isolated `proposal.qmd` while the host agent supplies `Uses` and `Proof`:
+Starting from an open goal, the host agent writes only the proof in an isolated
+`proposal.qmd`:
 
 ```markdown
-::: {#thm-main-even-square .theorem .goal}
-## Even squares
-
-### Statement
-
-For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
-
-### Uses
-
-- @def-even-integer
-
-### Proof
-
+::: {.proof of="thm-main-even-square"}
 Let \(n\) be even. By @def-even-integer, there is an integer \(k\) such
 that \(n=2k\). Hence \(n^2=(2k)^2=4k^2\), so \(4\mid n^2\).
 :::
 ```
 
-This file is not canonical mathematics yet. It becomes eligible for acceptance
-only after preflight and independent verification.
+The utility obtains the exact title and statement from canonical QMD. The
+reference to `@def-even-integer` is the proof's dependency declaration. This
+file becomes eligible for acceptance only after preflight and independent
+verification.
 
 ## Candidate preflight
 
 Before independent verification, the utility confirms that:
 
-- the proposal contains exactly one semantic result;
-- its target exists in canonical QMD;
-- its protected title and statement are unchanged;
-- its proof is nonempty;
-- every cited dependency is declared;
-- every declared dependency is cited;
+- the proposal contains exactly one proof and at most one new result;
+- the proof's `of` attribute resolves to its canonical or proposed result;
+- an existing target's protected result block was not redefined;
+- the proof body is nonempty;
 - every dependency exists and is available through local scope or an explicit
   import; and
 - every premise required to support an accepted proof has the required
@@ -144,18 +134,17 @@ It does not imply correctness.
 
 ### Example preflight failure
 
-If the proposal changes the protected statement to:
+If the proposal links its proof to a nonexistent or misspelled target:
 
 ```markdown
-### Statement
-
-For every even positive integer \(n\), the integer \(n^2\) is divisible by
-\(4\).
+::: {.proof of="thm-main-even-squares"}
+Let \(n=2k\). Then \(n^2=4k^2\).
+:::
 ```
 
-preflight rejects it even though the new statement is true. Adding “positive”
-changes the user's quantified goal. The candidate must restore the exact
-canonical statement before mathematical verification begins.
+preflight rejects it because `@thm-main-even-squares` does not exist. The host
+agent must link the proof to `thm-main-even-square`. There is no duplicated
+statement in the proposal to edit or compare.
 
 ## Independent verification
 
@@ -167,7 +156,7 @@ An informal verifier receives a minimal packet containing:
 
 - the exact target statement;
 - the candidate proof;
-- declared dependencies;
+- dependencies cited in the proof;
 - the statements of cited, verified results;
 - relevant definitions and hypotheses; and
 - a verification rubric requiring explicit errors and gaps.
@@ -200,7 +189,7 @@ An abbreviated packet for the proposal above could be:
     "id": "thm-main-even-square",
     "statement": "For every even integer n, n^2 is divisible by 4.",
     "proof": "Let n be even. By @def-even-integer ...",
-    "declared_uses": ["def-even-integer"]
+    "cited_dependencies": ["def-even-integer"]
   },
   "dependencies": [
     {
@@ -251,8 +240,8 @@ candidate merely says “This is obvious.” A verifier can respond:
 }
 ```
 
-The host agent then adds the available lemma to `Uses`, cites it at the point
-of application, and resubmits. A successful second report might be:
+The host agent then cites the available lemma at the point of application and
+resubmits. A successful second report might be:
 
 ```json
 {
