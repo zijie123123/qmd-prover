@@ -130,32 +130,25 @@ uniform-index-project/                     # canonical project workspace
             ├── examples/
             │   ├── quotient-singularities.qmd
             │   └── possible-counterexamples.qmd
-            ├── attempts/
-            │   ├── main-0001.qmd
-            │   ├── main-0002.qmd
-            │   └── main-0003-repaired.qmd
             ├── verification/
-            │   ├── lem-local-exponent-bound/
-            │   └── thm-main-uniform-index/
-            ├── dead-ends/
-            │   ├── uniform-generator-strategy.qmd
-            │   └── notes.md
-            └── proposals/
-                ├── lem-local-exponent-bound.qmd
-                ├── lem-finite-stratification.qmd
-                └── thm-main-uniform-index.qmd
+            │   ├── lem-local-exponent-bound.json
+            │   └── thm-main-uniform-index.json
+            └── main-proof.qmd
 ```
 
 This is an illustrative workspace, not a required list of directories. A short
-proof may need only `target.qmd` and one proposal. A long proof may grow into a
-substantial mathematical development. The workspace should be organized for
-the agent to retrieve context, inspect dependencies, resume work, and separate
-productive results from dead ends.
+proof may need only `target.qmd` and one mathematical working file. A long proof
+may grow into a substantial mathematical development. The workspace should be
+organized for the agent to retrieve context, inspect dependencies, and resume
+work. Attempts, abandoned routes, and submission candidates remain ordinary
+mathematical QMD;
+they do not require dedicated file types or directories. Verification records
+are the only proof-development artifacts with a dedicated non-QMD format.
 
-The agent may group several closely related claims in one QMD file or split a
-large line of argument across many files. It should follow the discipline and
-the structure already present in the workspace rather than creating one file
-for every transient thought.
+The agent may group several closely related claims, partial proofs, rejected
+proofs, and explanatory prose in one QMD file or split a large line of argument
+across many files. It should follow the structure already present in the
+workspace rather than creating one file for every transient thought.
 
 ### Workspace dependency model
 
@@ -210,8 +203,8 @@ The files have different ownership:
 - `_quarto.yml` is the project's normal Quarto configuration.
 - `.qmd-prover/workspaces/` contains persistent but noncanonical mathematical
   work organized around assigned goals.
-- Other `.qmd-prover/` files contain derived indexes, verification records,
-  and caches.
+- Verification JSON contains dispatcher-owned accepted and rejected records.
+- Other `.qmd-prover/` files contain derived indexes and caches.
 
 ## Semantic QMD
 
@@ -230,14 +223,25 @@ dependencies are not written twice in a separate list and then again in the
 argument. The inspector derives proof dependencies directly from semantic
 references at their points of use.
 
-The format has four structural rules:
+The format has six structural rules:
 
-1. A result block has a semantic ID, semantic class, a `name` attribute, and
-   the statement as its body. Quarto renders `name` as the theorem caption.
+1. A definition or result block has a semantic ID, semantic class, a `name`
+   attribute, an ISO `date="YYYY-MM-DD"` recording when the statement was
+   introduced, and the statement as its body. The date is informational: it is
+   not a truth-status label and does not affect statement or proof identity.
+   Quarto renders `name` as the caption.
 2. A proof is a `.proof` block whose `of` attribute names the result it proves.
-3. A missing proof block means an open result; canonical QMD cannot contain two
-   proofs associated with the same result.
-4. Cross-file availability is declared in QMD front matter, while actual proof
+3. The first nonempty paragraph of a workspace proof may be exactly `OPEN` or
+   `REJECTED`. This reserved control paragraph is not part of the mathematical
+   proof and is excluded from proof identity and verifier input.
+4. A missing proof or a proof beginning with `OPEN` means an open result. A
+   proof beginning with `REJECTED` is an inactive rejected attempt. An
+   unmarked proof is a candidate until an exact accepted verification record
+   establishes it as verified. Source QMD has no `VERIFIED` marker.
+5. A workspace may retain multiple marked proof attempts for one result, but
+   at most one unmarked proof may be active. Canonical QMD may contain only its
+   one accepted, unmarked proof.
+6. Cross-file availability is declared in QMD front matter, while actual proof
    dependencies are the semantic references found in the proof body.
 
 ### Open main goal
@@ -247,7 +251,7 @@ The result block itself is the statement. The absence of an associated proof
 block means that the goal is open:
 
 ```markdown
-::: {#thm-main-even-square .theorem .goal name="Even squares"}
+::: {#thm-main-even-square .theorem .goal name="Even squares" date="2026-07-12"}
 For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
 :::
 ```
@@ -263,7 +267,7 @@ semantic classes and ID prefixes. A proof is a separate block linked to its
 result by `of`. Each semantic reference inside the proof becomes a dependency:
 
 ```markdown
-::: {#lem-square-of-double .lemma name="Square of a double" export="square-of-double"}
+::: {#lem-square-of-double .lemma name="Square of a double" date="2026-07-12" export="square-of-double"}
 If \(n=2k\) for integers \(n,k\), then \(n^2=4k^2\).
 :::
 
@@ -276,7 +280,8 @@ Using the representation from @def-even-integer, calculate
 The `export` attribute makes the result eligible for explicit use from another
 file. The proof's reference to `@def-even-integer` is both readable mathematics
 and the dependency declaration. Results in the same file are locally available
-without an import.
+without an import. Definitions use the same introduction-date attribute, but
+are accepted or provisional declarations rather than proved propositions.
 
 ### Cross-file dependency
 
@@ -320,13 +325,42 @@ is still only a candidate. Acceptance requires a separate verification step.
 On acceptance, the proof block is placed next to the protected theorem block in
 canonical QMD.
 
-### New result proposal
+### Partial and rejected proofs
 
-When the agent proposes a new intermediate result, its proposal contains the
-new result block followed by its proof block:
+A partial workspace proof begins with the reserved `OPEN` paragraph:
 
 ```markdown
-::: {#lem-product-positive .lemma name="Product of positive elements"}
+::: {#proof-even-square-0001 .proof of="thm-main-even-square"}
+OPEN
+
+It remains to justify that the chosen representation is available uniformly.
+:::
+```
+
+The inspector retains the mathematical text but does not treat this block as a
+complete candidate. A proof retained after rejection begins with `REJECTED`:
+
+```markdown
+::: {#proof-even-square-0002 .proof of="thm-main-even-square"}
+REJECTED
+
+Choose \(k=n/2\), then conclude that \(n^2\) is divisible by \(4\).
+:::
+```
+
+The complete dispatcher-owned verification report remains authoritative. The
+marker is a readable, conservative annotation: adding it cannot establish a
+claim, and removing it cannot erase a matching rejection record. Repairing the
+mathematical proof changes its identity; the repaired, unmarked proof is then a
+new candidate.
+
+### New result candidate
+
+When the agent develops a new intermediate result, the mathematical QMD
+contains the new result block followed by its proof block:
+
+```markdown
+::: {#lem-product-positive .lemma name="Product of positive elements" date="2026-07-12"}
 If \(a>0\) and \(b>0\) in an ordered field, then \(ab>0\).
 :::
 
@@ -335,8 +369,9 @@ Apply @thm-ordered-field-positive-product to \(a\) and \(b\).
 :::
 ```
 
-The result block can be promoted into canonical QMD only together with an
-accepted proof and valid dependencies.
+No proposal file type or directory is required. Submission selects this active
+semantic result and proof. The result block can be promoted into canonical QMD
+only together with an accepted proof and valid dependencies.
 
 ## Dependencies
 
@@ -360,14 +395,15 @@ not confused with theorem IDs.
 
 ## Result status
 
-Status is derived from the current QMD and retained verification records; it is
-not a label that an author may assert in proof prose.
+Status is derived from the current QMD, the two conservative proof-control
+markers, and retained verification records. Neither marker can assert success.
 
-- `open` means no proof is present.
-- `candidate` means a proof is present but has not been accepted for its current
-  identity.
-- `rejected` means an independently checked candidate failed; canonical QMD
-  was not changed by that rejected submission.
+- `open` means no proof is present or the retained proof begins with `OPEN`.
+- `candidate` means an unmarked proof is present but has not been accepted for
+  its current identity.
+- `rejected` means the retained proof begins with `REJECTED` or an independently
+  checked candidate has a matching rejection record; canonical QMD was not
+  changed by that rejected submission.
 - `verified` means the current statement and proof match an accepted
   verification record.
 - `revoked` means an earlier acceptance was explicitly withdrawn with a
@@ -397,8 +433,8 @@ For a typical request, the host agent follows this loop:
    to check its structure and cited dependencies.
 9. Send that result and its bounded mathematical context to an independent
    verifier, which may itself be implemented with a fresh sub-agent.
-10. If rejected, preserve the report in the workspace, repair the result, and
-    repeat.
+10. If rejected, preserve the report in verification JSON, retain the rejected
+    proof with its `REJECTED` marker when useful, repair the result, and repeat.
 11. If accepted, recheck that the target and dependencies are current and
     promote the result or proof into canonical QMD atomically.
 12. Continue until the original main theorem is accepted or the work reaches
@@ -474,9 +510,9 @@ Render the Quarto project and show me the current proof progress.
 ```
 
 The host agent loads `SKILL.md`, performs the contract preflight, invokes the
-Node utilities, interprets their JSON, writes isolated candidates, and explains
-the result in ordinary language. The user does not need to memorize script
-operations.
+Node utilities, interprets their JSON, writes mathematical workspace QMD, and
+explains the result in ordinary language. The user does not need to memorize
+script operations.
 
 The host may use its own sub-agent mechanism for independent verification or
 parallel mathematical exploration when the user requests it. Those sub-agents
@@ -504,11 +540,11 @@ node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
   inspect-theorem @thm-main-even-square
 ```
 
-Submit an isolated candidate:
+Submit the selected candidate from workspace QMD:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  submit-proof path/to/proposal.qmd
+  submit-proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
 ```
 
 Read a stored verification report:
@@ -529,10 +565,11 @@ These operations expose the skill's tool protocol; they are not a separately
 designed interactive CLI. Their JSON output is stable so a host agent can call
 them reliably. Structural diagnostics use a nonzero exit status.
 
-Submitting a proposal is intentionally stronger than copying its proof into a
-QMD file: it checks structure and dependencies, invokes the independent
-verifier, rejects stale work, and performs the canonical update only after
-acceptance.
+Submitting a candidate is intentionally stronger than copying its proof into a
+canonical QMD file: it checks structure and dependencies, invokes the
+independent verifier, rejects stale work, and performs the canonical update
+only after acceptance. "Proposal" names this submission action, not a distinct
+file type.
 
 ## Rendering with Quarto
 
@@ -560,11 +597,11 @@ references live there.
 
 `.qmd-prover/` may contain persistent agent work and derived artifacts such as:
 
-- goal-scoped workspaces containing exploratory QMD and intermediate results;
+- goal-scoped workspaces containing mathematical QMD, including partial and
+  rejected proofs;
 - a semantic manifest and dependency graph;
-- isolated proof proposals;
-- independent verification reports;
-- the verification record associated with an accepted proof; and
+- dispatcher-owned verification JSON retaining accepted and rejected reports,
+  exact semantic identities, and review dates; and
 - generated QMD or data used for observability.
 
 Agent workspaces are valuable resumable state, but they are not canonical
@@ -593,6 +630,12 @@ A typical informal verifier response contains:
 
 Acceptance requires `verdict: correct` together with empty `critical_errors`
 and `gaps`. Any other response is a rejection.
+
+Verification JSON is the only dedicated auxiliary proof-development file type.
+It acts as a retained cache and ledger for exact statements, proofs,
+dependencies, verdicts, gaps, repair guidance, and submission and review dates.
+It is fail-closed: a missing, corrupt, stale, or nonmatching record never makes
+a result verified. Only the dispatcher may write an accepted record.
 
 After an accepting verdict, the proving utilities inspect the project again.
 If the protected target or any dependency changed while verification was
@@ -642,7 +685,7 @@ status. Formal verification and human review remain distinct claims.
   categories of rules, and contract evolution.
 - [Inspector design](design-inspector.md) explains Pandoc parsing, scope
   resolution, dependency construction, diagnostics, and theorem bundles.
-- [Proving utilities design](design-proving.md) explains proposals,
+- [Proving utilities design](design-proving.md) explains candidate submission,
   independent verification, rejection, stale checks, and atomic acceptance.
 - [Rendering design](design-rendering.md) explains how observability integrates
   with the ordinary Quarto pipeline.
