@@ -177,12 +177,155 @@ figures, equations, code cells, and bibliographic citations remain Quarto
 content. The discipline applies dependency semantics only to recognized
 definitions and results.
 
-Within semantic QMD, the discipline distinguishes:
+## Recognized block types
 
-- the definition or result block, whose `name`, introduction `date`, and body
-  record the declaration or claim; and
-- a linked proof block, whose semantic references declare the logical premises
-  at their points of use.
+Every semantic declaration is a fenced Div with one stable ID and exactly one
+kind class. The ID prefix must agree with the class: `def-` for `.definition`,
+`lem-` for `.lemma`, `prp-` for `.proposition`, `thm-` for `.theorem`, and
+`cor-` for `.corollary`. The `name` is the human-readable title, `date` records
+the ISO introduction date, and `export` is optional unless another file must
+import the declaration. These common attributes do not make the five result
+kinds interchangeable; the kind communicates the declaration's mathematical
+role to readers and to dependency search.
+
+### Definition block
+
+A `.definition` block introduces a term, object, or piece of notation. Its body
+is the construction rather than a claim copied from a later proof. Semantic
+references in that body are construction dependencies, so every referenced
+fact must be local or explicitly imported. When well-definedness, existence,
+or uniqueness needs justification, put that argument in a separate linked
+proof block.
+
+```markdown
+::: {#def-even-integer .definition name="Even integer" date="2026-07-12" export="even-integer"}
+An integer \(n\) is **even** if there exists an integer \(k\) such that
+\(n=2k\).
+:::
+
+::: {.proof of="def-even-integer"}
+This predicate is a well-formed property of an integer \(n\).
+:::
+```
+
+### Lemma block
+
+A `.lemma` block states an auxiliary result intended to support later results.
+The label describes its role in the development, not a weaker verification
+standard: a lemma must be checked as rigorously as a theorem.
+
+```markdown
+::: {#lem-square-of-double .lemma name="Square of a double" date="2026-07-12" export="square-of-double"}
+If \(n=2k\) for integers \(n,k\), then \(n^2=4k^2\).
+:::
+
+::: {.proof of="lem-square-of-double"}
+Expanding the product gives \(n^2=(2k)^2=4k^2\).
+:::
+```
+
+### Proposition block
+
+A `.proposition` block states a result that is useful in its own right but is
+not presented as one of the development's principal theorems. This distinction
+is expository; propositions use the same proof and verification machinery as
+lemmas and theorems.
+
+```markdown
+::: {#prp-even-sum .proposition name="Sums of even integers" date="2026-07-12"}
+The sum of two even integers is even.
+:::
+
+::: {.proof of="prp-even-sum"}
+By @def-even-integer, write \(a=2r\) and \(b=2s\). Then
+\(a+b=2(r+s)\), so @def-even-integer applies again.
+:::
+```
+
+### Theorem block
+
+A `.theorem` block states a principal result. An ordinary theorem uses a
+`thm-` ID and can be introduced by the project or by an agent in its workspace.
+Its proof remains separate, just like the proof of a lemma or proposition.
+
+```markdown
+::: {#thm-even-square .theorem name="Squares of even integers" date="2026-07-12" export="even-square"}
+If an integer \(n\) is even, then \(n^2\) is divisible by \(4\).
+:::
+
+::: {.proof of="thm-even-square"}
+By @def-even-integer, write \(n=2k\). Now @lem-square-of-double gives
+\(n^2=4k^2\).
+:::
+```
+
+### Corollary block
+
+A `.corollary` block states a result that follows quickly from an earlier
+result. The linked proof must still cite the result from which it follows;
+calling a statement a corollary does not create an implicit dependency.
+
+```markdown
+::: {#cor-even-square-not-two-mod-four .corollary name="Even squares modulo four" date="2026-07-12"}
+The square of an even integer is not congruent to \(2\pmod 4\).
+:::
+
+::: {.proof of="cor-even-square-not-two-mod-four"}
+By @thm-even-square, the square is congruent to \(0\pmod 4\), not
+\(2\pmod 4\).
+:::
+```
+
+### Main-goal theorem block
+
+A main goal is not a sixth result kind. It is a `.theorem` block refined by the
+`.goal` class and a protected `thm-main-*` ID. Its ID, `name`, hypotheses,
+quantifiers, and statement body originate with the user and must not be changed
+without explicit approval. With no linked proof, it is an open goal.
+
+```markdown
+::: {#thm-main-even-product .theorem .goal name="Even product theorem" date="2026-07-12"}
+If \(a\) is an even integer and \(b\) is an integer, then \(ab\) is even.
+:::
+```
+
+A workspace proposal for this goal contains only a linked `.proof` block; it
+does not repeat or edit the protected theorem block.
+
+### Proof block
+
+A `.proof` block supplies the construction or proof for exactly one semantic
+declaration. It has no semantic ID of its own. Instead, its `of` attribute must
+equal the target declaration's ID. Every `@id` inside the proof declares a
+logical dependency at its point of use.
+
+```markdown
+::: {.proof of="thm-main-even-product"}
+By @def-even-integer, write \(a=2k\). Then \(ab=2(kb)\), and \(kb\) is an
+integer, so @def-even-integer shows that \(ab\) is even.
+:::
+```
+
+The first nonempty paragraph may instead be one reserved control marker:
+
+```markdown
+::: {.proof of="thm-main-even-product"}
+OPEN
+
+It remains to show that the chosen witness is an integer.
+:::
+```
+
+`OPEN` marks an incomplete attempt, and `REJECTED` retains an inactive failed
+attempt. `VERIFIED` and `REVOKED` are valid only when qmd-prover has matching
+protected records. These words are proof-state markers, not additional block
+types, and an agent must never add or restore `VERIFIED` manually.
+
+Within semantic QMD, the declaration block records the definition or claim,
+while its linked proof block records the justification. A declaration has at
+most one active linked proof. Definitions may declare dependencies in their
+construction bodies; other result dependencies come from references in their
+linked proofs.
 
 For `thm-main-*`, the title and statement originate with the user and are
 protected. The introduction date is informational and does not alter statement
