@@ -41,6 +41,27 @@ canonical copy. A missing, changed, or incompatible contract is a preflight
 failure. Synchronizing the project contract requires the user's approval
 because `AGENTS.md` is project-owned policy.
 
+### Example: project-local policy
+
+The managed block itself is copied verbatim from the skill and is not repeated
+here. A project can append local policy after it:
+
+```markdown
+<!-- The complete managed qmd-prover contract appears above. -->
+
+## Local project policy
+
+- Put shared algebra definitions in `algebra/foundations.qmd`.
+- Use \(\mathbb N=\{0,1,2,\ldots\}\).
+- State theorem titles in English and write proofs in Chinese.
+- Ask before introducing a new axiom or external theorem.
+```
+
+The directory and writing rules strengthen the project discipline without
+changing the managed contract. A local rule such as “agents may edit a
+`thm-main-*` statement when convenient” would conflict with the managed
+contract and must be rejected.
+
 ## Rule categories
 
 ### Mechanically enforceable rules
@@ -61,6 +82,33 @@ Mechanical enforcement is deliberately conservative. If a required fact
 cannot be established from the semantic representation, the utility reports a
 diagnostic rather than guessing.
 
+#### Example: a mechanically detectable dependency error
+
+This proof cites two lemmas but declares only one:
+
+```markdown
+### Uses
+
+- @lem-factor-even
+
+### Proof
+
+By @lem-factor-even, write \(n=2k\). Applying @lem-square-of-double gives
+\(n^2=4k^2\).
+```
+
+The inspector can determine from the syntax that
+`@lem-square-of-double` is missing from `Uses`. The corrected declaration is:
+
+```markdown
+### Uses
+
+- @lem-factor-even
+- @lem-square-of-double
+```
+
+No mathematical judgment is required for this correction.
+
 ### Mathematically judged rules
 
 The independent verifier judges matters such as:
@@ -72,6 +120,23 @@ The independent verifier judges matters such as:
 - whether examples or computations have been mistaken for a general proof.
 
 The verifier's judgment does not relax mechanical checks.
+
+#### Example: a mathematically detectable gap
+
+Suppose a candidate contains:
+
+```markdown
+Since \(ab=ac\), divide by \(a\) to obtain \(b=c\).
+```
+
+The syntax may be perfectly valid and the proof may have no semantic
+dependencies. Nevertheless, the inference is invalid unless the hypotheses
+give \(a\ne0\). Detecting the missing hypothesis is the verifier's job rather
+than the inspector's.
+
+Likewise, checking finitely many values of \(n\) does not prove a statement
+quantified over all integers. The discipline requires the verifier and host
+agent to keep computation or evidence distinct from a general proof.
 
 ### Agent conduct rules
 
@@ -86,6 +151,28 @@ The skill instructs the host agent to:
 
 These rules shape the reasoning loop even when they are not completely
 machine-decidable.
+
+#### Example: correct behavior when a goal looks false
+
+Assume the user supplied:
+
+```markdown
+::: {#thm-main-primes-odd .theorem .goal}
+## Every prime is odd
+
+### Statement
+
+Every prime number is odd.
+
+### Proof
+
+:::
+```
+
+The host agent must not silently change the statement to “Every prime greater
+than \(2\) is odd.” It should preserve the goal and report the counterexample
+\(2\), together with the corrected statement as a suggestion that requires
+the user's approval.
 
 ## Semantic scope
 
@@ -103,6 +190,30 @@ Within a semantic result, the discipline distinguishes:
 For `thm-main-*`, the title and statement originate with the user and are
 protected. A nonempty proof is still only a candidate until independently
 accepted.
+
+### Example: semantic and nonsemantic references
+
+In a semantic proof, the reference below creates a logical dependency:
+
+```markdown
+### Uses
+
+- @lem-compact-subsequence
+
+### Proof
+
+Apply @lem-compact-subsequence to the bounded sequence.
+```
+
+In surrounding exposition, the same reference can be navigational:
+
+```markdown
+The geometric motivation for @lem-compact-subsequence is discussed next.
+```
+
+The second sentence does not claim that an enclosing proof uses the lemma. A
+bibliographic citation such as `[@rudin1976]` remains a Quarto citation and is
+not interpreted as a semantic theorem dependency.
 
 ## Change process
 

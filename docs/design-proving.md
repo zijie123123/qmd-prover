@@ -49,6 +49,33 @@ Useful assistance may include:
 These are aids to the host agent. They do not synthesize an autonomous work
 plan or maintain a qmd-prover worker model.
 
+### Example proposal
+
+Starting from an open goal, the utility can preserve the protected material in
+an isolated `proposal.qmd` while the host agent supplies `Uses` and `Proof`:
+
+```markdown
+::: {#thm-main-even-square .theorem .goal}
+## Even squares
+
+### Statement
+
+For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
+
+### Uses
+
+- @def-even-integer
+
+### Proof
+
+Let \(n\) be even. By @def-even-integer, there is an integer \(k\) such
+that \(n=2k\). Hence \(n^2=(2k)^2=4k^2\), so \(4\mid n^2\).
+:::
+```
+
+This file is not canonical mathematics yet. It becomes eligible for acceptance
+only after preflight and independent verification.
+
 ## Candidate preflight
 
 Before independent verification, the utility confirms that:
@@ -66,6 +93,21 @@ Before independent verification, the utility confirms that:
 
 Preflight establishes that the candidate is eligible for mathematical review.
 It does not imply correctness.
+
+### Example preflight failure
+
+If the proposal changes the protected statement to:
+
+```markdown
+### Statement
+
+For every even positive integer \(n\), the integer \(n^2\) is divisible by
+\(4\).
+```
+
+preflight rejects it even though the new statement is true. Adding “positive”
+changes the user's quantified goal. The candidate must restore the exact
+canonical statement before mathematical verification begins.
 
 ## Independent verification
 
@@ -100,6 +142,35 @@ the critical-error and gap lists are empty.
 LLM verification, formal verification, and human review are separate statuses.
 The record must not describe an informal verifier result as formal proof.
 
+### Example verifier packet
+
+An abbreviated packet for the proposal above could be:
+
+```json
+{
+  "target": {
+    "id": "thm-main-even-square",
+    "statement": "For every even integer n, n^2 is divisible by 4.",
+    "proof": "Let n be even. By @def-even-integer ...",
+    "declared_uses": ["def-even-integer"]
+  },
+  "dependencies": [
+    {
+      "id": "def-even-integer",
+      "statement": "An integer n is even if n=2k for some integer k.",
+      "status": "verified"
+    }
+  ],
+  "verification": {
+    "fresh_context": true,
+    "require_zero_gaps": true
+  }
+}
+```
+
+It contains the mathematical context needed for judgment, but no statement
+that the author is confident or that a previous attempt almost passed.
+
 ## Rejection and repair
 
 On rejection:
@@ -116,6 +187,37 @@ loses actionable detail.
 If the statement appears false, the host agent preserves it and develops a
 precise refutation or counterexample for the user. It must not weaken the
 statement to manufacture an acceptable proof.
+
+### Example rejection and repair
+
+For the claim “the product of two positive numbers is positive,” suppose a
+candidate merely says “This is obvious.” A verifier can respond:
+
+```json
+{
+  "verdict": "incorrect",
+  "summary": "The conclusion is asserted without using the ordered-field rule.",
+  "critical_errors": [],
+  "gaps": ["Justify why a>0 and b>0 imply ab>0."],
+  "repair_hints": "Cite the verified positivity-under-multiplication result."
+}
+```
+
+The host agent then adds the available lemma to `Uses`, cites it at the point
+of application, and resubmits. A successful second report might be:
+
+```json
+{
+  "verdict": "correct",
+  "summary": "The cited ordered-field lemma directly proves the claim.",
+  "critical_errors": [],
+  "gaps": [],
+  "repair_hints": ""
+}
+```
+
+The first rejection remains recorded; it is not rewritten as a successful
+attempt.
 
 ## Safe acceptance
 
@@ -141,6 +243,21 @@ For a current submission, the utility:
 
 The host agent cannot bypass this path merely because it authored the proof.
 
+### Example stale acceptance
+
+Assume the verifier accepted a proof using `@lem-bound` with statement hash
+`sha256:A`. Before the acceptance write, another edit changes that lemma,
+producing statement hash `sha256:B`.
+
+Even if the changed lemma remains true, the verifier did not review the
+candidate against that exact dependency. The proving utility reports the
+submission as stale and leaves canonical QMD unchanged. The host agent must
+inspect the new dependency context and submit again.
+
+By contrast, an unrelated prose edit outside all semantic blocks does not
+change the target or dependency identities and need not invalidate the
+submission.
+
 ## Records
 
 The proving utilities may retain under `.qmd-prover/`:
@@ -164,3 +281,17 @@ debugging or direct use.
 There is no separately installed qmd-prover binary and no independent CLI
 architecture. Script command names and JSON schemas are the tool protocol used
 by the skill.
+
+### Example direct invocation
+
+From the mathematical project root, a maintainer can submit the isolated
+proposal with:
+
+```bash
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" \
+  submit-proof .qmd-prover/proposals/even-square.qmd
+```
+
+A rejected JSON response directs the host agent to the stored report. An
+accepted response identifies the exact target and verification record that now
+matches canonical QMD.

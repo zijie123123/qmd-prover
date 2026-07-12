@@ -31,6 +31,45 @@ The outputs are machine-readable so that the host agent can reason from them
 without scraping prose. A human may also run the same Node utility directly.
 This script interface is not a separate CLI product.
 
+### Example project
+
+Consider two mathematical files. `foundations.qmd` exports a definition:
+
+```markdown
+::: {#def-even-integer .definition export="even-integer"}
+## Even integer
+
+### Statement
+
+An integer \(n\) is even if there is an integer \(k\) with \(n=2k\).
+:::
+```
+
+`main.qmd` imports it and contains an open goal:
+
+```markdown
+::: {.theorem-imports}
+from: foundations.qmd
+use:
+  - @def-even-integer
+:::
+
+::: {#thm-main-even-square .theorem .goal}
+## Even squares
+
+### Statement
+
+For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
+
+### Proof
+
+:::
+```
+
+The inspector discovers two semantic nodes, resolves the import, and reports
+`@thm-main-even-square` as open. No dependency edge exists yet because the open
+goal has no `Uses` declaration or proof.
+
 ## Parsing model
 
 Pandoc JSON is the semantic parser. The inspector asks Pandoc to parse each QMD
@@ -76,6 +115,25 @@ Statement and title identities allow later utilities to protect user-owned
 content. Proof identity associates verification with the exact proof that was
 checked.
 
+An abbreviated manifest entry for the open goal could look like:
+
+```json
+{
+  "id": "thm-main-even-square",
+  "kind": "theorem",
+  "file": "main.qmd",
+  "title": "Even squares",
+  "statement_hash": "sha256:...",
+  "proof_hash": "sha256:...",
+  "proof_present": false,
+  "uses": [],
+  "status": "open"
+}
+```
+
+Hashes stand for exact normalized identities computed by the implementation;
+they are not written into mathematical QMD.
+
 ### 3. Resolve scope
 
 A result may use definitions and results in its own file plus individually
@@ -84,6 +142,22 @@ file and rejects ambiguous, missing, non-exported, wildcard, or cyclic imports
 according to the discipline.
 
 The result is an explicit set of available semantic IDs for each source file.
+
+#### Example: an unresolved import
+
+If `main.qmd` instead contains:
+
+```markdown
+::: {.theorem-imports}
+from: foundations.qmd
+use:
+  - @lem-square-of-double
+:::
+```
+
+but `foundations.qmd` does not define that ID, inspection reports an import
+error at `main.qmd`. The inspector does not search the internet, invent a
+lemma, or assume that a similarly titled theorem was intended.
 
 ### 4. Check dependencies
 
@@ -100,6 +174,37 @@ It reports:
 A reference in ordinary exposition is navigational and does not create a proof
 dependency. Dependency edges come from the semantic proof context.
 
+#### Example: dependency diagnostics
+
+Suppose the candidate in `main.qmd` says:
+
+```markdown
+### Uses
+
+- @def-even-integer
+
+### Proof
+
+By @def-even-integer, write \(n=2k\). Then @lem-square-of-double gives
+\(n^2=4k^2\).
+```
+
+The inspector can return a source-located diagnostic such as:
+
+```json
+{
+  "severity": "error",
+  "code": "PROOF_REFERENCE_UNDECLARED",
+  "message": "@lem-square-of-double is cited in Proof but absent from Uses",
+  "file": "main.qmd",
+  "line": 18,
+  "id": "thm-main-even-square"
+}
+```
+
+After adding the ID to `Uses`, inspection may still report
+`DEPENDENCY_UNAVAILABLE` until the lemma is local or explicitly imported.
+
 ### 5. Build the graph
 
 Each semantic result becomes a node. Each declared and cited logical premise
@@ -115,6 +220,35 @@ The graph supports:
 
 The graph represents declared project structure. It does not infer hidden
 mathematical dependencies from prose.
+
+#### Example: graph construction
+
+For these declarations:
+
+```text
+@thm-main-even-square uses @lem-square-of-double
+@lem-square-of-double uses @def-even-integer
+```
+
+the graph contains:
+
+```json
+{
+  "nodes": [
+    { "id": "thm-main-even-square", "status": "candidate" },
+    { "id": "lem-square-of-double", "status": "verified" },
+    { "id": "def-even-integer", "status": "verified" }
+  ],
+  "edges": [
+    { "from": "thm-main-even-square", "to": "lem-square-of-double" },
+    { "from": "lem-square-of-double", "to": "def-even-integer" }
+  ]
+}
+```
+
+The direct dependency of the main theorem is the lemma. Its transitive closure
+also contains the definition. The definition's reverse-dependency closure
+contains both results.
 
 ### 6. Determine status
 
@@ -158,6 +292,37 @@ For one selected theorem, the inspector returns a bounded bundle containing:
 The bundle should be sufficient for the host agent to begin focused proof work
 without loading the entire repository. It is descriptive context, not a prompt
 that attempts to prove the theorem.
+
+### Example theorem bundle
+
+An abbreviated inspection result might be:
+
+```json
+{
+  "target": {
+    "id": "thm-main-even-square",
+    "title": "Even squares",
+    "file": "main.qmd",
+    "status": "open"
+  },
+  "source": {
+    "statement": "For every even integer n, n^2 is divisible by 4.",
+    "proof": ""
+  },
+  "available_results": [
+    {
+      "id": "def-even-integer",
+      "statement": "An integer n is even if n=2k for some integer k.",
+      "status": "verified",
+      "imported_from": "foundations.qmd"
+    }
+  ],
+  "diagnostics": []
+}
+```
+
+The host agent can now reason from the exact target and available definition
+without reading unrelated QMD chapters.
 
 ## Writes and failure behavior
 
