@@ -54,13 +54,15 @@ mechanism never implies that the other two have passed.
 | Rule category | Enforced by | What it establishes |
 |---|---|---|
 | Mechanically enforceable | Inspector and proving utilities | The QMD structure, references, records, and writes satisfy decidable invariants. |
-| Mathematically judged | Independent AI verifier | The exact construction or proof is mathematically sufficient. |
+| Mathematically judged | Inspector's independent AI verifier | The exact construction or proof is mathematically sufficient. |
 | Agent conduct | Host-agent instructions | The agent follows project ownership and proof-development workflow rules. |
 
-The first category is checked by code. The second is checked only after the
-programmatic checks pass. The third is not generally decidable from the final
-QMD and has no separate automated checker: the skill instructs the AI host
-agent to follow it, while the user remains able to identify a violation.
+The first category is checked by code. For the second, the inspector calls the
+Codex SDK only after its programmatic checks pass, using a fresh bounded
+context independent of the proving agent. The third is not generally decidable
+from the final QMD and has no separate automated checker: the skill instructs
+the AI host agent to follow it, while the user remains able to identify a
+violation.
 
 ### Mechanically enforceable rules
 
@@ -111,7 +113,8 @@ proof is already the dependency declaration; no second `Uses` list is needed.
 
 ### Mathematically judged rules
 
-The independent verifier judges matters such as:
+The inspector's independent AI verifier calls the Codex SDK to judge whether
+the exact construction or proof establishes its declaration, including:
 
 - whether each inference is valid;
 - whether all hypotheses are used correctly;
@@ -119,7 +122,7 @@ The independent verifier judges matters such as:
 - whether a claimed reduction covers every case; and
 - whether examples or computations have been mistaken for a general proof.
 
-The verifier's judgment does not relax mechanical checks.
+The verifier's judgment does not relax the inspector's mechanical checks.
 
 #### Example: a mathematically detectable gap
 
@@ -131,8 +134,8 @@ Since \(ab=ac\), divide by \(a\) to obtain \(b=c\).
 
 The syntax may be perfectly valid and the proof may have no semantic
 dependencies. Nevertheless, the inference is invalid unless the hypotheses
-give \(a\ne0\). Detecting the missing hypothesis is the verifier's job rather
-than the inspector's.
+give \(a\ne0\). Detecting the missing hypothesis belongs to the inspector's AI
+verification stage rather than its programmatic stage.
 
 Likewise, checking finitely many values of \(n\) does not prove a statement
 quantified over all integers. The discipline requires the verifier and host

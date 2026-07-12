@@ -73,8 +73,10 @@ Passing one layer does not imply passing another:
 | Layer | Enforced by | Covers |
 |---|---|---|
 | Mechanical | Inspector and proving utilities | Block shape, dates, IDs, imports, references, proof association and state, protected statements, staleness, and rejection-safe atomic writes. |
-| Mathematical | Independent AI verifier | Valid inferences, hypotheses, theorem applicability, complete case coverage, and proof sufficiency. |
+| Mathematical | Inspector's independent AI verifier | Valid inferences, hypotheses, theorem applicability, complete case coverage, and proof sufficiency. |
 | Agent conduct | This contract | Project ownership, protected goals, workspace-only development, and response to verification findings. |
+
+After mechanical checks pass, the inspector calls the Codex SDK in a fresh bounded context, independent of the proving agent, to judge whether the exact declaration is established by its construction or proof. Acceptance requires a correct verdict with no critical errors or gaps.
 
 Apply these rules:
 

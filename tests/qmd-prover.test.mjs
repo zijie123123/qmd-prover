@@ -460,6 +460,7 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(contract, /`OPEN`/);
   assert.match(contract, /`REJECTED`/);
   assert.match(contract, /`REVOKED`/);
+  assert.match(contract, /inspector calls the Codex SDK/);
   assert.doesNotMatch(contract, /### Uses/);
   assert.match(contract, /Project-specific additions/);
 });
