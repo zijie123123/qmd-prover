@@ -324,6 +324,46 @@ An abbreviated inspection result might be:
 The host agent can now reason from the exact target and available definition
 without reading unrelated QMD chapters.
 
+## Inspecting an agent workspace
+
+Canonical-project inspection excludes `.qmd-prover/`, but the inspector also
+supports an explicit goal-workspace inspection. The two modes must not be
+confused:
+
+- canonical inspection reports accepted project mathematics;
+- workspace inspection reports provisional agent-generated mathematics plus
+  the canonical results imported into that workspace.
+
+A workspace result records its origin and working status. For example:
+
+```json
+{
+  "id": "lem-local-exponent-bound",
+  "origin": "workspace",
+  "workspace": "thm-main-uniform-index",
+  "file": "local-theory/exponent-bounds.qmd",
+  "status": "workspace-candidate",
+  "uses": [
+    "thm-canonical-local-class-group-finite",
+    "lem-completion-preserves-index"
+  ]
+}
+```
+
+The inspector may find that the first dependency is a verified canonical
+result while the second is still an unproved workspace claim. It then exposes
+the latter as part of the proof frontier instead of reporting the parent lemma
+as established.
+
+The target theorem is a special intentional overlap: each main-proof attempt
+uses the canonical target's semantic ID so statement protection can compare it
+with the original. Newly proposed intermediate IDs must not collide with
+canonical results or with other live workspace results.
+
+Workspace inspection may write its own manifest and graph inside the goal
+workspace. It never merges workspace files into the canonical manifest merely
+because they parse successfully or have plausible proofs.
+
 ## Writes and failure behavior
 
 Inspection never changes canonical QMD. It may atomically refresh derived

@@ -47,9 +47,13 @@ Codex / Claude Code                                (outside qmd-prover)
 +-------------------------------------------------------+
 | qmd-prover skill                                      |
 |                                                       |
-| discipline -> inspector -> proving utilities          |
-|                        |                              |
-|                        +----> QMD project             |
+| discipline -> inspector -> agent goal workspace       |
+|                  |              |                     |
+|                  |              v                     |
+|                  +------> proving utilities           |
+|                                 | accepted work only   |
+|                                 v                     |
+|                         canonical QMD project          |
 +-------------------------------------------------------+
                                   |
                                   v
@@ -62,35 +66,152 @@ also not implemented by qmd-prover; it consumes the resulting QMD project.
 
 ## Mathematical project model
 
-A qmd-prover project is an ordinary Quarto project with a mathematical
-discipline and a small amount of derived proof state. A minimal project looks
-like this:
+A qmd-prover project separates the canonical project workspace from one or
+more agent workspaces.
+
+The **canonical project workspace** contains the user-given statements and the
+mathematics that has passed the project's acceptance rules. It is the ordinary
+Quarto project that the user opens and renders. The agent reads it as its source
+of truth and does not use it as a scratch directory.
+
+An **agent workspace** is a persistent, goal-scoped area for proof development.
+If the agent works on one difficult theorem for a long time, it may introduce
+many tentative definitions, reductions, intermediate theorems, examples,
+counterexamples, proof attempts, and repair notes. Those files belong in the
+agent workspace until the relevant mathematics is independently verified and
+accepted into the canonical project.
+
+The separation is about authority, not about whether a file was physically
+written by a person or a model:
+
+- canonical QMD is accepted project mathematics;
+- workspace QMD is agent-generated working mathematics; and
+- generated indexes and reports describe one of those spaces but are not
+  mathematics themselves.
+
+### Example: one theorem after prolonged work
+
+Suppose the canonical project gives the agent one open theorem,
+`@thm-main-uniform-index`:
 
 ```text
-my-mathematics/
+uniform-index-project/                     # canonical project workspace
 ├── AGENTS.md
 ├── _quarto.yml
-├── foundations.qmd
-├── main-results.qmd
+├── index.qmd
+├── notation.qmd
+├── background.qmd
+├── uniform-index.qmd                      # contains @thm-main-uniform-index
 └── .qmd-prover/
     ├── manifest.json
     ├── graph.json
-    ├── proposals/
-    └── verification/
+    ├── verification/
+    └── workspaces/
+        └── thm-main-uniform-index/         # agent workspace for this goal
+            ├── workspace.json              # target, base hashes, and status
+            ├── target.qmd                   # protected snapshot of the goal
+            ├── progress.qmd                 # current plan and proved frontier
+            ├── graph.json                   # workspace dependency graph
+            ├── context/
+            │   ├── imported-results.qmd     # bounded canonical context
+            │   └── external-results.qmd     # precisely recorded literature
+            ├── reductions/
+            │   ├── reduce-to-strata.qmd
+            │   ├── generic-fiber.qmd
+            │   └── specialization.qmd
+            ├── local-theory/
+            │   ├── local-class-groups.qmd
+            │   ├── exponent-bounds.qmd
+            │   └── completion-comparison.qmd
+            ├── global-theory/
+            │   ├── finite-stratification.qmd
+            │   ├── constructibility.qmd
+            │   └── lcm-argument.qmd
+            ├── examples/
+            │   ├── quotient-singularities.qmd
+            │   └── possible-counterexamples.qmd
+            ├── attempts/
+            │   ├── main-0001.qmd
+            │   ├── main-0002.qmd
+            │   └── main-0003-repaired.qmd
+            ├── verification/
+            │   ├── lem-local-exponent-bound/
+            │   └── thm-main-uniform-index/
+            ├── dead-ends/
+            │   ├── uniform-generator-strategy.qmd
+            │   └── notes.md
+            └── proposals/
+                ├── lem-local-exponent-bound.qmd
+                ├── lem-finite-stratification.qmd
+                └── thm-main-uniform-index.qmd
 ```
 
-The user chooses the QMD filenames and directory organization. qmd-prover does
-not prescribe subject directories. The project's local policy in `AGENTS.md`
-may do so.
+This is an illustrative workspace, not a required list of directories. A short
+proof may need only `target.qmd` and one proposal. A long proof may grow into a
+substantial mathematical development. The workspace should be organized for
+the agent to retrieve context, inspect dependencies, resume work, and separate
+productive results from dead ends.
+
+The agent may group several closely related claims in one QMD file or split a
+large line of argument across many files. It should follow the discipline and
+the structure already present in the workspace rather than creating one file
+for every transient thought.
+
+### Workspace dependency model
+
+The inspector treats the agent workspace as a provisional mathematical
+project. Its graph may contain:
+
+- verified results imported from the canonical project;
+- new workspace results that have been proved and independently checked;
+- conjectural intermediate results still awaiting proof;
+- alternative approaches to the same subgoal; and
+- a candidate proof of the original main theorem.
+
+For example, the workspace may discover the following chain:
+
+```text
+@thm-main-uniform-index
+  -> @lem-finite-stratification
+  -> @lem-local-exponent-bound
+  -> @lem-completion-preserves-index
+  -> @thm-canonical-local-class-group-finite
+```
+
+The agent can work backward from an unproved dependency, replace a failed
+intermediate claim, or preserve a dead end without disturbing canonical QMD.
+The workspace graph makes the current proof frontier explicit after many
+sessions.
+
+### Promotion into the canonical project
+
+Workspace files are not automatically part of the user's Quarto project. A
+workspace result crosses the boundary only through the proving utilities:
+
+1. Select one complete semantic result from the workspace.
+2. Check it against the discipline and its declared dependencies.
+3. Verify it independently.
+4. Reject it without changing canonical QMD, or accept it atomically.
+5. Place an accepted new lemma in the canonical project according to project
+   policy, or apply an accepted proof to its existing canonical theorem.
+6. Reinspect both spaces so the workspace can depend on the newly accepted
+   canonical result.
+
+Not every workspace theorem needs promotion. Auxiliary experiments, abandoned
+claims, and lemmas that are eventually inlined may remain in the workspace.
+Every dependency cited by the final canonical proof, however, must also be
+available in the canonical project and have the required verification status.
 
 The files have different ownership:
 
 - `AGENTS.md` is project-owned policy. It contains the unchanged managed
   qmd-prover contract plus optional local rules.
-- QMD files are canonical mathematics and exposition.
+- QMD files outside `.qmd-prover/` are canonical mathematics and exposition.
 - `_quarto.yml` is the project's normal Quarto configuration.
-- `.qmd-prover/` contains derived indexes, isolated proposals, and verification
-  records. It does not contain a second canonical copy of the mathematics.
+- `.qmd-prover/workspaces/` contains persistent but noncanonical mathematical
+  work organized around assigned goals.
+- Other `.qmd-prover/` files contain derived indexes, verification records,
+  and caches.
 
 ## Semantic QMD
 
@@ -241,16 +362,23 @@ For a typical request, the host agent follows this loop:
    context.
 4. Stop on structural errors that make proof work unsafe, such as a changed
    protected statement or an unresolved dependency.
-5. Reason about the theorem and write an isolated candidate proof.
-6. Use the proving utilities to check the candidate's structure and declared
-   dependencies.
-7. Send the candidate and its bounded mathematical context to an independent
+5. Create or resume the workspace for the selected goal, recording the exact
+   canonical target and dependency snapshot.
+6. Develop the argument in workspace QMD. Introduce intermediate results,
+   examples, alternative approaches, and notes as needed.
+7. Inspect the workspace graph to identify the next unproved dependency and to
+   avoid treating conjectural workspace claims as established premises.
+8. Select a complete workspace result and use the proving utilities to check
+   its structure and declared dependencies.
+9. Send that result and its bounded mathematical context to an independent
    verifier, which may itself be implemented with a fresh sub-agent.
-8. If rejected, use the verifier's concrete feedback to repair the candidate
-   and repeat.
-9. If accepted, recheck that the statement and dependencies are current and
-   apply the proof to canonical QMD atomically.
-10. Run `quarto render` when the user wants a rendered document or project
+10. If rejected, preserve the report in the workspace, repair the result, and
+    repeat.
+11. If accepted, recheck that the target and dependencies are current and
+    promote the result or proof into canonical QMD atomically.
+12. Continue until the original main theorem is accepted or the work reaches
+    another legitimate stopping condition.
+13. Run `quarto render` when the user wants a rendered document or project
     view.
 
 This is a loop performed by the host agent under skill instructions. It is not
@@ -405,17 +533,18 @@ The mathematical project's QMD files and its `AGENTS.md` are canonical.
 Definitions, statements, proofs, exposition, citations, and semantic
 references live there.
 
-`.qmd-prover/` may contain derived or temporary artifacts such as:
+`.qmd-prover/` may contain persistent agent work and derived artifacts such as:
 
+- goal-scoped workspaces containing exploratory QMD and intermediate results;
 - a semantic manifest and dependency graph;
 - isolated proof proposals;
 - independent verification reports;
 - the verification record associated with an accepted proof; and
 - generated QMD or data used for observability.
 
-These artifacts support the skill but do not replace the mathematical source.
-Generated indexes and rendered output must be reproducible from canonical QMD
-and retained verification records.
+Agent workspaces are valuable resumable state, but they are not canonical
+project mathematics. Generated indexes and rendered output must be
+reproducible from canonical QMD, retained workspaces, and verification records.
 
 ## Verification and acceptance in detail
 

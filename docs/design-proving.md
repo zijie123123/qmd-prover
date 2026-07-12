@@ -26,6 +26,54 @@ inspect target
 The loop ends when the selected goal is verified, precisely refuted, genuinely
 blocked, cancelled, or explicitly stopped by the user.
 
+## Goal-scoped agent workspace
+
+Proof development takes place in a persistent workspace associated with the
+target theorem, not in the canonical Quarto sources. This matters when one
+short user-given statement expands into a large body of agent-generated
+mathematics.
+
+For example, work on `@thm-main-uniform-index` may eventually contain:
+
+```text
+.qmd-prover/workspaces/thm-main-uniform-index/
+├── workspace.json
+├── target.qmd
+├── progress.qmd
+├── context/
+│   └── imported-results.qmd
+├── reductions/
+│   ├── reduce-to-strata.qmd
+│   └── specialization.qmd
+├── local-theory/
+│   ├── local-class-groups.qmd
+│   └── exponent-bounds.qmd
+├── attempts/
+│   ├── main-0001.qmd
+│   └── main-0002-repaired.qmd
+├── dead-ends/
+│   └── uniform-generator.qmd
+└── proposals/
+    ├── lem-local-exponent-bound.qmd
+    └── thm-main-uniform-index.qmd
+```
+
+`target.qmd` preserves the assigned statement and `workspace.json` records the
+canonical identities on which the work began. The other QMD files are
+noncanonical working mathematics. They may contain proposed definitions,
+lemmas, theorems, examples, or alternative proof routes.
+
+The inspector maintains a provisional dependency graph for this workspace. A
+workspace result may depend on verified canonical results or other workspace
+claims, but a conjectural claim cannot silently become an accepted premise.
+The agent follows unproved edges until it closes the required dependency
+closure, replaces a failed claim, or records a genuine dead end.
+
+The directory layout inside a workspace may grow with the proof. It should
+group coherent mathematical developments rather than create one file for every
+transient thought. Resuming agents use `progress.qmd`, the graph, previous
+attempts, and verifier reports to recover the proof frontier.
+
 ## Preparing a candidate
 
 The host agent begins from the inspector's bounded theorem context. A utility
@@ -262,14 +310,17 @@ submission.
 
 The proving utilities may retain under `.qmd-prover/`:
 
+- persistent goal-scoped workspaces containing agent-generated QMD;
 - isolated proposals and optional supporting notes;
 - the bounded packet sent to the verifier or its stable identity;
 - complete verifier reports;
 - accepted and rejected submission records; and
 - a verification index relating an exact proof to its status.
 
-This is proof provenance, not an agent task database. The core design has no
-qmd-prover worker registry, scheduler, or inter-agent message store.
+This is mathematical working state and proof provenance, not an agent runtime.
+The core design has no qmd-prover worker registry, scheduler, or inter-agent
+message store. Codex or Claude Code owns the running agent; qmd-prover preserves
+the goal workspace that agent reads and writes.
 
 ## Invocation model
 

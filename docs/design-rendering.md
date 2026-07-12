@@ -126,6 +126,39 @@ This page is a presentation of inspector data. Editing “open” to “verified
 the generated table cannot change the theorem's actual verification status;
 the next inspection regenerates the page from authoritative records.
 
+## Agent-workspace observability
+
+A long-running goal may have many noncanonical QMD files under its agent
+workspace. Rendering can expose that workspace separately from the canonical
+project. For example, a generated `progress.qmd` may contain:
+
+```markdown
+---
+title: "Workspace: uniform index theorem"
+---
+
+## Current frontier
+
+- @lem-finite-stratification: verified and promoted
+- @lem-local-exponent-bound: candidate under verification
+- @lem-completion-preserves-index: open workspace dependency
+
+## Active route
+
+@thm-main-uniform-index depends on @lem-finite-stratification and
+@lem-local-exponent-bound. The latter is currently blocked on
+@lem-completion-preserves-index.
+
+## Abandoned route
+
+The uniform-generator approach is retained in
+`dead-ends/uniform-generator-strategy.qmd`.
+```
+
+This view describes the agent's working dependency graph; it does not publish
+workspace claims as accepted project theorems. A project may render the page in
+a separate preview or include a generated summary in its ordinary Quarto site.
+
 ## Dependency navigation
 
 Semantic `@` references should become ordinary navigable theorem references in
