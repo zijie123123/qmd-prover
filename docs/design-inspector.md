@@ -23,11 +23,26 @@ a human-readable dependency report. It changes presentation only: the facts
 checked, diagnostics produced, graph constructed, and verification decision
 must be identical with or without the flag.
 
+Every inspection first runs staleness invalidation for the canonical project.
+It then invokes the configured independent verifier by default, but only for
+facts in the selected scope that pass programmatic checks and whose exact
+verification key is not cached. The key covers the statement or construction,
+proof, dependency identities and states, imports and scope, external basis,
+checker contract, and verifier protocol. Exact accepted and rejected results
+are kept as immutable decisions and reused without another AI call; the
+currently active verification record is separate so staleness never destroys
+an exact reusable decision. One verifier infrastructure failure stops
+identical calls for the rest of that operation and is reported with remediation.
+
 `VERIFIED` is record-backed. The inspector may cause qmd-prover to add it only
 after all programmatic checks pass, the AI check reports no critical error or
 gap, and the exact check is stored. A source marker without its matching record
 has no authority. `REVOKED` likewise requires a matching revocation record and
 concrete reason.
+
+For a definition the record-backed marker is the last nonempty paragraph of
+the definition block and is excluded from its construction identity. For every
+other fact it remains the first nonempty paragraph of the linked proof.
 
 ## 1. Inspect a theorem, lemma, or definition
 
@@ -193,6 +208,10 @@ available to that workspace.
   open, candidate, rejected, revoked, or stale fact as an established premise.
 - Preserve diagnostics for abandoned or alternative routes without allowing
   them to block unrelated active mathematics.
+- Independently check mechanically ready workspace facts in dependency order,
+  caching exact verdicts as `workspace-verified` or `workspace-rejected` state.
+  Workspace acceptance remains provisional and never writes canonical markers
+  or bypasses protected submission and promotion.
 
 ### Workspace dependency graph
 
@@ -252,7 +271,7 @@ unverified node in the transitive closure.
 
 ### Additional graph findings
 
-The inspector may derive:
+The inspector derives:
 
 - unused imports and exports;
 - isolated or unreachable workspace facts;

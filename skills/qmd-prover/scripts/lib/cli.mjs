@@ -11,12 +11,18 @@ import { initializeWorkspace, inspectWorkspace } from './workspace.mjs';
 const usage = `Usage:
   qmd-prover init-project [--adopt-existing|--append-contract|--sync-contract]
   qmd-prover inspect-project [--print]
+  qmd-prover inspect-fact @ID [--print]
   qmd-prover inspect-theorem @ID [--print]
   qmd-prover inspect-path FILE_OR_FOLDER [--print]
   qmd-prover dependency dependencies|reverse-dependencies|impact|frontier @ID [--print]
   qmd-prover dependency path @FROM @TO [--print]
+  qmd-prover dependency alternative-paths @FROM @TO [--limit N] [--max-depth N] [--print]
   qmd-prover dependency cycles [--print]
-  qmd-prover dependency search QUERY [--kind KIND] [--status STATUS] [--origin ORIGIN] [--path PATH] [--print]
+  qmd-prover dependency findings|unused-imports|unused-exports|isolated|unreachable|ready-for-ai [--print]
+  qmd-prover dependency reused [--limit N] [--print]
+  qmd-prover dependency search QUERY [--kind KIND] [--status STATUS] [--origin ORIGIN] [--path PATH]
+      [--used-by @ID|--depends-on @ID|--affected-by @ID|--stale-affected-by @ID]
+      [--frontier-of @ID] [--cycle-participant] [--direct] [--print]
   qmd-prover check-staleness [--print]
   qmd-prover workspace init @thm-main-ID
   qmd-prover workspace inspect @thm-main-ID [--print]
@@ -37,14 +43,20 @@ function emit(value, print) {
   if (value.ok === false) process.exitCode = 2;
 }
 
-function optionValues(args, names) {
+function optionValues(args, names, flags = new Set()) {
   const options = {};
   const positionals = [];
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     if (!name.startsWith('--')) { positionals.push(name); continue; }
     const key = name.slice(2);
+    if (flags.has(key)) {
+      if (options[key.replaceAll('-', '')] === true) throw new Error(`Duplicate option ${name}`);
+      options[key.replaceAll('-', '')] = true;
+      continue;
+    }
     if (!names.has(key) || !args[index + 1] || args[index + 1].startsWith('--')) throw new Error(`Invalid or missing value for ${name}`);
+    if (Object.hasOwn(options, key.replaceAll('-', ''))) throw new Error(`Duplicate option ${name}`);
     options[key.replaceAll('-', '')] = args[index + 1];
     index += 1;
   }
@@ -54,13 +66,16 @@ function optionValues(args, names) {
 async function history(root, id) {
   const directory = path.join(root, AUX, 'verification');
   try {
-    const entries = await readdir(directory);
     const records = [];
-    for (const name of entries.filter((entry) => entry.startsWith('submission-') && entry.endsWith('.json')).sort()) {
-      const record = await readJson(path.join(directory, name));
-      if (record.target === id) records.push(record);
+    for (const selected of [directory, path.join(directory, 'checks')]) {
+      let entries = [];
+      try { entries = await readdir(selected); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
+        const record = await readJson(path.join(selected, name));
+        if (record.target === id && typeof record.verdict === 'string') records.push(record);
+      }
     }
-    return records;
+    return records.sort((left, right) => `${left.verified_at ?? ''}\0${left.submission_id ?? ''}`.localeCompare(`${right.verified_at ?? ''}\0${right.submission_id ?? ''}`));
   } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
@@ -89,9 +104,9 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
     emit(await inspectProject(root, options), parsed.print);
     return;
   }
-  if (command === 'inspect-theorem') {
+  if (command === 'inspect-theorem' || command === 'inspect-fact') {
     const parsed = presentation(rest);
-    if (parsed.args.length !== 1) throw new Error('inspect-theorem requires one semantic ID and optional --print');
+    if (parsed.args.length !== 1) throw new Error(`${command} requires one semantic ID and optional --print`);
     const result = await inspectFact(root, parsed.args[0], options);
     result.verification_history = await history(root, result.fact.id);
     emit(result, parsed.print);
@@ -108,7 +123,11 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
     const [subcommand, ...tail] = parsed.args;
     if (!subcommand) throw new Error('dependency requires an operation');
     if (subcommand === 'search') {
-      const extracted = optionValues(tail, new Set(['kind', 'status', 'origin', 'path', 'related-to', 'frontier-of']));
+      const extracted = optionValues(
+        tail,
+        new Set(['kind', 'status', 'origin', 'path', 'related-to', 'frontier-of', 'used-by', 'depends-on', 'affected-by', 'stale-affected-by']),
+        new Set(['reverse', 'direct', 'cycle-participant'])
+      );
       if (extracted.positionals.length !== 1) throw new Error('dependency search requires one query');
       const queryOptions = {
         ...options,
@@ -117,12 +136,36 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
         origin: extracted.options.origin,
         path: extracted.options.path,
         relatedTo: extracted.options.relatedto,
-        frontierOf: extracted.options.frontierof
+        frontierOf: extracted.options.frontierof,
+        usedBy: extracted.options.usedby,
+        dependsOn: extracted.options.dependson,
+        affectedBy: extracted.options.affectedby,
+        staleAffectedBy: extracted.options.staleaffectedby,
+        reverse: extracted.options.reverse === true,
+        direct: extracted.options.direct === true,
+        cycleParticipant: extracted.options.cycleparticipant === true
       };
       emit(await analyzeDependencies(root, subcommand, extracted.positionals, queryOptions), parsed.print);
       return;
     }
-    const required = subcommand === 'cycles' ? 0 : subcommand === 'path' ? 2 : 1;
+    if (subcommand === 'alternative-paths') {
+      const extracted = optionValues(tail, new Set(['limit', 'max-depth']));
+      if (extracted.positionals.length !== 2) throw new Error('dependency alternative-paths requires two semantic IDs');
+      emit(await analyzeDependencies(root, subcommand, extracted.positionals, {
+        ...options,
+        maxPaths: extracted.options.limit,
+        maxDepth: extracted.options.maxdepth
+      }), parsed.print);
+      return;
+    }
+    if (subcommand === 'reused') {
+      const extracted = optionValues(tail, new Set(['limit']));
+      if (extracted.positionals.length) throw new Error('dependency reused accepts only --limit N and --print');
+      emit(await analyzeDependencies(root, subcommand, [], { ...options, limit: extracted.options.limit }), parsed.print);
+      return;
+    }
+    const noArgument = new Set(['cycles', 'findings', 'unused-imports', 'unused-exports', 'isolated', 'unreachable', 'ready', 'ready-for-ai']);
+    const required = noArgument.has(subcommand) ? 0 : subcommand === 'path' ? 2 : 1;
     if (tail.length !== required) throw new Error(`dependency ${subcommand} requires ${required} semantic ID${required === 1 ? '' : 's'}`);
     emit(await analyzeDependencies(root, subcommand, tail, options), parsed.print);
     return;

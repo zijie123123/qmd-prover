@@ -84,7 +84,7 @@ mechanism never implies that the other two have passed.
 | Agent conduct | Host-agent instructions | The agent follows project ownership, goal-workspace, semantic-writing, and acceptance boundaries. |
 
 The first category is checked by code. For the second, the inspector calls the
-Codex SDK only after its programmatic checks pass, using a fresh bounded
+configured external verifier only after its programmatic checks pass, using a fresh bounded
 context independent of the proving agent. The third is not generally decidable
 from the final QMD and has no separate automated checker: the skill instructs
 the AI host agent to follow it, while the user remains able to identify a
@@ -139,7 +139,7 @@ proof is already the dependency declaration; no second `Uses` list is needed.
 
 ### Mathematically judged rules
 
-The inspector's independent AI verifier calls the Codex SDK to judge whether
+The inspector's independent AI verifier calls the configured external verifier to judge whether
 the exact construction or proof establishes its declaration, including:
 
 - whether each inference is valid;
@@ -351,10 +351,11 @@ It remains to show that the chosen witness is an integer.
 :::
 ```
 
-`OPEN` marks an incomplete attempt, and `REJECTED` retains an inactive failed
-attempt. `VERIFIED` and `REVOKED` are valid only when qmd-prover has matching
-protected records. These words are proof-state markers, not additional block
-types, and an agent must never add or restore `VERIFIED` manually.
+`OPEN` marks an incomplete attempt. `REJECTED`, `VERIFIED`, and `REVOKED` are
+valid only when qmd-prover has matching protected records. For theorem-like
+facts these words are proof-state markers, while a definition puts its marker
+at the end of its declaration block. They are not additional block types, and
+an agent must never add or restore `VERIFIED` manually.
 
 Within semantic QMD, the declaration block records the definition or claim,
 while its linked proof block records the justification. A declaration has at

@@ -18,13 +18,14 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 const fakePandoc = path.join(here, 'fixtures', 'fake-pandoc.mjs');
 const verifier = path.join(here, 'fixtures', 'mock-verifier.mjs');
 const staleVerifier = path.join(here, 'fixtures', 'stale-verifier.mjs');
+const malformedVerifier = path.join(here, 'fixtures', 'malformed-verifier.mjs');
 const options = { pandoc: fakePandoc };
 process.env.PATH = `${path.dirname(process.execPath)}:${process.env.PATH}`;
 
 async function project() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'qmd-prover-'));
   await mkdir(path.join(root, '.qmd-prover', 'workspaces', 'test', 'proposals'), { recursive: true });
-  await Promise.all([chmod(fakePandoc, 0o755), chmod(verifier, 0o755), chmod(staleVerifier, 0o755)]);
+  await Promise.all([chmod(fakePandoc, 0o755), chmod(verifier, 0o755), chmod(staleVerifier, 0o755), chmod(malformedVerifier, 0o755)]);
   return root;
 }
 
@@ -42,7 +43,7 @@ function proof(id, text) {
 
 function result(id, statement, { proofText, title = id, exported = false, extra = '' } = {}) {
   const kind = id.startsWith('lem-') ? 'lemma' : id.startsWith('def-') ? 'definition' : id.startsWith('prp-') ? 'proposition' : id.startsWith('cor-') ? 'corollary' : 'theorem';
-  const block = `::: {#${id} .${kind}${id.startsWith('thm-main-') ? ' .goal' : ''} name="${title}"${exported ? ` export="${id}"` : ''}${extra}}\n${statement}\n:::\n`;
+  const block = `::: {#${id} .${kind}${id.startsWith('thm-main-') ? ' .goal' : ''} name="${title}" date="2026-07-13"${exported ? ` export="${id}"` : ''}${extra}}\n${statement}\n:::\n`;
   return proofText == null ? block : `${block}\n${proof(id, proofText)}`;
 }
 
@@ -109,7 +110,7 @@ test('compiler diagnoses metadata imports, duplicates, proof shape, and cycles',
 test('compiler rejects semantic dependency cycles and legacy section layout', async () => {
   const root = await project();
   await writeFile(path.join(root, 'cycle.qmd'), `${result('lem-left', 'Left.', { proofText: 'Apply @lem-right.' })}\n${result('lem-right', 'Right.', { proofText: 'Apply @lem-left.' })}`);
-  await writeFile(path.join(root, 'legacy.qmd'), `::: {#lem-legacy .lemma name="Legacy"}\n### Statement\nLegacy.\n### Proof\nOld.\n:::\n`);
+  await writeFile(path.join(root, 'legacy.qmd'), `::: {#lem-legacy .lemma name="Legacy" date="2026-07-13"}\n### Statement\nLegacy.\n### Proof\nOld.\n:::\n`);
   const compilation = await compileProject(root, options);
   const codes = new Set(compilation.diagnostics.map((item) => item.code));
   assert.ok(codes.has('DEPENDENCY_CYCLE'));
@@ -129,6 +130,20 @@ test('compiler validates result names, semantic kinds, and main-goal classes', a
   assert.ok(codes.has('ID_KIND_MISMATCH'));
   assert.ok(codes.has('RESULT_NAME_MISSING'));
   assert.ok(codes.has('INVALID_SEMANTIC_ID'));
+});
+
+test('compiler enforces introduction dates and record-backed marker placement', async () => {
+  const root = await project();
+  const missingDate = result('lem-date-missing', 'Missing date.').replace(' date="2026-07-13"', '');
+  const invalidDate = result('lem-date-invalid', 'Invalid date.').replace('2026-07-13', '2026-02-30');
+  const misplacedDefinition = result('def-marker-position', 'VERIFIED\n\nA construction.');
+  const unsupportedRejected = result('lem-rejected-marker', 'A claim.', { proofText: 'REJECTED\n\nA failed proof.' });
+  await writeFile(path.join(root, 'shape-details.qmd'), [missingDate, invalidDate, misplacedDefinition, unsupportedRejected].join('\n'));
+  const compilation = await compileProject(root, options);
+  const codes = new Set(compilation.diagnostics.map((item) => item.code));
+  for (const code of ['RESULT_DATE_MISSING', 'RESULT_DATE_INVALID', 'DEFINITION_MARKER_POSITION', 'REJECTED_RECORD_INVALID']) assert.ok(codes.has(code), code);
+  assert.equal(compilation.manifest.results.find((item) => item.id === 'def-marker-position').status, 'candidate');
+  assert.equal(compilation.manifest.results.find((item) => item.id === 'lem-rejected-marker').status, 'candidate');
 });
 
 test('main statement and name baselines are immutable', async () => {
@@ -201,6 +216,144 @@ test('inspector supports fact, path, search, and lowest-frontier queries on a na
   assert.equal(search.snapshot_id, projectInspection.snapshot_id);
 });
 
+test('dependency findings expose unused declarations, reachability, reuse, and deterministic alternative paths', async () => {
+  const root = await project();
+  await writeFile(path.join(root, 'foundations.qmd'), [
+    result('def-path-base', 'A base construction.', { exported: true }),
+    result('lem-unused-export', 'An unused exported fact.', { exported: true }),
+    result('lem-never-imported', 'An export no file imports.', { exported: true }),
+    result('lem-isolated', 'An isolated fact.')
+  ].join('\n'));
+  await writeFile(path.join(root, 'goal.qmd'), document(
+    [{ from: 'foundations.qmd', use: ['def-path-base', 'lem-unused-export'] }],
+    [
+      result('lem-path-left', 'The left route.', { proofText: 'Use @def-path-base.' }),
+      result('lem-path-right', 'The right route.', { proofText: 'Use @def-path-base.' }),
+      result('thm-main-paths', 'Both routes reach the goal.', { proofText: 'Use @lem-path-left and @lem-path-right.' })
+    ].join('\n')
+  ));
+  await writeFile(path.join(root, 'invalid-metadata.qmd'), document(
+    [{ from: 'missing.qmd', use: ['lem-missing-export'] }],
+    result('def-file-error', 'A candidate blocked by a file-level error.')
+  ));
+  await compileProject(root, options);
+  const findings = (await analyzeDependencies(root, 'findings', [], options)).findings;
+  assert.deepEqual(findings.unused_imports.map((item) => item.id), ['lem-unused-export']);
+  assert.deepEqual(findings.unused_exports.map((item) => item.id), ['lem-never-imported']);
+  assert.ok(findings.isolated_facts.some((item) => item.id === 'lem-isolated'));
+  assert.ok(findings.unreachable.facts.some((item) => item.id === 'lem-isolated'));
+  assert.equal(findings.heavily_reused[0].fact.id, 'def-path-base');
+  assert.equal(findings.heavily_reused[0].transitive_dependents, 3);
+  assert.ok(!findings.candidate_ready_for_ai.some((item) => item.id === 'def-file-error'));
+  const paths = await analyzeDependencies(root, 'alternative-paths', ['@thm-main-paths', '@def-path-base'], options);
+  assert.deepEqual(paths.paths, [
+    ['thm-main-paths', 'lem-path-left', 'def-path-base'],
+    ['thm-main-paths', 'lem-path-right', 'def-path-base']
+  ]);
+});
+
+test('inspection verifies ready facts in dependency order, caches exact checks, and marks definitions at block end', async () => {
+  const root = await project();
+  const countFile = path.join(root, 'verifier-calls.txt');
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  process.env.QMD_PROVER_VERIFIER_COUNT = countFile;
+  try {
+    await writeFile(path.join(root, 'auto.qmd'), [
+      result('def-auto-object', 'Define the auto object directly.'),
+      result('lem-auto-result', 'The auto object exists.', { proofText: 'Apply @def-auto-object.' })
+    ].join('\n'));
+    const before = await compileProject(root, options);
+    const constructionHash = before.manifest.results.find((item) => item.id === 'def-auto-object').statement_hash;
+
+    const first = await inspectProject(root, options);
+    assert.equal(first.ok, true, JSON.stringify(first.diagnostics));
+    assert.equal(first.verification.verifier_calls, 2);
+    assert.deepEqual(first.facts.map((fact) => [fact.id, fact.ai.status]), [
+      ['def-auto-object', 'pass'],
+      ['lem-auto-result', 'pass']
+    ]);
+    assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['def-auto-object', 'lem-auto-result']);
+    const source = await readFile(path.join(root, 'auto.qmd'), 'utf8');
+    assert.match(source, /Define the auto object directly\.\n\nVERIFIED\n:::/);
+    assert.match(source, /\.proof of="lem-auto-result"\}\nVERIFIED\n\nApply @def-auto-object\./);
+    const after = await compileProject(root, options);
+    assert.equal(after.manifest.results.find((item) => item.id === 'def-auto-object').statement_hash, constructionHash);
+    assert.equal(after.graph.edges[0].checks.ai_sufficiency, 'pass');
+
+    const second = await inspectProject(root, options);
+    assert.equal(second.ok, true);
+    assert.equal(second.verification.verifier_calls, 0);
+    assert.equal(second.verification.cache_hits, 2);
+    assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['def-auto-object', 'lem-auto-result']);
+  } finally {
+    delete process.env.QMD_PROVER_VERIFIER;
+    delete process.env.QMD_PROVER_VERIFIER_COUNT;
+  }
+});
+
+test('inspection removes stale VERIFIED before failing closed on an unavailable verifier', async () => {
+  const root = await project();
+  const sourceFile = path.join(root, 'stale-inspection.qmd');
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  await writeFile(sourceFile, result('lem-inspection-stale', 'A stable statement.', { proofText: 'The original proof.' }));
+  assert.equal((await inspectFact(root, '@lem-inspection-stale', options)).ok, true);
+  const verifiedSource = await readFile(sourceFile, 'utf8');
+  assert.match(verifiedSource, /VERIFIED/);
+  await writeFile(sourceFile, verifiedSource.replace('The original proof.', 'A changed proof.'));
+  delete process.env.QMD_PROVER_VERIFIER;
+
+  const failed = await inspectFact(root, '@lem-inspection-stale', options);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.check.ai.status, 'error');
+  assert.equal(failed.check.ai.code, 'unconfigured');
+  assert.match(failed.check.ai.remediation, /rerun inspection/);
+  assert.deepEqual(failed.staleness.changed.map((item) => item.id), ['lem-inspection-stale']);
+  assert.doesNotMatch(await readFile(sourceFile, 'utf8'), /VERIFIED/);
+  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'stale');
+  const staleIndex = await readJson(path.join(root, '.qmd-prover', 'verification', 'index.json'));
+  assert.equal((await readJson(path.join(root, staleIndex['lem-inspection-stale'].cache))).stale, true);
+
+  await writeFile(sourceFile, (await readFile(sourceFile, 'utf8')).replace('A changed proof.', 'The original proof.'));
+  const restored = await inspectFact(root, '@lem-inspection-stale', options);
+  assert.equal(restored.ok, true);
+  assert.equal(restored.verification.verifier_calls, 0);
+  assert.equal(restored.verification.cache_hits, 1);
+  assert.match(await readFile(sourceFile, 'utf8'), /VERIFIED/);
+});
+
+test('inspection caches rejected mathematical verdicts and malformed verifier output fails closed', async () => {
+  const root = await project();
+  const countFile = path.join(root, 'rejected-calls.txt');
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  process.env.QMD_PROVER_VERIFIER_COUNT = countFile;
+  await writeFile(path.join(root, 'rejected.qmd'), result('lem-auto-rejected', 'A rejected claim.', { proofText: 'GAP in the argument.' }));
+  const rejected = await inspectFact(root, '@lem-auto-rejected', options);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.check.ai.status, 'fail');
+  assert.deepEqual(rejected.check.ai.report.gaps, ['justify the missing step']);
+  const repeated = await inspectFact(root, '@lem-auto-rejected', options);
+  assert.equal(repeated.verification.verifier_calls, 0);
+  assert.equal(repeated.verification.cache_hits, 1);
+  assert.equal((await readFile(countFile, 'utf8')).trim().split('\n').length, 1);
+
+  await writeFile(path.join(root, '.qmd-prover', '.external.qmd'), 'Only explicitly declared external facts may be used.\n');
+  const changedBasis = await inspectFact(root, '@lem-auto-rejected', options);
+  assert.equal(changedBasis.check.ai.status, 'fail');
+  assert.equal(changedBasis.verification.verifier_calls, 1);
+  assert.equal((await readFile(countFile, 'utf8')).trim().split('\n').length, 2);
+
+  delete process.env.QMD_PROVER_VERIFIER_COUNT;
+  process.env.QMD_PROVER_VERIFIER = malformedVerifier;
+  await writeFile(path.join(root, 'malformed.qmd'), result('lem-malformed-check', 'A checkable claim.', { proofText: 'A candidate proof.' }));
+  const malformed = await inspectFact(root, '@lem-malformed-check', options);
+  assert.equal(malformed.ok, false);
+  assert.equal(malformed.check.ai.status, 'error');
+  assert.equal(malformed.check.ai.code, 'malformed');
+  assert.equal(malformed.check.ai.details.stdout_excerpt, '{not-json');
+  assert.doesNotMatch(await readFile(path.join(root, 'malformed.qmd'), 'utf8'), /VERIFIED/);
+  delete process.env.QMD_PROVER_VERIFIER;
+});
+
 test('record-backed markers fail closed when their exact evidence is absent', async () => {
   const root = await project();
   await writeFile(path.join(root, 'unsupported.qmd'), result('lem-unsupported-marker', 'A claim.', { proofText: 'VERIFIED\n\nA purported proof.' }));
@@ -208,6 +361,9 @@ test('record-backed markers fail closed when their exact evidence is absent', as
   const fact = compilation.manifest.results.find((item) => item.id === 'lem-unsupported-marker');
   assert.equal(fact.status, 'candidate');
   assert.ok(compilation.diagnostics.some((item) => item.code === 'VERIFIED_RECORD_INVALID'));
+  const stale = await checkStaleness(root, options);
+  assert.deepEqual(stale.changed[0].reasons, ['verified-marker-without-current-record']);
+  assert.doesNotMatch(await readFile(path.join(root, 'unsupported.qmd'), 'utf8'), /VERIFIED/);
 });
 
 test('rejected linked-proof proposals preserve canonical QMD and accepted repair inserts only proof', async () => {
@@ -222,7 +378,7 @@ test('rejected linked-proof proposals preserve canonical QMD and accepted repair
   const rejected = await submitProof(root, badProposal, options);
   assert.equal(rejected.status, 'rejected');
   assert.equal(await readFile(canonicalFile, 'utf8'), initial);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'rejected');
+  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'open');
   const goodProposal = proposalPath(root, 'good.qmd');
   await writeFile(goodProposal, proof('thm-main-proof', 'By reflexivity, one equals one.'));
   const accepted = await submitProof(root, goodProposal, options);
@@ -238,7 +394,9 @@ test('rejected linked-proof proposals preserve canonical QMD and accepted repair
 
 test('a correct verdict with a gap is rejected and proposals cannot redefine canonical results', async () => {
   const root = await project();
+  const countFile = path.join(root, 'submission-verifier-calls.txt');
   process.env.QMD_PROVER_VERIFIER = verifier;
+  process.env.QMD_PROVER_VERIFIER_COUNT = countFile;
   const target = path.join(root, 'goal.qmd');
   const original = result('thm-main-gap', 'A complete proof is required.');
   await writeFile(target, original);
@@ -248,9 +406,12 @@ test('a correct verdict with a gap is rejected and proposals cannot redefine can
   assert.equal(rejected.status, 'rejected');
   assert.deepEqual(rejected.report.gaps, ['justify the missing step']);
   assert.equal(await readFile(target, 'utf8'), original);
+  assert.equal((await submitProof(root, gap, options)).status, 'rejected');
+  assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['thm-main-gap']);
   const redefinition = proposalPath(root, 'redefinition.qmd');
   await writeFile(redefinition, result('thm-main-gap', 'Changed statement.', { proofText: 'A proof.' }));
   await assert.rejects(() => submitProof(root, redefinition, options), /must not redefine existing canonical result/);
+  delete process.env.QMD_PROVER_VERIFIER_COUNT;
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -301,7 +462,7 @@ test('staleness invalidates verified reverse dependencies and retains exact path
   assert.equal(index['lem-stale-base'].status, 'stale');
   assert.equal(index['thm-main-stale-chain'].status, 'stale');
   assert.doesNotMatch(await readFile(path.join(root, 'goal.qmd'), 'utf8'), /^VERIFIED$/m);
-  assert.deepEqual((await compileProject(root, options)).manifest.results.map((item) => item.status), ['candidate', 'candidate']);
+  assert.deepEqual((await compileProject(root, options)).manifest.results.map((item) => item.status), ['stale', 'stale']);
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -315,7 +476,7 @@ test('staleness fails closed when the configured checker contract changes', asyn
   await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  backend: none\n  model: changed-model\n');
   const stale = await checkStaleness(root, options);
   assert.deepEqual(stale.changed[0].reasons, ['checker-contract-changed']);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'candidate');
+  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'stale');
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -331,7 +492,9 @@ test('staleness invalidates verified results when the external basis changes', a
   assert.equal((await submitProof(root, proposal, options)).status, 'verified');
   await writeFile(policyFile, '  \n');
   const stale = await checkStaleness(root, options);
-  assert.deepEqual(stale.changed, [{ id: 'thm-main-external-policy', reasons: ['external-basis-changed'] }]);
+  assert.equal(stale.changed[0].id, 'thm-main-external-policy');
+  assert.deepEqual(stale.changed[0].reasons, ['external-basis-changed']);
+  assert.notEqual(stale.changed[0].previous.external_basis_hash, stale.changed[0].current.external_basis_hash);
   assert.doesNotMatch(await readFile(targetFile, 'utf8'), /VERIFIED/);
   delete process.env.QMD_PROVER_VERIFIER;
 });
@@ -360,16 +523,73 @@ test('goal workspaces preserve a protected target snapshot and report staleness'
   const workspace = path.join(root, created.workspace);
   assert.match(await readFile(path.join(workspace, 'target.qmd'), 'utf8'), /#thm-main-work/);
   await mkdir(path.join(workspace, 'local-theory'));
+  await mkdir(path.join(workspace, '.machine'));
+  await mkdir(path.join(workspace, 'generated'));
   await writeFile(path.join(workspace, 'local-theory', 'lemma.qmd'), result('lem-work', 'A working lemma.', { proofText: 'A workspace argument.' }));
+  await writeFile(path.join(workspace, '.machine', 'ignored.qmd'), result('lem-hidden-work', 'Hidden machine state.'));
+  await writeFile(path.join(workspace, 'generated', 'ignored.qmd'), result('lem-generated-work', 'Generated output.'));
   await writeFile(path.join(workspace, 'main-attempt.qmd'), proof('thm-main-work', 'Use @lem-work.'));
   const inspected = await inspectWorkspace(root, '@thm-main-work', options);
   assert.equal(inspected.stale, false);
   assert.ok(inspected.manifest.results.every((item) => item.origin === 'workspace'));
   assert.equal(inspected.manifest.results.find((item) => item.id === 'lem-work').status, 'workspace-candidate');
   assert.equal(inspected.manifest.results.find((item) => item.id === 'thm-main-work').status, 'workspace-candidate');
+  assert.ok(!inspected.manifest.results.some((item) => ['lem-hidden-work', 'lem-generated-work'].includes(item.id)));
   assert.ok(inspected.graph.edges.some((edge) => edge.from === 'thm-main-work' && edge.to === 'lem-work'));
   await writeFile(canonical, result('thm-main-work', 'Do the work.', { title: 'Workspace theorem', proofText: 'A concurrent proof.' }));
   assert.equal((await inspectWorkspace(root, '@thm-main-work', options)).stale, true);
+});
+
+test('workspace inspection verifies a provisional dependency chain and reuses exact caches', async () => {
+  const root = await project();
+  const countFile = path.join(root, 'workspace-verifier-calls.txt');
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  process.env.QMD_PROVER_VERIFIER_COUNT = countFile;
+  try {
+    await writeFile(path.join(root, 'goal.qmd'), result('thm-main-workspace-ai', 'The workspace route succeeds.'));
+    const created = await initializeWorkspace(root, '@thm-main-workspace-ai', options);
+    const workspace = path.join(root, created.workspace);
+    const route = path.join(workspace, 'route.qmd');
+    await writeFile(route, [
+      result('def-workspace-object', 'Construct the workspace object.'),
+      result('lem-workspace-route', 'The workspace object has the needed property.', { proofText: 'Apply @def-workspace-object.' }),
+      proof('thm-main-workspace-ai', 'Apply @lem-workspace-route.')
+    ].join('\n'));
+
+    const first = await inspectWorkspace(root, '@thm-main-workspace-ai', options);
+    assert.equal(first.ok, true, JSON.stringify(first.diagnostics));
+    assert.equal(first.verification.verifier_calls, 3);
+    assert.deepEqual(first.facts.map((fact) => fact.status), ['workspace-verified', 'workspace-verified', 'workspace-verified']);
+    assert.doesNotMatch(await readFile(route, 'utf8'), /VERIFIED/);
+    const firstSnapshot = first.snapshot_id;
+    const firstPointer = await readJson(path.join(workspace, 'latest.json'));
+    assert.equal(firstPointer.snapshot_id, firstSnapshot);
+    assert.equal((await readJson(path.join(workspace, firstPointer.file))).snapshot_id, firstSnapshot);
+
+    const second = await inspectWorkspace(root, '@thm-main-workspace-ai', options);
+    assert.equal(second.ok, true);
+    assert.equal(second.verification.verifier_calls, 0);
+    assert.equal(second.verification.cache_hits, 3);
+    assert.equal(second.snapshot_id, firstSnapshot);
+    assert.equal((await readFile(countFile, 'utf8')).trim().split('\n').length, 3);
+
+    await writeFile(route, `\n${await readFile(route, 'utf8')}`);
+    const moved = await inspectWorkspace(root, '@thm-main-workspace-ai', options);
+    assert.equal(moved.ok, true);
+    assert.equal(moved.verification.verifier_calls, 0);
+    assert.equal(moved.verification.cache_hits, 3);
+
+    await writeFile(route, (await readFile(route, 'utf8')).replace('Apply @def-workspace-object.', 'Apply @def-workspace-object by the changed route.'));
+    const changed = await inspectWorkspace(root, '@thm-main-workspace-ai', options);
+    assert.equal(changed.ok, true);
+    assert.equal(changed.verification.verifier_calls, 2);
+    assert.equal(changed.verification.cache_hits, 1);
+    assert.notEqual(changed.snapshot_id, firstSnapshot);
+    assert.equal((await readFile(countFile, 'utf8')).trim().split('\n').length, 5);
+  } finally {
+    delete process.env.QMD_PROVER_VERIFIER;
+    delete process.env.QMD_PROVER_VERIFIER_COUNT;
+  }
 });
 
 test('workspace inspection admits only current verified canonical imports from the protected target', async () => {
@@ -457,11 +677,11 @@ test('accepted verifier output is rejected as stale after the external basis cha
 
 test('project initialization inventories external policy, adopts, preserves, appends, and synchronizes safely', async () => {
   const canonicalSource = await readFile(path.join(here, '..', 'skills', 'qmd-prover', 'references', 'AGENTS.md'), 'utf8');
-  const canonicalBlock = canonicalSource.match(/<!-- qmd-prover-contract:start version=9 -->[\s\S]*?<!-- qmd-prover-contract:end -->/)[0];
+  const canonicalBlock = canonicalSource.match(/<!-- qmd-prover-contract:start version=10 -->[\s\S]*?<!-- qmd-prover-contract:end -->/)[0];
 
   const fresh = await bareProject();
   const created = await initializeProject(fresh);
-  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 9 });
+  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 10 });
   assert.equal(created.existing.external_policy.mode, 'unrestricted');
   assert.equal(created.workspace_root, '.qmd-prover/workspaces');
   assert.equal((await stat(path.join(fresh, '.qmd-prover', 'workspaces'))).isDirectory(), true);
@@ -503,7 +723,7 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.ok(appended.includes(canonicalBlock));
 
   const stale = await bareProject();
-  const oldBlock = canonicalBlock.replace('version=9', 'version=1');
+  const oldBlock = canonicalBlock.replace('version=10', 'version=1');
   await writeFile(path.join(stale, 'AGENTS.md'), `# Local before\n\n${oldBlock}\n\n## Local after\n`);
   const syncRequired = await initializeProject(stale);
   assert.deepEqual({ ok: syncRequired.ok, status: syncRequired.status, current: syncRequired.current_contract_version }, { ok: false, status: 'sync-required', current: 1 });
@@ -512,7 +732,7 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.match(synchronized, /^# Local before/);
   assert.match(synchronized, /## Local after\n$/);
   assert.ok(synchronized.includes(canonicalBlock));
-  assert.doesNotMatch(synchronized, /version=1/);
+  assert.doesNotMatch(synchronized, /version=1 -->/);
 });
 
 test('dispatcher preserves JSON commands and adds workspace operations', async () => {
@@ -522,7 +742,7 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
     cwd: root
   }, (error, stdout, stderr) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(initialized.status, 'created');
-  assert.equal(initialized.contract_version, 9);
+  assert.equal(initialized.contract_version, 10);
   assert.equal(initialized.workspace_root, '.qmd-prover/workspaces');
   const policyRoot = await bareProject();
   await writeFile(path.join(policyRoot, 'AGENTS.md'), '# Existing policy\n');
@@ -532,23 +752,23 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
   assert.equal(guarded.error.code, 2);
   assert.deepEqual({ ok: guarded.output.ok, status: guarded.output.status }, { ok: false, status: 'append-required' });
   await chmod(fakePandoc, 0o755);
-  await writeFile(path.join(root, 'goal.qmd'), result('thm-main-cli', 'CLI statement.'));
+  await writeFile(path.join(root, 'goal.qmd'), result('thm-main-cli', 'CLI statement.', { proofText: 'The statement follows directly.' }));
   const run = await new Promise((resolve, reject) => execFile(process.execPath, [cli, 'inspect-project'], {
-    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc }
+    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
   const jsonInspection = JSON.parse(run.stdout);
   assert.equal(jsonInspection.summary.goals[0].id, 'thm-main-cli');
   const printed = await new Promise((resolve, reject) => execFile(process.execPath, [cli, 'inspect-project', '--print'], {
-    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc }
+    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => error ? reject(error) : resolve(stdout)));
   assert.match(printed, new RegExp(`snapshot: ${jsonInspection.snapshot_id}`));
   const workspace = await new Promise((resolve, reject) => execFile(process.execPath, [cli, 'workspace', 'init', '@thm-main-cli'], {
-    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc }
+    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(workspace.status, 'created');
   await writeFile(path.join(root, 'duplicate.qmd'), result('thm-main-cli', 'Duplicate.'));
   const failed = await new Promise((resolve) => execFile(process.execPath, [cli, 'inspect-project'], {
-    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc }
+    cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => resolve({ error, stdout })));
   assert.equal(failed.error.code, 2);
   assert.equal(JSON.parse(failed.stdout).ok, false);
@@ -569,7 +789,7 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(skill, /asks to initialize qmd-prover/);
   assert.match(skill, /init-project --append-contract/);
   assert.match(skill, /init-project --sync-contract/);
-  assert.match(contract, /<!-- qmd-prover-contract:start version=9 -->/);
+  assert.match(contract, /<!-- qmd-prover-contract:start version=10 -->/);
   assert.match(contract, /\.qmd-prover\/\.external\.qmd/);
   assert.match(contract, /file absent \| External results are unrestricted/);
   assert.match(contract, /file present but whitespace-only \| Use no external mathematical results/);
@@ -587,7 +807,10 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(contract, /`OPEN`/);
   assert.match(contract, /`REJECTED`/);
   assert.match(contract, /`REVOKED`/);
-  assert.match(contract, /inspector calls the Codex SDK/);
+  assert.match(contract, /configured external independent verifier/);
+  assert.match(contract, /Prefer `inspect-fact` or `inspect-path`/);
+  assert.match(contract, /last nonempty paragraph of the definition block/);
+  assert.match(contract, /`workspace-verified` result is established only inside that provisional workspace snapshot/);
   assert.match(contract, /does not prescribe a fixed proof workflow/);
   assert.match(contract, /does not establish compliance by itself/);
   assert.match(contract, /init-project/);

@@ -9,9 +9,10 @@ qmd-prover is a self-contained Codex skill with a dependency-free Node dispatche
 - An independent verifier executable configured with `QMD_PROVER_VERIFIER` or `verification.command`.
 - Quarto only when rendered HTML, PDF, or another final format is wanted.
 
-The verifier receives one JSON packet on standard input. Its `external_basis`
-field contains the mode and exact content of `.qmd-prover/.external.qmd`. The
-verifier must return:
+The verifier receives one JSON packet on standard input. It includes an explicit
+independent-review instruction, the exact theorem-like statement and proof or
+definition construction, dependency identities, import scope, checker contract,
+and the `external_basis` mode and exact content. The verifier must return:
 
 ```json
 {
@@ -19,6 +20,7 @@ verifier must return:
   "summary": "...",
   "critical_errors": [],
   "gaps": [],
+  "nonblocking_comments": [],
   "repair_hints": ""
 }
 ```
@@ -28,10 +30,13 @@ verifier must return:
 ```bash
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-project
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-fact @ID
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-theorem @thm-main-ID
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-path path/to/file-or-folder
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" dependency frontier @thm-main-ID
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" dependency search "query" --kind lemma
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" dependency findings
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" dependency alternative-paths @FROM @TO
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" check-staleness
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" workspace init @thm-main-ID
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" workspace inspect @thm-main-ID
@@ -46,11 +51,15 @@ node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" rend
 
 `workspace init @thm-main-ID` creates or resumes `.qmd-prover/workspaces/thm-main-ID/` and returns the exact path. Proof development for that main goal belongs there; canonical QMD remains unchanged until accepted promotion.
 
-Inspection and dependency commands return schema-versioned JSON by default. Add `--print` to any inspection or dependency command for the same decision and snapshot as a human-readable report. Blocking diagnostics use exit code 2.
+`workspace inspect @thm-main-ID` checks canonical staleness, then independently verifies the selected active workspace in dependency order. Exact workspace verdicts are cached under that workspace. `workspace-verified` is provisional state in its named workspace snapshot; no workspace marker is written and canonical promotion still requires the protected submission path.
 
-Dependency operations are `dependencies`, `reverse-dependencies`, `path`, `cycles`, `impact`, `frontier`, and `search`. Every query names the complete graph snapshot it used. Search accepts `--kind`, `--status`, `--origin`, `--path`, `--related-to`, and `--frontier-of` filters.
+Inspection and dependency commands return schema-versioned JSON by default. Add `--print` to any inspection or dependency command for the same decision and snapshot as a human-readable report. Blocking diagnostics use exit code 2. `inspect-fact` and the compatible `inspect-theorem` alias accept any semantic fact ID.
 
-`submit-proof` stores the isolated proposal, starts a fresh verifier process, leaves canonical QMD unchanged on rejection, and atomically inserts or replaces only the linked proof on acceptance. Acceptance stores the exact evidence cache and matching record and inserts the record-backed `VERIFIED` control marker. `check-staleness` fails closed on missing or corrupt evidence, removes stale markers from the changed fact and verified reverse dependencies, marks retained records stale, and reports invalidation paths. A new-result proposal requires `--to` so project policy, rather than qmd-prover, chooses its canonical location. Main theorem IDs, `name` captions, and statement bodies are locked on first successful inspection.
+Every inspection checks staleness first, removes stale markers transitively, and then calls the independent verifier only for mechanically eligible facts whose exact verification input is not cached. The cache key includes mathematical identities, dependency state, import scope, external basis, and checker contract. Repeating an unchanged inspection therefore performs no new verifier calls. If the verifier command is unavailable or malformed, inspection returns per-fact diagnostics and remediation, leaves facts unverified, and does not continue spawning identical failing checks; repair the command before rerunning.
+
+Dependency operations are `dependencies`, `reverse-dependencies`, `path`, `alternative-paths`, `cycles`, `impact`, `frontier`, `findings`, `unused-imports`, `unused-exports`, `isolated`, `unreachable`, `ready-for-ai`, `reused`, and `search`. Every query names the complete graph snapshot it used. Search accepts text/kind/status/origin/path filters plus dependency, reverse-dependency, frontier, stale-impact, and cycle-participant filters; use dispatcher `--help` for the exact options.
+
+`submit-proof` stores the isolated proposal, reuses an exact valid decision cache or starts a fresh verifier process on a miss, leaves canonical QMD unchanged on rejection, and atomically inserts or replaces only the linked proof on acceptance. Acceptance stores the exact evidence cache and matching record and inserts the record-backed `VERIFIED` control marker. `check-staleness` fails closed on missing or corrupt evidence, removes stale markers from the changed fact and verified reverse dependencies, marks retained active records and fact caches stale while preserving immutable decisions, and reports invalidation paths. A new-result proposal requires `--to` so project policy, rather than qmd-prover, chooses its canonical location. Main theorem IDs, `name` captions, and statement bodies are locked on first successful inspection.
 
 `render` refreshes `.qmd-prover/generated/proof-status.qmd`, its dependency SVG, and report data. It does not build a parallel website. Run ordinary `quarto render` through the project's configured pipeline for final output.
 
@@ -59,7 +68,7 @@ Dependency operations are `dependencies`, `reverse-dependencies`, `path`, `cycle
 A result uses a Quarto theorem block with a `name` caption. Its proof is a separate linked block:
 
 ```markdown
-::: {#thm-main-even-square .theorem .goal name="Even squares"}
+::: {#thm-main-even-square .theorem .goal name="Even squares" date="2026-07-13"}
 For every even integer \(n\), the integer \(n^2\) is divisible by \(4\).
 :::
 

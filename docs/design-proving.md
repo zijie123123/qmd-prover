@@ -87,10 +87,11 @@ is no proposal file type or required proposal directory. Supporting
 calculations or search notes may accompany the mathematics, but are not
 submitted as proof text.
 
-A partial proof begins with a first nonempty paragraph exactly equal to `OPEN`.
+A partial theorem-like proof begins with a first nonempty paragraph exactly equal to `OPEN`.
 A proof retained after rejection begins with `REJECTED`; accepted and revoked
-proofs begin with `VERIFIED` and `REVOKED`, respectively. These control
-paragraphs are excluded from proof identity and verifier input. A workspace may
+proofs begin with `VERIFIED` and `REVOKED`, respectively. A definition puts the
+corresponding marker in its last nonempty block paragraph. These control
+paragraphs are excluded from construction or proof identity and verifier input. A workspace may
 retain multiple inactive marked proofs for one result, but only one unmarked
 candidate or `VERIFIED` proof may be active. Record-backed markers have no
 authority without their exact matching records.

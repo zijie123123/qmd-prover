@@ -6,7 +6,7 @@ qmd-prover:
         - def-reflexive
 ---
 
-::: {#thm-main-first .theorem .goal name="First demo theorem"}
+::: {#thm-main-first .theorem .goal name="First demo theorem" date="2026-07-13"}
 The number one is equal to itself.
 :::
 
@@ -14,6 +14,6 @@ The number one is equal to itself.
 Apply @def-reflexive.
 :::
 
-::: {#thm-main-second .theorem .goal name="Second demo theorem"}
+::: {#thm-main-second .theorem .goal name="Second demo theorem" date="2026-07-13"}
 The number two is equal to itself.
 :::

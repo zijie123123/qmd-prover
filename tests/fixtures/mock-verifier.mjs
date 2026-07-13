@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
+import { appendFileSync } from 'node:fs';
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', () => {
   const packet = JSON.parse(input);
+  if (process.env.QMD_PROVER_VERIFIER_COUNT) appendFileSync(process.env.QMD_PROVER_VERIFIER_COUNT, `${packet.target.id}\n`);
   const external = `[external:${packet.external_basis.mode}:${packet.external_basis.content ?? ''}]`;
   const incorrect = packet.target.proof.includes('INVALID');
   const gap = packet.target.proof.includes('GAP');

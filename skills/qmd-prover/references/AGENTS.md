@@ -2,7 +2,7 @@
 
 Copy the managed block below into the root `AGENTS.md` of every mathematical project that uses qmd-prover. Keep the block unchanged. Add project-specific organization, notation, and writing rules outside the managed block.
 
-<!-- qmd-prover-contract:start version=9 -->
+<!-- qmd-prover-contract:start version=10 -->
 
 ## Contents
 
@@ -83,15 +83,15 @@ By @lem-finite-stratification there are finitely many strata. Apply
 :::
 ```
 
-A workspace proposal for an existing declaration contains only its linked `.proof`; do not repeat or edit the declaration. A declaration has at most one active proof. The first nonempty proof paragraph may be one reserved marker:
+A workspace proposal for an existing declaration contains only its linked `.proof`; do not repeat or edit the declaration. A declaration has at most one active proof. For theorem-like declarations, the first nonempty proof paragraph may be one reserved marker. For a definition, the marker belongs instead in the last nonempty paragraph of the definition block and is not part of the construction identity:
 
 | Marker | Meaning |
 |---|---|
 | `OPEN` | Incomplete active attempt. |
 | `REJECTED` | Inactive failed attempt. |
 | no marker | Candidate awaiting independent verification. |
-| `VERIFIED` | Accepted proof backed by matching protected records. |
-| `REVOKED` | Previously accepted proof backed by a matching revocation record and reason. |
+| `VERIFIED` | Accepted construction or proof backed by matching protected records. |
+| `REVOKED` | Previously accepted construction or proof backed by a matching revocation record and reason. |
 
 Never add or restore `VERIFIED` manually. Only qmd-prover may write `VERIFIED` or `REVOKED`. Use only results available in the current file or explicitly imported, and never treat an open, candidate, rejected, revoked, or stale result as established.
 
@@ -111,6 +111,8 @@ Treat canonical QMD as read-only during proof development. Put every agent-creat
 - Put the candidate proof of the protected main goal in `main-proof.qmd` as a `.proof` block only; do not repeat or rewrite the main theorem block.
 - Follow every unproved dependency until it has its own proof. A plan, example, computation, or prose sketch is not a completed proof.
 
+`workspace inspect @thm-main-ID` independently checks the active workspace in dependency order and caches exact verdicts. A `workspace-verified` result is established only inside that provisional workspace snapshot; it is not canonical `VERIFIED` mathematics and must still pass protected submission and promotion before canonical use.
+
 The order of mathematical exploration is flexible; this workspace boundary is not. Move mathematics into canonical QMD only through qmd-prover's accepted promotion path.
 
 ## Verification discipline
@@ -123,7 +125,9 @@ Passing one layer does not imply passing another:
 | Mathematical | Inspector's independent AI verifier | Valid inferences, hypotheses, theorem applicability, complete case coverage, and proof sufficiency. |
 | Agent conduct | This contract | Project ownership, protected goals, workspace-only development, and response to verification findings. |
 
-After mechanical checks pass, the inspector calls the Codex SDK in a fresh bounded context, independent of the proving agent, to judge whether the exact declaration is established by its construction or proof. Acceptance requires a correct verdict with no critical errors or gaps.
+Every `inspect-*` command first checks staleness and removes stale record-backed markers transitively. It then calls the configured external independent verifier in a fresh bounded context for each mechanically eligible fact whose exact verification key is not already cached. The key covers the construction or statement, proof, dependency identities and states, import scope, external basis, checker contract, and verifier protocol. Acceptance requires a correct verdict with no critical errors or gaps. A cached exact acceptance or rejection must be reused without another verifier call.
+
+Prefer `inspect-fact` or `inspect-path` while iterating and use `inspect-project` for deliberate project-wide audits. Do not loop on an inspection whose report says the verifier command is unconfigured, missing, failing, or malformed: repair `verification.command` or `QMD_PROVER_VERIFIER`, then rerun the narrowest relevant inspection. Until then every affected fact remains unverified; never compensate by writing a marker manually.
 
 Apply these rules:
 
@@ -131,7 +135,7 @@ Apply these rules:
 2. Identify external theorems precisely enough to check their applicability. Keep examples, computations, and intuition distinct from a general proof.
 3. If a main goal appears false, preserve it and produce a precise refutation. Change it only with explicit user approval.
 4. Keep prose mathematical and readable. Except for reserved markers, keep verifier metadata, worker strategy, search notes, and confidence claims out of declarations and proofs.
-5. Before relying on `VERIFIED`, run the staleness check. Let qmd-prover remove stale markers from the changed fact and every direct or transitive dependent, then re-run all checks.
+5. Before relying on `VERIFIED`, inspect the relevant fact or scope; inspection runs staleness checking first. The standalone staleness command may be used when only invalidation is wanted. Let qmd-prover remove stale markers from the changed fact and every direct or transitive dependent, then re-run all checks.
 6. Put mathematics where nearby sources and local policy indicate; qmd-prover imposes no subject-directory layout.
 
 ## Agent workflow

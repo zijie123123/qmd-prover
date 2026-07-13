@@ -1,63 +1,10 @@
-import { spawn } from 'node:child_process';
-import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { externalPolicyHash, readExternalPolicy } from './external.mjs';
-import { appendEvent, atomicJson, atomicWrite, AUX, newId, readJson, sha256, withWriteLock } from './files.mjs';
+import { appendEvent, atomicJson, atomicWrite, AUX, newId, readJson, sha256, stableJson, withWriteLock } from './files.mjs';
 import { compileProject } from './compiler.mjs';
-import { locateDiv, readLocatedBlock, readLocatedProof, mergeProof, setProofMarker } from './source.mjs';
-
-function run(command, args, input) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, QMD_PROVER_FRESH_CONTEXT: '1' } });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
-    child.stdin.end(input);
-  });
-}
-
-function verifierCommand(config) {
-  const override = process.env.QMD_PROVER_VERIFIER;
-  if (override) return { command: override, args: [] };
-  const configured = config.verification.command;
-  if (Array.isArray(configured) && configured.length) return { command: configured[0], args: configured.slice(1) };
-  if (typeof configured === 'string' && configured.trim()) return { command: configured.trim(), args: [] };
-  return null;
-}
-
-async function invokeVerifier(packet, config) {
-  const executable = verifierCommand(config);
-  if (!executable) throw new Error('No verifier command configured. Set verification.command in .qmd-prover/config.yml or QMD_PROVER_VERIFIER.');
-  let result;
-  try { result = await run(executable.command, executable.args, JSON.stringify(packet)); }
-  catch (error) {
-    if (error.code === 'ENOENT') throw new Error(`Verifier executable not found: ${executable.command}`);
-    throw error;
-  }
-  if (result.code !== 0) throw new Error(`Verifier failed with exit ${result.code}: ${result.stderr.trim()}`);
-  let report;
-  try { report = JSON.parse(result.stdout); } catch { throw new Error('Verifier did not return valid JSON'); }
-  if (!['correct', 'incorrect'].includes(report.verdict)) throw new Error('Verifier verdict must be "correct" or "incorrect"');
-  for (const field of ['critical_errors', 'gaps']) if (!Array.isArray(report[field])) throw new Error(`Verifier field ${field} must be an array`);
-  return {
-    verdict: report.verdict,
-    summary: String(report.summary ?? ''),
-    critical_errors: report.critical_errors.map(String),
-    gaps: report.gaps.map(String),
-    repair_hints: String(report.repair_hints ?? '')
-  };
-}
-
-function accepted(report) {
-  return report.verdict === 'correct'
-    && report.critical_errors.length === 0
-    && report.gaps.length === 0;
-}
+import { locateDiv, readLocatedBlock, readLocatedProof, mergeProof, setFactMarker } from './source.mjs';
+import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, readVerifierDecision, verificationKey } from './verifier.mjs';
 
 async function verifierPacket(root, target, candidate, compilation, externalBasis) {
   const canonical = target.file ? await readLocatedBlock(path.join(root, target.file), target.id) : null;
@@ -71,25 +18,33 @@ async function verifierPacket(root, target, candidate, compilation, externalBasi
       id,
       kind: result?.kind,
       title: result?.title,
+      semantic_text: located?.statement?.text ?? '',
       statement: located?.statement?.text ?? '',
       status: result?.status,
-      source: result ? { file: result.file, line: result.line } : null
+      identity: result ? { statement_hash: result.statement_hash, proof_hash: result.proof_hash } : null,
+      source: result ? { file: result.file } : null
     });
   }
-  return {
-    schema_version: 1,
+  const sourceFile = compilation.manifest.files.find((file) => file.path === target.file);
+  return buildVerifierPacket({
     target: {
       id: target.id,
+      kind: target.kind,
       title: target.title,
-      statement: canonical?.statement?.text ?? candidate.statement,
+      semantic_text: canonical?.statement?.text ?? candidate.statement,
+      ...(target.kind === 'definition'
+        ? { construction: canonical?.statement?.text ?? candidate.statement }
+        : { statement: canonical?.statement?.text ?? candidate.statement }),
       proof: proposed?.proof?.text ?? '',
       cited_dependencies: candidate.result.dependencies,
-      hypotheses: []
+      identity: { statement_hash: target.statement_hash, proof_hash: candidate.result.proof_hash },
+      source: { file: target.file ?? candidate.file }
     },
     dependencies,
-    external_basis: externalBasis,
-    verification: { fresh_context: true, backend: compilation.config.verification.backend, model: compilation.config.verification.model }
-  };
+    externalBasis,
+    scope: candidate.scope ?? sourceFile?.imports ?? [],
+    config: compilation.config
+  });
 }
 
 export async function submitProof(root, proposalFile, options = {}) {
@@ -175,21 +130,43 @@ export async function submitProof(root, proposalFile, options = {}) {
   const packet = await verifierPacket(root, target, {
     file: storedProposal,
     result: candidateResult,
-    statement: proposedLocated?.statement?.text ?? ''
+    statement: proposedLocated?.statement?.text ?? '',
+    scope: isNewResult ? proposalFileRecord?.imports ?? [] : undefined
   }, initial, externalBasis);
-  await appendEvent(root, { type: 'verification-started', submission_id: submissionId, target: target.id });
-  const report = await invokeVerifier(packet, initial.config);
+  const verifierKey = verificationKey(packet);
+  const cachedDecision = await readVerifierDecision(root, verifierKey, packet);
+  let report;
+  let decisionId;
+  let decisionSource;
+  if (cachedDecision.record) {
+    report = cachedDecision.record.report;
+    decisionId = cachedDecision.record.submission_id;
+    decisionSource = 'verification-cache';
+    await appendEvent(root, { type: 'verification-cache-hit', submission_id: submissionId, decision_id: decisionId, target: target.id, verification_key: verifierKey });
+  } else {
+    await appendEvent(root, { type: 'verification-started', submission_id: submissionId, target: target.id });
+    report = await invokeVerifier(packet, initial.config);
+    decisionId = submissionId;
+    decisionSource = 'independent-verifier';
+  }
   const isAccepted = accepted(report);
   const reportRecord = {
-    schema_version: 1, submission_id: submissionId, proposal_id: proposalId, target: target.id,
+    schema_version: 2, submission_id: submissionId, proposal_id: proposalId, target: target.id,
     backend: initial.config.verification.backend, model: initial.config.verification.model,
     formal_status: 'not-formal', human_review_status: 'not-reviewed',
-    verified_at: new Date().toISOString(), ...report, accepted: isAccepted,
-    packet_hash: sha256(JSON.stringify(packet)), statement_hash: candidateResult.statement_hash,
+    verified_at: new Date().toISOString(), ...report, report, accepted: isAccepted,
+    packet_hash: sha256(stableJson(packet, 0)), verification_key: verifierKey,
+    checker_contract: checkerContract(initial.config), statement_hash: candidateResult.statement_hash,
+    title_hash: target.title_hash, kind: target.kind,
     proof_hash: candidateResult.proof_hash, dependency_snapshot: dependencySnapshot,
-    external_basis_hash: externalBasisHash
+    external_basis_hash: externalBasisHash,
+    scope: packet.scope, source_file: destinationRelative,
+    source: decisionSource,
+    ...(decisionId !== submissionId ? { decision_id: decisionId } : {})
   };
-  await atomicJson(path.join(root, AUX, 'verification', `${submissionId}.json`), reportRecord);
+  const writes = [atomicJson(path.join(root, AUX, 'verification', `${submissionId}.json`), reportRecord)];
+  if (!cachedDecision.record) writes.push(atomicJson(cachedDecision.location.file, reportRecord));
+  await Promise.all(writes);
 
   if (!isAccepted) {
     const rejectedDir = path.join(root, AUX, 'rejected', submissionId);
@@ -209,7 +186,12 @@ export async function submitProof(root, proposalFile, options = {}) {
       const index = await readJson(indexFile, {});
       if (!isNewResult) index[target.id] = {
         status: 'rejected', submission_id: submissionId, statement_hash: target.statement_hash,
-        canonical_proof_hash: target.proof_hash, rejected_proof_hash: candidateResult.proof_hash
+        title_hash: target.title_hash, kind: target.kind,
+        canonical_proof_hash: target.proof_hash, rejected_proof_hash: candidateResult.proof_hash,
+        dependency_snapshot: dependencySnapshot, external_basis_hash: externalBasisHash,
+        verification_key: verifierKey, checker_contract: checkerContract(initial.config),
+        scope: packet.scope, source_file: destinationRelative,
+        record: `${AUX}/verification/${submissionId}.json`
       };
       await atomicJson(indexFile, index);
       await appendEvent(root, { type: 'verification-rejected', submission_id: submissionId, target: target.id });
@@ -254,7 +236,7 @@ export async function submitProof(root, proposalFile, options = {}) {
       const canonical = await readLocatedBlock(destination, target.id);
       merged = mergeProof(canonical, proposed);
     }
-    merged = setProofMarker(merged, target.id, 'VERIFIED');
+    merged = setFactMarker(merged, target.id, target.kind, 'VERIFIED');
     const indexFile = path.join(root, AUX, 'verification', 'index.json');
     const cacheFile = path.join(root, AUX, 'verification', 'facts', `${target.id}.json`);
     const previousIndex = await readJson(indexFile, {});
@@ -264,12 +246,14 @@ export async function submitProof(root, proposalFile, options = {}) {
     const scope = current.manifest.files.find((item) => item.path === destinationRelative)?.imports
       ?? (isNewResult ? proposalFileRecord?.imports ?? [] : []);
     const factCache = {
-      schema_version: 2,
+      schema_version: 3,
       id: target.id,
       source: { file: destinationRelative, line: locateDiv(merged, target.id)?.startLine },
-      statement: packet.target.statement,
+      statement: packet.target.construction ?? packet.target.statement,
       proof: packet.target.proof,
       statement_hash: target.statement_hash,
+      title_hash: target.title_hash,
+      kind: target.kind,
       proof_hash: candidateResult.proof_hash,
       dependencies: packet.dependencies,
       dependency_snapshot: dependencySnapshot,
@@ -277,14 +261,19 @@ export async function submitProof(root, proposalFile, options = {}) {
       external_basis_hash: externalBasisHash,
       scope,
       graph_snapshot_id: current.graph.snapshot_id,
+      verification_key: verifierKey,
+      checker_contract: checkerContract(initial.config),
       verification: { submission_id: submissionId, backend: initial.config.verification.backend, model: initial.config.verification.model, report }
     };
     nextIndex[target.id] = {
       status: 'verified', submission_id: submissionId, statement_hash: target.statement_hash,
+      title_hash: target.title_hash, kind: target.kind,
       proof_hash: candidateResult.proof_hash, backend: initial.config.verification.backend,
       formal_status: 'not-formal', human_review_status: 'not-reviewed',
       dependency_snapshot: dependencySnapshot,
       external_basis_hash: externalBasisHash,
+      verification_key: verifierKey,
+      checker_contract: checkerContract(initial.config),
       record: `${AUX}/verification/${submissionId}.json`,
       cache: `${AUX}/verification/facts/${target.id}.json`
     };
@@ -313,7 +302,19 @@ export async function submitProof(root, proposalFile, options = {}) {
 }
 
 export async function showVerification(root, submissionId) {
-  return readJson(path.join(path.resolve(root), AUX, 'verification', `${submissionId}.json`));
+  const directory = path.join(path.resolve(root), AUX, 'verification');
+  try { return await readJson(path.join(directory, `${submissionId}.json`)); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const checks = path.join(directory, 'checks');
+    let entries = [];
+    try { entries = await readdir(checks); } catch (checksError) { if (checksError.code !== 'ENOENT') throw checksError; }
+    for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
+      const record = await readJson(path.join(checks, name));
+      if (record.submission_id === submissionId) return record;
+    }
+    throw error;
+  }
 }
 
 export async function revokeVerification(root, requested, reason, options = {}) {
@@ -331,7 +332,7 @@ export async function revokeVerification(root, requested, reason, options = {}) 
     const previousIndex = structuredClone(index);
     index[id] = { ...index[id], status: 'revoked', revoked_at: new Date().toISOString(), reason };
     try {
-      await atomicWrite(sourceFile, setProofMarker(originalSource, id, 'REVOKED'));
+      await atomicWrite(sourceFile, setFactMarker(originalSource, id, result.kind, 'REVOKED'));
       await atomicJson(indexFile, index);
       const rebuilt = await compileProject(root, options);
       if (!rebuilt.ok || rebuilt.manifest.results.find((item) => item.id === id)?.status !== 'revoked') throw new Error('Post-write inspection did not confirm revocation');

@@ -242,7 +242,7 @@ imports and exports, and the reserved `OPEN`, `REJECTED`, `VERIFIED`, and
 A semantic `@` reference inside a definition construction or linked proof is a
 logical dependency. The inspector first checks by program that the referenced
 fact exists, is unique, is available through local scope or an explicit import,
-and has usable status. It then calls the Codex SDK in an independent bounded
+and has usable status. It then calls the configured external verifier in an independent bounded
 context to judge whether the referenced facts are sufficient for that exact
 construction or proof. A reference in ordinary exposition is navigational, and
 a bibliographic citation is not a theorem dependency.
@@ -290,14 +290,14 @@ it does not change the check result.
 
 ### Verification status
 
-`OPEN` and `REJECTED` are conservative workflow markers. `VERIFIED` and
-`REVOKED` are record-backed markers and are excluded from the mathematical
-identity checked by AI.
+`OPEN` is a conservative workflow marker. `REJECTED`, `VERIFIED`, and
+`REVOKED` require matching records and are excluded from the mathematical
+identity checked by AI. Theorem-like markers start the linked proof; definition
+markers end the definition block.
 
 - `open`: a required proof or construction is absent or begins with `OPEN`;
 - `candidate`: complete unmarked mathematics awaits checking;
-- `rejected`: the retained attempt begins with `REJECTED` or has a matching
-  rejection report;
+- `rejected`: the retained attempt has a matching rejection report;
 - `verified`: `VERIFIED` matches the exact statement or construction, proof,
   dependency snapshot, and accepted record; and
 - `revoked`: `REVOKED` matches a prior acceptance and a revocation record with
@@ -378,7 +378,7 @@ The expected environment provides:
 - Node.js 20 or later;
 - Pandoc on `PATH`, or `QMD_PROVER_PANDOC` pointing to a compatible executable;
 - Quarto when rendered output is wanted; and
-- Codex SDK access for the inspector's independent AI verification stage.
+- an external verifier command for the inspector's independent AI verification stage;
 
 From a source checkout, install the skill with:
 
@@ -464,7 +464,7 @@ script operations.
 The host may use its own sub-agent mechanism for parallel mathematical
 exploration when the user requests it. Those sub-agents belong to the host
 environment; qmd-prover does not maintain a worker runtime. Independent
-acceptance verification remains the inspector's Codex SDK stage.
+acceptance verification remains the inspector's independent external-verifier stage.
 
 ## Using the Node utilities directly
 
