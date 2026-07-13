@@ -69,37 +69,57 @@ function hasMathematicalProject(existing) {
 }
 
 export async function initializeProject(root, { adoptExisting = false, appendContract = false, syncContract = false } = {}) {
-  if ([adoptExisting, appendContract, syncContract].filter(Boolean).length > 1) {
+  const requestedMutations = [adoptExisting, appendContract, syncContract].filter(Boolean).length;
+  if (requestedMutations > 1) {
     throw new Error('init accepts only one of --adopt-existing, --append-contract, or --sync-contract');
   }
+
   const canonical = await canonicalContract();
   const policyFile = path.join(root, 'AGENTS.md');
   const existing = await inspectExistingProject(root);
   const currentPolicy = existing.agents_md ? await readFile(policyFile, 'utf8') : '';
+  const projectMaterialExists = hasMathematicalProject(existing);
 
-  if (!currentPolicy.trim() && hasMathematicalProject(existing) && !adoptExisting) {
-    return result(root, canonical.version, 'intent-required', {
-      existing,
-      message: 'Existing mathematical project files were found. Ask whether to adopt them in place, inspect them first, or leave them unchanged.',
-      suggested_command: 'qmd-prover init --adopt-existing'
-    });
+  if (!currentPolicy.trim()) {
+    if (projectMaterialExists) {
+      if (!adoptExisting) {
+        return result(root, canonical.version, 'intent-required', {
+          existing,
+          message: 'Existing mathematical project files were found. Ask whether to adopt them in place, inspect them first, or leave them unchanged.',
+          suggested_command: 'qmd-prover init --adopt-existing'
+        });
+      }
+    }
   }
 
   return withWriteLock(root, async () => {
-    if (!await exists(policyFile)) {
+    const policyExists = await exists(policyFile);
+
+    if (!policyExists) {
       await atomicWrite(policyFile, projectPolicy(canonical.block));
-      return successfulResult(root, canonical.version, hasMathematicalProject(existing) ? 'adopted' : 'created', { existing });
+
+      if (projectMaterialExists) {
+        return successfulResult(root, canonical.version, 'adopted', { existing });
+      }
+
+      return successfulResult(root, canonical.version, 'created', { existing });
     }
 
     const source = await readFile(policyFile, 'utf8');
     if (!source.trim()) {
       await atomicWrite(policyFile, projectPolicy(canonical.block));
-      return successfulResult(root, canonical.version, hasMathematicalProject(existing) ? 'adopted' : 'created', { existing });
+
+      if (projectMaterialExists) {
+        return successfulResult(root, canonical.version, 'adopted', { existing });
+      }
+
+      return successfulResult(root, canonical.version, 'created', { existing });
     }
 
     const matches = [...source.matchAll(BLOCK)];
     const starts = source.split(START).length - 1;
     const ends = source.split(END).length - 1;
+
     if (matches.length > 1 || starts !== matches.length || ends !== matches.length) {
       return result(root, canonical.version, 'malformed-contract', {
         existing,
@@ -108,31 +128,35 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
     }
 
     if (matches.length === 0) {
-      if (!appendContract) {
-        return result(root, canonical.version, 'append-required', {
-          existing,
-          message: 'AGENTS.md already exists without a qmd-prover contract.',
-          suggested_command: 'qmd-prover init --append-contract'
-        });
+      if (appendContract) {
+        const separator = source.endsWith('\n') ? '\n' : '\n\n';
+        await atomicWrite(policyFile, `${source}${separator}${canonical.block}\n`);
+        return successfulResult(root, canonical.version, 'appended', { existing });
       }
-      const separator = source.endsWith('\n') ? '\n' : '\n\n';
-      await atomicWrite(policyFile, `${source}${separator}${canonical.block}\n`);
-      return successfulResult(root, canonical.version, 'appended', { existing });
+
+      return result(root, canonical.version, 'append-required', {
+        existing,
+        message: 'AGENTS.md already exists without a qmd-prover contract.',
+        suggested_command: 'qmd-prover init --append-contract'
+      });
     }
 
     const current = matches[0][0];
     const currentVersion = Number(matches[0][1]);
-    if (current === canonical.block) return successfulResult(root, canonical.version, 'already-initialized', { existing });
-    if (!syncContract) {
-      return result(root, canonical.version, 'sync-required', {
-        existing,
-        current_contract_version: currentVersion,
-        message: 'AGENTS.md contains a different qmd-prover managed block.',
-        suggested_command: 'qmd-prover init --sync-contract'
-      });
+    if (current === canonical.block) {
+      return successfulResult(root, canonical.version, 'already-initialized', { existing });
     }
 
-    await atomicWrite(policyFile, source.replace(current, () => canonical.block));
-    return successfulResult(root, canonical.version, 'synchronized', { existing, previous_contract_version: currentVersion });
+    if (syncContract) {
+      await atomicWrite(policyFile, source.replace(current, () => canonical.block));
+      return successfulResult(root, canonical.version, 'synchronized', { existing, previous_contract_version: currentVersion });
+    }
+
+    return result(root, canonical.version, 'sync-required', {
+      existing,
+      current_contract_version: currentVersion,
+      message: 'AGENTS.md contains a different qmd-prover managed block.',
+      suggested_command: 'qmd-prover init --sync-contract'
+    });
   });
 }

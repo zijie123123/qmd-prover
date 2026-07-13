@@ -20,6 +20,10 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.match(await readFile(path.join(fresh, 'AGENTS.md'), 'utf8'), /## Project-specific additions/);
   assert.equal((await initializeProject(fresh)).status, 'already-initialized');
 
+  const emptyPolicy = await bareProject();
+  await writeFile(path.join(emptyPolicy, 'AGENTS.md'), '  \n');
+  assert.equal((await initializeProject(emptyPolicy)).status, 'created');
+
   const external = await bareProject();
   await mkdir(path.join(external, '.qmd-prover'));
   await writeFile(path.join(external, '.qmd-prover', '.external.qmd'), '  \n');
@@ -28,6 +32,14 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.deepEqual(await readExternalPolicy(external), {
     path: '.qmd-prover/.external.qmd', mode: 'declared', content: 'Standard ZFC may be used.\n'
   });
+
+  const blankPolicyProject = await bareProject();
+  await writeFile(path.join(blankPolicyProject, 'AGENTS.md'), '\n');
+  await writeFile(path.join(blankPolicyProject, 'existing.qmd'), '# Existing mathematics\n');
+  const blankIntent = await initializeProject(blankPolicyProject);
+  assert.equal(blankIntent.status, 'intent-required');
+  assert.equal(await readFile(path.join(blankPolicyProject, 'AGENTS.md'), 'utf8'), '\n');
+  assert.equal((await initializeProject(blankPolicyProject, { adoptExisting: true })).status, 'adopted');
 
   const partial = await bareProject();
   await mkdir(path.join(partial, 'theory'));
@@ -65,6 +77,18 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.match(synchronized, /## Local after\n$/);
   assert.ok(synchronized.includes(canonicalBlock));
   assert.doesNotMatch(synchronized, /version=1 -->/);
+
+  const malformed = await bareProject();
+  const malformedSource = 'Local policy\n\n<!-- qmd-prover-contract:start version=12 -->\nUnclosed contract\n';
+  await writeFile(path.join(malformed, 'AGENTS.md'), malformedSource);
+  const malformedResult = await initializeProject(malformed);
+  assert.equal(malformedResult.status, 'malformed-contract');
+  assert.equal(await readFile(path.join(malformed, 'AGENTS.md'), 'utf8'), malformedSource);
+
+  await assert.rejects(
+    initializeProject(await bareProject(), { adoptExisting: true, appendContract: true }),
+    /init accepts only one of/
+  );
 });
 
 test('dispatcher preserves JSON commands and adds workspace operations', async () => {
