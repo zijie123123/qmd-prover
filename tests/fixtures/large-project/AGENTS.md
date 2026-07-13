@@ -114,3 +114,6 @@ The safety gates remain mandatory: do not use stale or unverified claims as esta
 
 ## Project-specific additions
 
+- Develop the argument from explicit foundations of first-order logic: signatures, terms, formulas, substitution, proof calculus, structures, assignments, satisfaction, and semantic consequence.
+- State useful intermediate definitions and results as semantic QMD blocks, with every logical dependency cited at its point of use.
+- Do not assume completeness, compactness, or an equivalent model-existence theorem as an unproved black box.
