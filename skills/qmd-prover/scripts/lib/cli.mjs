@@ -3,11 +3,13 @@ import path from 'node:path';
 import { AUX, cleanId, readJson } from './files.mjs';
 import { analyzeDependencies, inspectFact, inspectPath, inspectProject, printReport } from './inspector.mjs';
 import { renderProject } from './render.mjs';
+import { initializeProject } from './project.mjs';
 import { checkStaleness } from './staleness.mjs';
 import { revokeVerification, showVerification, submitProof } from './verification.mjs';
 import { initializeWorkspace, inspectWorkspace } from './workspace.mjs';
 
 const usage = `Usage:
+  qmd-prover init-project [--adopt-existing|--append-contract|--sync-contract]
   qmd-prover inspect-project [--print]
   qmd-prover inspect-theorem @ID [--print]
   qmd-prover inspect-path FILE_OR_FOLDER [--print]
@@ -69,6 +71,18 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
   const [command, ...rest] = args;
   const options = pandoc ? { pandoc } : {};
   if (!command || command === '--help' || command === '-h') { process.stdout.write(`${usage}\n`); return; }
+  if (command === 'init-project') {
+    const allowed = new Set(['--adopt-existing', '--append-contract', '--sync-contract']);
+    if (rest.some((item) => !allowed.has(item)) || new Set(rest).size !== rest.length || rest.length > 1) {
+      throw new Error('init-project accepts only one of --adopt-existing, --append-contract, or --sync-contract');
+    }
+    emit(await initializeProject(root, {
+      adoptExisting: rest.includes('--adopt-existing'),
+      appendContract: rest.includes('--append-contract'),
+      syncContract: rest.includes('--sync-contract')
+    }), false);
+    return;
+  }
   if (command === 'inspect-project') {
     const parsed = presentation(rest);
     if (parsed.args.length) throw new Error('inspect-project accepts only --print');

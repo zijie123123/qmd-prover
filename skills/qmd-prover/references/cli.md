@@ -24,6 +24,7 @@ The verifier receives one JSON packet on standard input and must return:
 ## Commands
 
 ```bash
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-project
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-theorem @thm-main-ID
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" inspect-path path/to/file-or-folder
@@ -38,6 +39,8 @@ node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" veri
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" verification revoke @thm-ID --reason "reason"
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" render
 ```
+
+`init-project` inventories existing policy, QMD sources, Quarto configuration, and `.qmd-prover` state. When project material exists but `AGENTS.md` is missing, it returns `intent-required` without writing; use `--adopt-existing` only after approval. It otherwise creates the canonical policy idempotently and fails closed on existing policy: use `--append-contract` only with approval to preserve that policy and append the block, or `--sync-contract` only with approval to replace an existing managed block while preserving everything outside it.
 
 Inspection and dependency commands return schema-versioned JSON by default. Add `--print` to any inspection or dependency command for the same decision and snapshot as a human-readable report. Blocking diagnostics use exit code 2.
 

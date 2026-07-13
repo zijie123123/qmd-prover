@@ -5,6 +5,18 @@ description: Initialize and inspect semantic-QMD mathematical projects; formulat
 
 # qmd-prover
 
+## Project setup
+
+When the user asks to initialize qmd-prover in the current project, run this from the project root:
+
+```bash
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
+```
+
+Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, and `.qmd-prover` state, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init-project --adopt-existing` only after the user chooses adoption.
+
+If the status is `append-required`, explain that existing project policy will be preserved and ask before running `init-project --append-contract`. If it is `sync-required`, report the current and canonical contract versions and ask before running `init-project --sync-contract`. Never use any mutation flag without explicit approval. For `already-initialized`, tell the user setup is already complete, summarize existing project material, and ask whether to continue it, inspect it, or change local policy. A successful `created`, `adopted`, `appended`, or `synchronized` result completes setup; no QMD scaffold or initial theorem is required.
+
 ## Project contract preflight
 
 Before drafting mathematics, changing project files or state, creating a proposal, or submitting a proof:
@@ -15,8 +27,6 @@ Before drafting mathematics, changing project files or state, creating a proposa
 4. Reuse a successful comparison for the current agent in the same project context. Do not reread the files before every QMD read. Repeat the preflight only when the project, branch, worktree, agent context, or `AGENTS.md` may have changed, or when prior completion is uncertain.
 
 Every independent worker must perform this preflight for itself because workers do not share context. Treat a successful preflight as a prerequisite for proof work, not as a compiler check.
-
-If the user explicitly asks to initialize qmd-prover in the current project, treat that request as approval to create a missing root `AGENTS.md` from the canonical contract. Do not overwrite or synchronize existing project policy without explicit approval.
 
 Run the dispatcher from the project root:
 

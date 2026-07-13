@@ -399,6 +399,13 @@ may add requested local notation, writing, or organization rules outside it.
 An existing or divergent project policy is not overwritten without explicit
 approval.
 
+The agent performs this setup with `init-project`. The command inventories
+existing policy, QMD, Quarto configuration, and qmd-prover state before writing.
+If it finds a partial or complete project without the contract, the agent
+summarizes that material and asks whether to adopt it, inspect it first, or
+leave it unchanged. The explicit `--adopt-existing`, `--append-contract`, and
+`--sync-contract` forms are used only after user approval.
+
 Initialization establishes the discipline and inspection infrastructure; it
 does not require the user to choose a theorem or learn tool commands. Later the
 user can supply semantic QMD, state one or more goals, or ask the agent to turn
@@ -461,6 +468,12 @@ the mathematical project root, let the installed skill path be:
 
 ```bash
 QMD_PROVER_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover"
+```
+
+Initialize the project contract:
+
+```bash
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init-project
 ```
 
 Inspect the canonical project and print its dependency information:

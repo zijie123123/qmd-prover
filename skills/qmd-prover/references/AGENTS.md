@@ -2,13 +2,28 @@
 
 Copy the managed block below into the root `AGENTS.md` of every mathematical project that uses qmd-prover. Keep the block unchanged. Add project-specific organization, notation, and writing rules outside the managed block.
 
-<!-- qmd-prover-contract:start version=5 -->
+<!-- qmd-prover-contract:start version=7 -->
 
 ## Contents
 
 - [qmd-prover contract](#qmd-prover-contract)
+- [Project setup](#project-setup)
 - [Verification discipline](#verification-discipline)
 - [Agent workflow](#agent-workflow)
+
+## Project setup
+
+The user normally adds the `qmd-prover` skill and asks the agent in natural language to initialize the current project. From the project root, run:
+
+```bash
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
+```
+
+The command reports any existing `AGENTS.md`, QMD sources, Quarto configuration, and `.qmd-prover` state. If it returns `intent-required`, summarize what exists and ask whether the user wants to adopt those files in place, inspect them first, or leave them unchanged. Run `--adopt-existing` only after the user chooses adoption.
+
+With no existing project content, the command creates a root `AGENTS.md` with the canonical managed block. It is idempotent when the current block is already present; report that state and ask what the user wants to do next. If `AGENTS.md` exists without the block, preserve it and ask before rerunning with `--append-contract`. If it contains an older or different managed block, ask before using `--sync-contract`; synchronization replaces only that block. Put local project rules outside the managed block.
+
+Setup requires no QMD scaffold or initial theorem. Afterward, the user may provide one or more theorems, existing QMD, or an idea for the agent to formulate.
 
 ## qmd-prover contract
 
