@@ -18,7 +18,7 @@ Copy the managed block below into the root `AGENTS.md` of every mathematical pro
 The user normally adds the `qmd-prover` skill and asks the agent in natural language to initialize the current project. From the project root, run:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" init
 ```
 
 The command reports any existing `AGENTS.md`, QMD sources, Quarto configuration, and `.qmd-prover` state. If it returns `intent-required`, summarize what exists and ask whether the user wants to adopt those files in place, inspect them first, or leave them unchanged. Run `--adopt-existing` only after the user chooses adoption.

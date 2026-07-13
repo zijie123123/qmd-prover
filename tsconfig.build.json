@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "skills/qmd-prover/src",
+    "outDir": "skills/qmd-prover/scripts",
+    "declaration": false,
+    "sourceMap": false,
+    "noEmit": false
+  },
+  "include": ["skills/qmd-prover/src/**/*"],
+  "exclude": ["skills/qmd-prover/scripts"]
+}

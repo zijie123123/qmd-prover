@@ -352,7 +352,7 @@ From the mathematical project root, a maintainer can submit the selected
 candidate with:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" \
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" \
   submit proof .qmd-prover/workspaces/thm-main-uniform-index/main-proof.qmd
 ```
 

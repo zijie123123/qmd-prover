@@ -371,7 +371,12 @@ must never bypass statement protection or the atomic acceptance path.
 ## Installation and requirements
 
 The skill and runtime are self-contained under `skills/qmd-prover/`. The
-runtime has no third-party Node dependencies.
+maintained runtime source is TypeScript under `src/`; `npm run build` emits the
+Node-compatible ESM dispatcher and modules under `scripts/`. Shared semantic
+contracts live in `src/lib/types.ts`, stable constants in `src/lib/constants.ts`,
+and generic collection and error helpers in their corresponding modules.
+Generated runtime code has no third-party Node dependencies. TypeScript,
+Node type declarations, and the test loader are development-only dependencies.
 
 The expected environment provides:
 
@@ -478,70 +483,70 @@ QMD_PROVER_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover"
 Initialize the project contract:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" init
 ```
 
 Inspect the canonical project and print its dependency information:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect project --print
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" inspect project --print
 ```
 
 Inspect one theorem, lemma, or definition:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   inspect theorem @thm-main-even-square --print
 ```
 
 Inspect one file or folder:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   inspect path foundations/ --print
 ```
 
 Inspect every mathematical file in the workspace:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   workspace inspect --print
 ```
 
 Find a proof frontier or search the dependency graph:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   dependency frontier @thm-main-even-square --print
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   dependency search "local exponent" --kind lemma --print
 ```
 
 Check cached identities and invalidate stale verification transitively:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   check staleness --print
 ```
 
 Submit the selected candidate from workspace QMD:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   submit proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
 ```
 
 Read a stored verification report:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   verification show SUBMISSION_ID
 ```
 
 Revoke an accepted verification only with a concrete reason:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.js" \
   verification revoke @thm-main-even-square --reason "The dependency was invalidated"
 ```
 

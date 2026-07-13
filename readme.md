@@ -5,13 +5,18 @@ qmd-prover is a Codex skill and dependency-free Node runtime for disciplined mat
 ## Repository layout
 
 ```text
-skills/qmd-prover/   self-contained installable Codex skill
-tests/               compiler, verification, concurrency, and rendering tests
-tooling/             repository development and installation tools
+skills/qmd-prover/
+  src/               canonical TypeScript runtime source
+  scripts/           dependency-free compiled Node runtime
+  references/        installed project contract and CLI reference
+tests/               TypeScript compiler, verification, concurrency, and rendering tests
+tooling/             TypeScript development and installation tools
 docs/                maintainer design and architecture documentation
 ```
 
-The skill package contains its own `SKILL.md`, UI metadata, references, dispatcher, and runtime. It can be copied independently of the rest of this repository.
+The skill package contains its own `SKILL.md`, UI metadata, references, TypeScript source, dispatcher, and compiled runtime. It can be copied independently of the rest of this repository. TypeScript tooling is development-only; installed runtime code has no package dependency.
+
+The supported dispatcher is `scripts/qmd-prover.js`; a generated `scripts/qmd-prover.mjs` launcher remains for compatibility with existing installations.
 
 ## Requirements
 
@@ -34,5 +39,12 @@ npm test
 ```
 
 The test suite uses an AST-producing Pandoc adapter and fresh-process mock verifiers, so it does not require production Pandoc or verifier credentials.
+
+For a faster compile-only check while editing:
+
+```bash
+npm run typecheck
+npm run build
+```
 
 See [the CLI reference](skills/qmd-prover/references/cli.md) for configuration and commands, the [canonical project contract](skills/qmd-prover/references/AGENTS.md) for project-agent rules, and [the design](docs/design.md) for architectural details.
