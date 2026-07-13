@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { compileProject } from './compiler.mjs';
+import { externalPolicyHash, readExternalPolicy } from './external.mjs';
 import { appendEvent, atomicJson, atomicWrite, AUX, readJson, stableJson, withWriteLock } from './files.mjs';
 import { setProofMarker } from './source.mjs';
 
@@ -56,6 +57,7 @@ export async function checkStaleness(root = process.cwd(), options = {}) {
     const index = await readJson(indexFile, {});
     const results = new Map(compilation.manifest.results.map((result) => [result.id, result]));
     const files = new Map(compilation.manifest.files.map((file) => [file.path, file]));
+    const currentExternalBasisHash = externalPolicyHash(await readExternalPolicy(root));
     const changed = [];
 
     for (const [id, entry] of Object.entries(index).sort(([left], [right]) => left.localeCompare(right))) {
@@ -69,12 +71,13 @@ export async function checkStaleness(root = process.cwd(), options = {}) {
         if (result.marker !== 'VERIFIED') reasons.push('verified-marker-missing');
       }
       const record = await readEvidence(root, entry.record);
-      if (!record || record.accepted !== true || record.submission_id !== entry.submission_id || record.statement_hash !== entry.statement_hash || record.proof_hash !== entry.proof_hash) reasons.push('verification-record-invalid');
+      if (!record || record.accepted !== true || record.submission_id !== entry.submission_id || record.statement_hash !== entry.statement_hash || record.proof_hash !== entry.proof_hash || record.external_basis_hash !== entry.external_basis_hash) reasons.push('verification-record-invalid');
       const cache = await readEvidence(root, entry.cache);
-      if (!cache || cache.id !== id || cache.statement_hash !== entry.statement_hash || cache.proof_hash !== entry.proof_hash || stableJson(cache.dependency_snapshot ?? {}, 0) !== stableJson(entry.dependency_snapshot ?? {}, 0)) reasons.push('verification-cache-invalid');
+      if (!cache || cache.id !== id || cache.statement_hash !== entry.statement_hash || cache.proof_hash !== entry.proof_hash || stableJson(cache.dependency_snapshot ?? {}, 0) !== stableJson(entry.dependency_snapshot ?? {}, 0) || cache.external_basis_hash !== entry.external_basis_hash) reasons.push('verification-cache-invalid');
       if (result && cache && stableJson(cache.scope ?? [], 0) !== stableJson(files.get(result.file)?.imports ?? [], 0)) reasons.push('scope-changed');
       if (result && cache && cache.source?.file !== result.file) reasons.push('source-association-changed');
       if (cache && (cache.verification?.backend !== compilation.config.verification.backend || cache.verification?.model !== compilation.config.verification.model)) reasons.push('checker-contract-changed');
+      if (entry.external_basis_hash !== currentExternalBasisHash) reasons.push('external-basis-changed');
       if (reasons.length) changed.push({ id, reasons: [...new Set(reasons)].sort() });
     }
 

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { externalPolicyHash, readExternalPolicy } from './external.mjs';
 import { appendEvent, atomicJson, atomicWrite, AUX, newId, readJson, sha256, withWriteLock } from './files.mjs';
 import { compileProject } from './compiler.mjs';
 import { locateDiv, readLocatedBlock, readLocatedProof, mergeProof, setProofMarker } from './source.mjs';
@@ -58,7 +59,7 @@ function accepted(report) {
     && report.gaps.length === 0;
 }
 
-async function verifierPacket(root, target, candidate, compilation) {
+async function verifierPacket(root, target, candidate, compilation, externalBasis) {
   const canonical = target.file ? await readLocatedBlock(path.join(root, target.file), target.id) : null;
   const proposed = await readLocatedProof(candidate.file, target.id);
   const byId = new Map(compilation.manifest.results.map((result) => [result.id, result]));
@@ -86,6 +87,7 @@ async function verifierPacket(root, target, candidate, compilation) {
       hypotheses: []
     },
     dependencies,
+    external_basis: externalBasis,
     verification: { fresh_context: true, backend: compilation.config.verification.backend, model: compilation.config.verification.model }
   };
 }
@@ -149,6 +151,8 @@ export async function submitProof(root, proposalFile, options = {}) {
 
   const submissionId = newId('submission');
   const proposalId = newId('proposal');
+  const externalBasis = await readExternalPolicy(root);
+  const externalBasisHash = externalPolicyHash(externalBasis);
   const proposalDir = path.join(root, AUX, 'proposals', proposalId);
   await mkdir(proposalDir, { recursive: true });
   const storedProposal = path.join(proposalDir, 'proposal.qmd');
@@ -161,6 +165,7 @@ export async function submitProof(root, proposalFile, options = {}) {
     proposal_id: proposalId, submission_id: submissionId, target: target.id,
     created_at: new Date().toISOString(), statement_hash: candidateResult.statement_hash,
     proof_hash: candidateResult.proof_hash, dependency_snapshot: dependencySnapshot,
+    external_basis_hash: externalBasisHash,
     mode: isNewResult ? 'new-result' : 'existing-result', destination: destinationRelative
   };
   await atomicJson(path.join(proposalDir, 'metadata.json'), metadata);
@@ -171,7 +176,7 @@ export async function submitProof(root, proposalFile, options = {}) {
     file: storedProposal,
     result: candidateResult,
     statement: proposedLocated?.statement?.text ?? ''
-  }, initial);
+  }, initial, externalBasis);
   await appendEvent(root, { type: 'verification-started', submission_id: submissionId, target: target.id });
   const report = await invokeVerifier(packet, initial.config);
   const isAccepted = accepted(report);
@@ -181,7 +186,8 @@ export async function submitProof(root, proposalFile, options = {}) {
     formal_status: 'not-formal', human_review_status: 'not-reviewed',
     verified_at: new Date().toISOString(), ...report, accepted: isAccepted,
     packet_hash: sha256(JSON.stringify(packet)), statement_hash: candidateResult.statement_hash,
-    proof_hash: candidateResult.proof_hash, dependency_snapshot: dependencySnapshot
+    proof_hash: candidateResult.proof_hash, dependency_snapshot: dependencySnapshot,
+    external_basis_hash: externalBasisHash
   };
   await atomicJson(path.join(root, AUX, 'verification', `${submissionId}.json`), reportRecord);
 
@@ -230,6 +236,10 @@ export async function submitProof(root, proposalFile, options = {}) {
         throw new Error(`Stale submission: dependency @${id} changed while verification was running`);
       }
     }
+    if (externalPolicyHash(await readExternalPolicy(root)) !== externalBasisHash) {
+      await appendEvent(root, { type: 'submission-stale', submission_id: submissionId, target: target.id, reason: 'external-basis-changed' });
+      throw new Error('Stale submission: external basis changed while verification was running');
+    }
     let original = null;
     try { original = await readFile(destination, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const proposed = await readLocatedProof(storedProposal, target.id);
@@ -263,6 +273,8 @@ export async function submitProof(root, proposalFile, options = {}) {
       proof_hash: candidateResult.proof_hash,
       dependencies: packet.dependencies,
       dependency_snapshot: dependencySnapshot,
+      external_basis: externalBasis,
+      external_basis_hash: externalBasisHash,
       scope,
       graph_snapshot_id: current.graph.snapshot_id,
       verification: { submission_id: submissionId, backend: initial.config.verification.backend, model: initial.config.verification.model, report }
@@ -272,6 +284,7 @@ export async function submitProof(root, proposalFile, options = {}) {
       proof_hash: candidateResult.proof_hash, backend: initial.config.verification.backend,
       formal_status: 'not-formal', human_review_status: 'not-reviewed',
       dependency_snapshot: dependencySnapshot,
+      external_basis_hash: externalBasisHash,
       record: `${AUX}/verification/${submissionId}.json`,
       cache: `${AUX}/verification/facts/${target.id}.json`
     };

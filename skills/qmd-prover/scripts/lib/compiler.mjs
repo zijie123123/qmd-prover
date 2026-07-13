@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { externalPolicyHash, readExternalPolicy } from './external.mjs';
 import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, sha256, stableJson } from './files.mjs';
 import { loadConfig } from './config.mjs';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.mjs';
@@ -206,7 +207,9 @@ async function verificationEvidence(root, verification) {
       && cache?.id === id
       && cache.statement_hash === entry.statement_hash
       && cache.proof_hash === entry.proof_hash
-      && stableJson(cache.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0);
+      && stableJson(cache.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
+      && record.external_basis_hash === entry.external_basis_hash
+      && cache.external_basis_hash === entry.external_basis_hash;
     evidence.set(id, { valid, record, cache });
   }));
   return evidence;
@@ -410,6 +413,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
 
   const verification = await readJson(path.join(root, AUX, 'verification', 'index.json'), {});
   const evidence = await verificationEvidence(root, verification);
+  const currentExternalBasisHash = externalPolicyHash(await readExternalPolicy(root));
   for (const result of allResults) result.status = verificationStatus(result, verification, evidence);
   const compiledFiles = new Map(files.map((file) => [file.path, file]));
   let statusChanged = true;
@@ -425,13 +429,15 @@ export async function compileProject(root = process.cwd(), options = {}) {
       const scopeChanged = stableJson(cache?.scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
       const sourceChanged = cache?.source?.file !== result.file;
       const checkerChanged = cache?.verification?.backend !== config.verification.backend || cache?.verification?.model !== config.verification.model;
-      if (dependencyChanged || scopeChanged || sourceChanged || checkerChanged) {
+      const externalBasisChanged = entry.external_basis_hash !== currentExternalBasisHash;
+      if (dependencyChanged || scopeChanged || sourceChanged || checkerChanged || externalBasisChanged) {
         result.status = 'candidate';
         result.stale_reasons = [
           ...(dependencyChanged ? ['dependency-snapshot-changed'] : []),
           ...(scopeChanged ? ['scope-changed'] : []),
           ...(sourceChanged ? ['source-association-changed'] : []),
-          ...(checkerChanged ? ['checker-contract-changed'] : [])
+          ...(checkerChanged ? ['checker-contract-changed'] : []),
+          ...(externalBasisChanged ? ['external-basis-changed'] : [])
         ];
         statusChanged = true;
       }

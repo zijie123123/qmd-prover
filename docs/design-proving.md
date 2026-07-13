@@ -277,10 +277,12 @@ Before verification, the utility records identities for:
 
 - the target statement and existing canonical proof; and
 - every dependency statement, proof, and verification status used by the
-  candidate.
+  candidate; and
+- the exact external-basis policy supplied to the verifier.
 
-After a successful verdict, it reinspects the project. If the target or any
-dependency changed, the submission is stale and must not be applied.
+After a successful verdict, it reinspects the project. If the target, any
+dependency, or the external-basis policy changed, the submission is stale and
+must not be applied.
 
 For a current submission, the utility:
 

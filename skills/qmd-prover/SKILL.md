@@ -13,7 +13,7 @@ When the user asks to initialize qmd-prover in the current project, run this fro
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
 ```
 
-Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, and `.qmd-prover` state, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init-project --adopt-existing` only after the user chooses adoption.
+Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, `.qmd-prover` state, and external-policy mode, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init-project --adopt-existing` only after the user chooses adoption.
 
 If the status is `append-required`, explain that existing project policy will be preserved and ask before running `init-project --append-contract`. If it is `sync-required`, report the current and canonical contract versions and ask before running `init-project --sync-contract`. Never use any mutation flag without explicit approval. For `already-initialized`, tell the user setup is already complete, summarize existing project material, and ask whether to continue it, inspect it, or change local policy. A successful result returns `.qmd-prover/workspaces` as `workspace_root`; no QMD scaffold or initial theorem is required.
 
@@ -22,9 +22,9 @@ If the status is `append-required`, explain that existing project policy will be
 Before drafting mathematics, changing project files or state, creating a proposal, or submitting a proof:
 
 1. Read the project's root `AGENTS.md` and this skill's [canonical project contract](references/AGENTS.md).
-2. Compare the `qmd-prover-contract` managed block in the project file with the canonical block. Require the managed block to be present, at the same version, and unchanged. Allow project-specific rules outside the managed block; obey those rules in addition to the canonical contract.
+2. Compare the `qmd-prover-contract` managed block in the project file with the canonical block. Require the managed block to be present, at the same version, and unchanged. Allow project-specific rules outside the managed block; obey those rules in addition to the canonical contract. Read `.qmd-prover/.external.qmd` when present and apply its external-basis policy; absence means unrestricted external results, while a whitespace-only file means none are allowed.
 3. If `AGENTS.md` is missing, the managed block is missing or different, or another project rule conflicts with it, stop before any mutation. Explain the exact issue and ask whether the user wants to create or synchronize the contract. Never create, replace, or synchronize `AGENTS.md` without user approval.
-4. Reuse a successful comparison for the current agent in the same project context. Do not reread the files before every QMD read. Repeat the preflight only when the project, branch, worktree, agent context, or `AGENTS.md` may have changed, or when prior completion is uncertain.
+4. Reuse a successful comparison for the current agent in the same project context. Do not reread the files before every QMD read. Repeat the preflight only when the project, branch, worktree, agent context, `AGENTS.md`, or `.external.qmd` may have changed, or when prior completion is uncertain.
 
 Every independent worker must perform this preflight for itself because workers do not share context. Treat a successful preflight as a prerequisite for proof work, not as a compiler check.
 

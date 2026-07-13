@@ -2,12 +2,13 @@
 
 Copy the managed block below into the root `AGENTS.md` of every mathematical project that uses qmd-prover. Keep the block unchanged. Add project-specific organization, notation, and writing rules outside the managed block.
 
-<!-- qmd-prover-contract:start version=8 -->
+<!-- qmd-prover-contract:start version=9 -->
 
 ## Contents
 
 - [qmd-prover contract](#qmd-prover-contract)
 - [Project setup](#project-setup)
+- [External mathematical basis](#external-mathematical-basis)
 - [Proof-development workspace](#proof-development-workspace)
 - [Verification discipline](#verification-discipline)
 - [Agent workflow](#agent-workflow)
@@ -25,6 +26,18 @@ The command reports any existing `AGENTS.md`, QMD sources, Quarto configuration,
 With no existing project content, the command creates a root `AGENTS.md` with the canonical managed block and ensures `.qmd-prover/workspaces/` exists. It is idempotent when the current block is already present; report that state and ask what the user wants to do next. If `AGENTS.md` exists without the block, preserve it and ask before rerunning with `--append-contract`. If it contains an older or different managed block, ask before using `--sync-contract`; synchronization replaces only that block. Put local project rules outside the managed block.
 
 Setup requires no QMD scaffold or initial theorem. Afterward, the user may provide one or more theorems, existing QMD, or an idea for the agent to formulate.
+
+## External mathematical basis
+
+Before writing mathematics, read `.qmd-prover/.external.qmd` if it exists. It is project-owned ordinary QMD describing which external mathematical results may be used:
+
+| State | Meaning |
+|---|---|
+| file absent | External results are unrestricted. Identify them precisely and check their hypotheses. |
+| file present but whitespace-only | Use no external mathematical results; develop every needed result inside the project. |
+| file has content | Use only the external results or classes of results allowed by that content. |
+
+Do not create or change this file unless the user asks to set or revise the project's external basis. Its contents constrain external results, not semantic dependencies already defined in project QMD.
 
 ## qmd-prover contract
 

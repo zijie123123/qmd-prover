@@ -9,7 +9,9 @@ qmd-prover is a self-contained Codex skill with a dependency-free Node dispatche
 - An independent verifier executable configured with `QMD_PROVER_VERIFIER` or `verification.command`.
 - Quarto only when rendered HTML, PDF, or another final format is wanted.
 
-The verifier receives one JSON packet on standard input and must return:
+The verifier receives one JSON packet on standard input. Its `external_basis`
+field contains the mode and exact content of `.qmd-prover/.external.qmd`. The
+verifier must return:
 
 ```json
 {
@@ -40,7 +42,7 @@ node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" veri
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" render
 ```
 
-`init-project` inventories existing policy, QMD sources, Quarto configuration, and `.qmd-prover` state. When project material exists but `AGENTS.md` is missing, it returns `intent-required` without writing; use `--adopt-existing` only after approval. It otherwise creates the canonical policy idempotently, ensures `.qmd-prover/workspaces/` exists, and returns that path as `workspace_root`. It fails closed on existing policy: use `--append-contract` only with approval to preserve that policy and append the block, or `--sync-contract` only with approval to replace an existing managed block while preserving everything outside it.
+`init-project` inventories existing policy, QMD sources, Quarto configuration, `.qmd-prover` state, and the `unrestricted`, `none`, or `declared` external-policy mode. It never creates `.external.qmd`. When project material exists but `AGENTS.md` is missing, it returns `intent-required` without writing; use `--adopt-existing` only after approval. It otherwise creates the canonical policy idempotently, ensures `.qmd-prover/workspaces/` exists, and returns that path as `workspace_root`. It fails closed on existing policy: use `--append-contract` only with approval to preserve that policy and append the block, or `--sync-contract` only with approval to replace an existing managed block while preserving everything outside it.
 
 `workspace init @thm-main-ID` creates or resumes `.qmd-prover/workspaces/thm-main-ID/` and returns the exact path. Proof development for that main goal belongs there; canonical QMD remains unchanged until accepted promotion.
 

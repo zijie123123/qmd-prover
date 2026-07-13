@@ -57,6 +57,21 @@ These additions choose notation and file placement without changing how proofs
 are protected or verified. By contrast, a local rule saying “agents may edit a
 `thm-main-*` statement” contradicts statement protection and is invalid.
 
+## External mathematical basis
+
+The optional project-owned `.qmd-prover/.external.qmd` is ordinary QMD that
+controls which results may be taken from outside the project. Its three states
+are intentional: absence is unrestricted, a whitespace-only file permits no
+external results, and nonempty content describes the allowed results or
+classes of results. Initialization reports this state but never creates or
+rewrites the file.
+
+The host agent reads the policy before writing mathematics. The independent AI
+verifier receives its exact content with each candidate and judges whether an
+external use is allowed. The proving utilities snapshot the policy and reject
+acceptance if it changes during verification. This policy does not replace
+semantic `@id` dependencies between results defined inside the project.
+
 ## Rule categories
 
 The discipline assigns rules to three enforcement mechanisms. Passing one

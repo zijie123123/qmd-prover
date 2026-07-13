@@ -1,0 +1,14 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { AUX, exists, relativePosix, sha256 } from './files.mjs';
+
+export function externalPolicyHash(policy) {
+  return sha256(JSON.stringify(policy));
+}
+
+export async function readExternalPolicy(root) {
+  const file = path.join(root, AUX, '.external.qmd');
+  if (!await exists(file)) return { path: relativePosix(root, file), mode: 'unrestricted', content: null };
+  const content = await readFile(file, 'utf8');
+  return { path: relativePosix(root, file), mode: content.trim() ? 'declared' : 'none', content };
+}

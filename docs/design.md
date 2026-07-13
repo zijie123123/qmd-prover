@@ -400,7 +400,9 @@ An existing or divergent project policy is not overwritten without explicit
 approval.
 
 The agent performs this setup with `init-project`. The command inventories
-existing policy, QMD, Quarto configuration, and qmd-prover state before writing.
+existing policy, QMD, Quarto configuration, qmd-prover state, and the optional
+`.qmd-prover/.external.qmd` policy before writing. It reports but never creates
+that external-basis file.
 If it finds a partial or complete project without the contract, the agent
 summarizes that material and asks whether to adopt it, inspect it first, or
 leave it unchanged. The explicit `--adopt-existing`, `--append-contract`, and

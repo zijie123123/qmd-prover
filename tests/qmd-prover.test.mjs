@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { compileProject, theoremBundle } from '../skills/qmd-prover/scripts/lib/compiler.mjs';
+import { readExternalPolicy } from '../skills/qmd-prover/scripts/lib/external.mjs';
 import { readJson } from '../skills/qmd-prover/scripts/lib/files.mjs';
 import { analyzeDependencies, inspectFact, inspectPath, inspectProject } from '../skills/qmd-prover/scripts/lib/inspector.mjs';
 import { initializeProject } from '../skills/qmd-prover/scripts/lib/project.mjs';
@@ -212,6 +213,7 @@ test('record-backed markers fail closed when their exact evidence is absent', as
 test('rejected linked-proof proposals preserve canonical QMD and accepted repair inserts only proof', async () => {
   const root = await project();
   process.env.QMD_PROVER_VERIFIER = verifier;
+  await writeFile(path.join(root, '.qmd-prover', '.external.qmd'), 'Finite group theory may be used.\n');
   const canonicalFile = path.join(root, 'goal.qmd');
   const initial = result('thm-main-proof', 'One equals one.', { title: 'Reflexivity' });
   await writeFile(canonicalFile, initial);
@@ -225,6 +227,7 @@ test('rejected linked-proof proposals preserve canonical QMD and accepted repair
   await writeFile(goodProposal, proof('thm-main-proof', 'By reflexivity, one equals one.'));
   const accepted = await submitProof(root, goodProposal, options);
   assert.equal(accepted.status, 'verified');
+  assert.match(accepted.report.summary, /external:declared:Finite group theory may be used/);
   const merged = await readFile(canonicalFile, 'utf8');
   assert.match(merged, /:::\n\n::: \{\.proof of="thm-main-proof"\}\nVERIFIED\n\nBy reflexivity/);
   assert.equal((await compileProject(root, options)).manifest.results[0].status, 'verified');
@@ -313,6 +316,23 @@ test('staleness fails closed when the configured checker contract changes', asyn
   const stale = await checkStaleness(root, options);
   assert.deepEqual(stale.changed[0].reasons, ['checker-contract-changed']);
   assert.equal((await compileProject(root, options)).manifest.results[0].status, 'candidate');
+  delete process.env.QMD_PROVER_VERIFIER;
+});
+
+test('staleness invalidates verified results when the external basis changes', async () => {
+  const root = await project();
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  const policyFile = path.join(root, '.qmd-prover', '.external.qmd');
+  const targetFile = path.join(root, 'external-policy-goal.qmd');
+  await writeFile(policyFile, 'Standard arithmetic may be used.\n');
+  await writeFile(targetFile, result('thm-main-external-policy', 'A policy-sensitive claim.'));
+  const proposal = proposalPath(root, 'external-policy.qmd');
+  await writeFile(proposal, proof('thm-main-external-policy', 'Use the allowed external basis.'));
+  assert.equal((await submitProof(root, proposal, options)).status, 'verified');
+  await writeFile(policyFile, '  \n');
+  const stale = await checkStaleness(root, options);
+  assert.deepEqual(stale.changed, [{ id: 'thm-main-external-policy', reasons: ['external-basis-changed'] }]);
+  assert.doesNotMatch(await readFile(targetFile, 'utf8'), /VERIFIED/);
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -415,17 +435,47 @@ test('accepted verifier output is rejected as stale after a concurrent target ed
   delete process.env.QMD_PROVER_VERIFIER_READY;
 });
 
-test('project initialization inventories, adopts, preserves, appends, and synchronizes safely', async () => {
+test('accepted verifier output is rejected as stale after the external basis changes', async () => {
+  const root = await project();
+  const policyFile = path.join(root, '.qmd-prover', '.external.qmd');
+  const marker = path.join(root, 'external-verifier-ready');
+  await writeFile(policyFile, 'Only elementary arithmetic may be used.\n');
+  await writeFile(path.join(root, 'goal.qmd'), result('thm-main-external-stale', 'Keep the same external basis.'));
+  const proposal = proposalPath(root, 'external-stale.qmd');
+  await writeFile(proposal, proof('thm-main-external-stale', 'Candidate proof.'));
+  process.env.QMD_PROVER_VERIFIER = staleVerifier;
+  process.env.QMD_PROVER_VERIFIER_READY = marker;
+  const submission = submitProof(root, proposal, options);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try { await readFile(marker); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+  }
+  await writeFile(policyFile, 'Standard algebra may be used.\n');
+  await assert.rejects(submission, /external basis changed/);
+  delete process.env.QMD_PROVER_VERIFIER;
+  delete process.env.QMD_PROVER_VERIFIER_READY;
+});
+
+test('project initialization inventories external policy, adopts, preserves, appends, and synchronizes safely', async () => {
   const canonicalSource = await readFile(path.join(here, '..', 'skills', 'qmd-prover', 'references', 'AGENTS.md'), 'utf8');
-  const canonicalBlock = canonicalSource.match(/<!-- qmd-prover-contract:start version=8 -->[\s\S]*?<!-- qmd-prover-contract:end -->/)[0];
+  const canonicalBlock = canonicalSource.match(/<!-- qmd-prover-contract:start version=9 -->[\s\S]*?<!-- qmd-prover-contract:end -->/)[0];
 
   const fresh = await bareProject();
   const created = await initializeProject(fresh);
-  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 8 });
+  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 9 });
+  assert.equal(created.existing.external_policy.mode, 'unrestricted');
   assert.equal(created.workspace_root, '.qmd-prover/workspaces');
   assert.equal((await stat(path.join(fresh, '.qmd-prover', 'workspaces'))).isDirectory(), true);
   assert.match(await readFile(path.join(fresh, 'AGENTS.md'), 'utf8'), /## Project-specific additions/);
   assert.equal((await initializeProject(fresh)).status, 'already-initialized');
+
+  const external = await bareProject();
+  await mkdir(path.join(external, '.qmd-prover'));
+  await writeFile(path.join(external, '.qmd-prover', '.external.qmd'), '  \n');
+  assert.equal((await initializeProject(external)).existing.external_policy.mode, 'none');
+  await writeFile(path.join(external, '.qmd-prover', '.external.qmd'), 'Standard ZFC may be used.\n');
+  assert.deepEqual(await readExternalPolicy(external), {
+    path: '.qmd-prover/.external.qmd', mode: 'declared', content: 'Standard ZFC may be used.\n'
+  });
 
   const partial = await bareProject();
   await mkdir(path.join(partial, 'theory'));
@@ -453,7 +503,7 @@ test('project initialization inventories, adopts, preserves, appends, and synchr
   assert.ok(appended.includes(canonicalBlock));
 
   const stale = await bareProject();
-  const oldBlock = canonicalBlock.replace('version=8', 'version=1');
+  const oldBlock = canonicalBlock.replace('version=9', 'version=1');
   await writeFile(path.join(stale, 'AGENTS.md'), `# Local before\n\n${oldBlock}\n\n## Local after\n`);
   const syncRequired = await initializeProject(stale);
   assert.deepEqual({ ok: syncRequired.ok, status: syncRequired.status, current: syncRequired.current_contract_version }, { ok: false, status: 'sync-required', current: 1 });
@@ -472,7 +522,7 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
     cwd: root
   }, (error, stdout, stderr) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(initialized.status, 'created');
-  assert.equal(initialized.contract_version, 8);
+  assert.equal(initialized.contract_version, 9);
   assert.equal(initialized.workspace_root, '.qmd-prover/workspaces');
   const policyRoot = await bareProject();
   await writeFile(path.join(policyRoot, 'AGENTS.md'), '# Existing policy\n');
@@ -519,7 +569,10 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(skill, /asks to initialize qmd-prover/);
   assert.match(skill, /init-project --append-contract/);
   assert.match(skill, /init-project --sync-contract/);
-  assert.match(contract, /<!-- qmd-prover-contract:start version=8 -->/);
+  assert.match(contract, /<!-- qmd-prover-contract:start version=9 -->/);
+  assert.match(contract, /\.qmd-prover\/\.external\.qmd/);
+  assert.match(contract, /file absent \| External results are unrestricted/);
+  assert.match(contract, /file present but whitespace-only \| Use no external mathematical results/);
   assert.match(contract, /<!-- qmd-prover-contract:end -->/);
   assert.match(contract, /name="Uniform index theorem"/);
   assert.match(contract, /\.proof of="thm-main-uniform-index"/);

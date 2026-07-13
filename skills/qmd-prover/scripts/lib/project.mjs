@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { readExternalPolicy } from './external.mjs';
 import { atomicWrite, AUX, exists, relativePosix, withWriteLock } from './files.mjs';
 
 const START = '<!-- qmd-prover-contract:start version=';
@@ -52,8 +53,10 @@ async function inspectExistingProject(root) {
   const quartoConfigs = [];
   for (const name of ['_quarto.yml', '_quarto.yaml']) if (await exists(path.join(root, name))) quartoConfigs.push(name);
   const qmdFiles = await findQmdFiles(root);
+  const externalPolicy = await readExternalPolicy(root);
   return {
     agents_md: await exists(path.join(root, 'AGENTS.md')),
+    external_policy: { path: externalPolicy.path, mode: externalPolicy.mode },
     qmd_prover_state: await exists(path.join(root, '.qmd-prover')),
     quarto_configs: quartoConfigs,
     qmd_file_count: qmdFiles.length,
