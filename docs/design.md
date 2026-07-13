@@ -242,7 +242,7 @@ imports and exports, and the reserved `OPEN`, `REJECTED`, `VERIFIED`, and
 A semantic `@` reference inside a definition construction or linked proof is a
 logical dependency. The inspector first checks by program that the referenced
 fact exists, is unique, is available through local scope or an explicit import,
-and has usable status. It then calls the Codex SDK in an independent bounded
+and has usable status. It then calls the configured external verifier in an independent bounded
 context to judge whether the referenced facts are sufficient for that exact
 construction or proof. A reference in ordinary exposition is navigational, and
 a bibliographic citation is not a theorem dependency.
@@ -290,14 +290,14 @@ it does not change the check result.
 
 ### Verification status
 
-`OPEN` and `REJECTED` are conservative workflow markers. `VERIFIED` and
-`REVOKED` are record-backed markers and are excluded from the mathematical
-identity checked by AI.
+`OPEN` is a conservative workflow marker. `REJECTED`, `VERIFIED`, and
+`REVOKED` require matching records and are excluded from the mathematical
+identity checked by AI. Theorem-like markers start the linked proof; definition
+markers end the definition block.
 
 - `open`: a required proof or construction is absent or begins with `OPEN`;
 - `candidate`: complete unmarked mathematics awaits checking;
-- `rejected`: the retained attempt begins with `REJECTED` or has a matching
-  rejection report;
+- `rejected`: the retained attempt has a matching rejection report;
 - `verified`: `VERIFIED` matches the exact statement or construction, proof,
   dependency snapshot, and accepted record; and
 - `revoked`: `REVOKED` matches a prior acceptance and a revocation record with
@@ -378,7 +378,7 @@ The expected environment provides:
 - Node.js 20 or later;
 - Pandoc on `PATH`, or `QMD_PROVER_PANDOC` pointing to a compatible executable;
 - Quarto when rendered output is wanted; and
-- Codex SDK access for the inspector's independent AI verification stage.
+- an external verifier command for the inspector's independent AI verification stage;
 
 From a source checkout, install the skill with:
 
@@ -399,8 +399,10 @@ may add requested local notation, writing, or organization rules outside it.
 An existing or divergent project policy is not overwritten without explicit
 approval.
 
-The agent performs this setup with `init-project`. The command inventories
-existing policy, QMD, Quarto configuration, and qmd-prover state before writing.
+The agent performs this setup with `init`. The command inventories
+existing policy, QMD, Quarto configuration, qmd-prover state, and the optional
+`.qmd-prover/.external.qmd` policy before writing. It reports but never creates
+that external-basis file.
 If it finds a partial or complete project without the contract, the agent
 summarizes that material and asks whether to adopt it, inspect it first, or
 leave it unchanged. The explicit `--adopt-existing`, `--append-contract`, and
@@ -462,7 +464,7 @@ script operations.
 The host may use its own sub-agent mechanism for parallel mathematical
 exploration when the user requests it. Those sub-agents belong to the host
 environment; qmd-prover does not maintain a worker runtime. Independent
-acceptance verification remains the inspector's Codex SDK stage.
+acceptance verification remains the inspector's independent external-verifier stage.
 
 ## Using the Node utilities directly
 
@@ -476,27 +478,27 @@ QMD_PROVER_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover"
 Initialize the project contract:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init-project
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init
 ```
 
 Inspect the canonical project and print its dependency information:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect-project --print
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect project --print
 ```
 
 Inspect one theorem, lemma, or definition:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  inspect-theorem @thm-main-even-square --print
+  inspect theorem @thm-main-even-square --print
 ```
 
 Inspect one file or folder:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  inspect-path foundations/ --print
+  inspect path foundations/ --print
 ```
 
 Inspect every mathematical file in the workspace:
@@ -519,14 +521,14 @@ Check cached identities and invalidate stale verification transitively:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  check-staleness --print
+  check staleness --print
 ```
 
 Submit the selected candidate from workspace QMD:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  submit-proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
+  submit proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
 ```
 
 Read a stored verification report:

@@ -1,9 +1,11 @@
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { externalPolicyHash, readExternalPolicy } from './external.mjs';
 import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, sha256, stableJson } from './files.mjs';
 import { loadConfig } from './config.mjs';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.mjs';
 import { locateDiv, locateProof } from './source.mjs';
+import { accepted, checkerContract } from './verifier.mjs';
 
 const semanticPrefixes = /^(def|lem|thm|prp|cor)-/;
 const semanticId = /^(def|lem|thm|prp|cor)-[A-Za-z0-9._:-]+$/;
@@ -131,13 +133,49 @@ function unique(values) {
   return [...new Set(values)].sort();
 }
 
+function markerParagraph(block) {
+  if (!['Para', 'Plain'].includes(block?.t)) return null;
+  const marker = inlineText(block.c ?? []);
+  return controlMarkers.has(marker) ? marker : null;
+}
+
 function proofContent(blocks) {
   const index = blocks.findIndex((block) => block.t !== 'Null');
-  const marker = index >= 0 && ['Para', 'Plain'].includes(blocks[index].t)
-    ? inlineText(blocks[index].c ?? [])
-    : '';
-  if (!controlMarkers.has(marker)) return { marker: null, blocks };
-  return { marker, blocks: blocks.filter((_, blockIndex) => blockIndex !== index) };
+  const markers = blocks.map((block, blockIndex) => ({ marker: markerParagraph(block), index: blockIndex }))
+    .filter((entry) => entry.marker);
+  const marker = index >= 0 ? markerParagraph(blocks[index]) : null;
+  return {
+    marker,
+    marker_index: marker ? index : null,
+    markers,
+    blocks: marker ? blocks.filter((_, blockIndex) => blockIndex !== index) : blocks
+  };
+}
+
+function definitionContent(blocks) {
+  const nonempty = blocks.map((block, index) => ({ block, index })).filter(({ block }) => block.t !== 'Null');
+  const last = nonempty.at(-1)?.index ?? -1;
+  const markers = blocks.map((block, index) => ({ marker: markerParagraph(block), index }))
+    .filter((entry) => entry.marker);
+  const marker = last >= 0 ? markerParagraph(blocks[last]) : null;
+  return {
+    marker,
+    marker_index: marker ? last : null,
+    markers,
+    blocks: marker ? blocks.filter((_, index) => index !== last) : blocks
+  };
+}
+
+function validIntroductionDate(value) {
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return day <= days[month - 1];
 }
 
 function resolveImport(importer, imported) {
@@ -175,11 +213,21 @@ export function findCycles(adjacency) {
 
 function verificationStatus(result, verification, evidence) {
   const record = verification[result.id];
-  const identityMatches = record?.statement_hash === result.statement_hash && record.proof_hash === result.proof_hash;
-  if (result.marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && record.reason?.trim()) return 'revoked';
-  if (result.marker === 'VERIFIED' && record?.status === 'verified' && identityMatches && evidence.get(result.id)?.valid) return 'verified';
-  if (result.marker === 'REJECTED' || (record?.status === 'rejected' && record.statement_hash === result.statement_hash && record.canonical_proof_hash === result.proof_hash)) return 'rejected';
-  if (result.marker === 'OPEN' || !result.proof_present) return 'open';
+  const marker = result.marker_valid ? result.marker : null;
+  const identityMatches = record?.statement_hash === result.statement_hash
+    && record?.title_hash === result.title_hash
+    && record?.kind === result.kind
+    && record.proof_hash === result.proof_hash;
+  if (record?.status === 'stale') return 'stale';
+  if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && record.reason?.trim()) return 'revoked';
+  if (marker === 'VERIFIED' && record?.status === 'verified' && identityMatches && evidence.get(result.id)?.valid) return 'verified';
+  if (record?.status === 'rejected'
+    && record.statement_hash === result.statement_hash
+    && record.title_hash === result.title_hash
+    && record.kind === result.kind
+    && record.rejected_proof_hash === result.proof_hash
+    && evidence.get(result.id)?.valid) return 'rejected';
+  if (marker === 'OPEN' || (!result.proof_present && result.kind !== 'definition')) return 'open';
   return 'candidate';
 }
 
@@ -192,21 +240,40 @@ async function verificationEvidence(root, verification) {
     return absolute.startsWith(`${verificationRoot}${path.sep}`) ? absolute : null;
   }
   await Promise.all(Object.entries(verification).map(async ([id, entry]) => {
-    if (entry.status !== 'verified') return;
+    if (!['verified', 'rejected'].includes(entry.status)) return;
     let record = null;
     let cache = null;
     const recordFile = evidencePath(entry.record);
     const cacheFile = evidencePath(entry.cache);
     try { if (recordFile) record = await readJson(recordFile); } catch { /* Invalid evidence fails closed below. */ }
     try { if (cacheFile) cache = await readJson(cacheFile); } catch { /* Invalid evidence fails closed below. */ }
-    const valid = record?.accepted === true
-      && record.submission_id === entry.submission_id
+    const sharedValid = record?.submission_id === entry.submission_id
+      && record.target === id
       && record.statement_hash === entry.statement_hash
-      && record.proof_hash === entry.proof_hash
-      && cache?.id === id
-      && cache.statement_hash === entry.statement_hash
-      && cache.proof_hash === entry.proof_hash
-      && stableJson(cache.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0);
+      && record.title_hash === entry.title_hash
+      && record.kind === entry.kind
+      && record.verification_key === entry.verification_key
+      && record.external_basis_hash === entry.external_basis_hash
+      && stableJson(record.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
+      && stableJson(record.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
+      && record.report
+      && record.accepted === accepted(record.report);
+    const valid = entry.status === 'verified'
+      ? sharedValid
+        && record.accepted === true
+        && record.proof_hash === entry.proof_hash
+        && cache?.id === id
+        && cache.statement_hash === entry.statement_hash
+        && cache.title_hash === entry.title_hash
+        && cache.kind === entry.kind
+        && cache.proof_hash === entry.proof_hash
+        && stableJson(cache.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
+        && cache.external_basis_hash === entry.external_basis_hash
+        && cache.verification_key === entry.verification_key
+        && stableJson(cache.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
+      : sharedValid
+        && record.accepted === false
+        && record.proof_hash === entry.rejected_proof_hash;
     evidence.set(id, { valid, record, cache });
   }));
   return evidence;
@@ -257,12 +324,15 @@ export async function compileProject(root = process.cwd(), options = {}) {
             proof_present: inlineText(content.blocks).length > 0 || content.blocks.some((block) => block.t !== 'Null'),
             proof_text: inlineText(content.blocks),
             dependencies: references(content.blocks),
-            blocks: content.blocks
+            blocks: content.blocks,
+            markers: content.markers,
+            marker_index: content.marker_index
           };
           proofs.push(proof);
           allProofs.push(proof);
           if (!target) diagnostics.push(diagnostic('error', 'PROOF_TARGET_MISSING', 'A .proof block requires an of attribute', file.relative, line));
           if (!proof.proof_present) diagnostics.push(diagnostic('error', 'PROOF_EMPTY', `Proof of @${target || '?'} is empty`, file.relative, line, target));
+          if (content.markers.some((marker) => marker.index !== content.marker_index)) diagnostics.push(diagnostic('error', 'PROOF_MARKER_POSITION', `A reserved proof marker must be the first nonempty proof paragraph`, file.relative, line, target));
           continue;
         }
 
@@ -271,20 +341,31 @@ export async function compileProject(root = process.cwd(), options = {}) {
         const semanticKinds = classes.filter((item) => kindClasses.includes(item));
         const kind = entry.kind ?? 'unknown';
         const title = String(values.name ?? '');
+        const date = String(values.date ?? '');
+        const content = kind === 'definition'
+          ? definitionContent(entry.blocks)
+          : { marker: null, marker_index: null, markers: entry.blocks.map((block, index) => ({ marker: markerParagraph(block), index })).filter((item) => item.marker), blocks: entry.blocks };
+        const statementText = inlineText(content.blocks);
+        const statementHash = sha256(stableJson(normalizedAst(content.blocks), 0));
+        const constructionDependencies = kind === 'definition' ? references(content.blocks) : [];
         const result = {
-          id, file: file.relative, line, kind, classes: [...classes].sort(), title,
+          id, file: file.relative, line, kind, classes: [...classes].sort(), title, date,
           origin: id.startsWith(config.goals['id-prefix']) ? 'user' : 'agent',
           export: values.export ?? null,
-          statement_text: inlineText(entry.blocks),
-          statement_hash: sha256(stableJson(normalizedAst(entry.blocks), 0)),
+          statement_text: statementText,
+          statement_hash: statementHash,
           title_hash: sha256(title),
           proof_hash: sha256(stableJson(normalizedAst([]), 0)),
           proof_present: false,
           proof_text: '',
-          marker: null,
-          construction_dependencies: kind === 'definition' ? references(entry.blocks) : [],
-          dependencies: kind === 'definition' ? references(entry.blocks) : [],
-          uses: kind === 'definition' ? references(entry.blocks) : []
+          marker: kind === 'definition' ? content.marker : null,
+          marker_valid: kind === 'definition'
+            ? content.markers.length <= 1 && content.markers.every((marker) => marker.index === content.marker_index)
+            : content.markers.length === 0,
+          ...(kind === 'definition' ? { construction_text: statementText, construction_hash: statementHash } : {}),
+          construction_dependencies: constructionDependencies,
+          dependencies: constructionDependencies,
+          uses: constructionDependencies
         };
         results.push(result);
         allResults.push(result);
@@ -295,8 +376,14 @@ export async function compileProject(root = process.cwd(), options = {}) {
         if (prefix && entry.kind && expectedKind[prefix] !== entry.kind) diagnostics.push(diagnostic('error', 'ID_KIND_MISMATCH', `${id} requires class .${expectedKind[prefix]}, not .${entry.kind}`, file.relative, line, id));
         if (id.startsWith(config.goals['id-prefix']) && (!classes.includes('goal') || entry.kind !== 'theorem')) diagnostics.push(diagnostic('error', 'MAIN_GOAL_SHAPE', `${id} requires both .theorem and .goal classes`, file.relative, line, id));
         if (!title.trim()) diagnostics.push(diagnostic('error', 'RESULT_NAME_MISSING', `${id} requires a nonempty name attribute`, file.relative, line, id));
-        if (inlineText(entry.blocks).length === 0 && entry.blocks.every((block) => block.t === 'Null')) diagnostics.push(diagnostic('error', 'STATEMENT_MISSING', `${id} requires a nonempty statement body`, file.relative, line, id));
-        const legacyHeaders = entry.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(block.c?.[2] ?? []).toLowerCase()));
+        if (!date) diagnostics.push(diagnostic('error', 'RESULT_DATE_MISSING', `${id} requires an ISO introduction date attribute in YYYY-MM-DD form`, file.relative, line, id));
+        else if (!validIntroductionDate(date)) diagnostics.push(diagnostic('error', 'RESULT_DATE_INVALID', `${id} introduction date must be a real date in YYYY-MM-DD form`, file.relative, line, id));
+        if (statementText.length === 0 && content.blocks.every((block) => block.t === 'Null')) diagnostics.push(diagnostic('error', 'STATEMENT_MISSING', `${id} requires a nonempty statement body`, file.relative, line, id));
+        if (kind === 'definition') {
+          if (content.markers.length > 1) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_MULTIPLE', `${id} has more than one reserved control marker`, file.relative, line, id));
+          if (content.markers.some((marker) => marker.index !== content.marker_index)) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_POSITION', `${id} must put its reserved marker in the last nonempty paragraph of the definition block`, file.relative, line, id));
+        } else if (content.markers.length > 0) diagnostics.push(diagnostic('error', 'RESULT_MARKER_LOCATION', `${id} must put its reserved marker in the first nonempty paragraph of its linked proof`, file.relative, line, id));
+        const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(block.c?.[2] ?? []).toLowerCase()));
         if (legacyHeaders.length) diagnostics.push(diagnostic('error', 'LEGACY_RESULT_SECTIONS', `${id} must use a result body and a separate linked .proof block, not Statement/Uses/Proof headings`, file.relative, line, id));
       }
       files.push({ path: file.relative, imports, results: results.map((result) => result.id), proofs: proofs.map((proof) => proof.target) });
@@ -338,10 +425,14 @@ export async function compileProject(root = process.cwd(), options = {}) {
     const proof = proofs[0];
     if (result) {
       if (proof.file !== result.file) diagnostics.push(diagnostic('error', 'PROOF_DIFFERENT_FILE', `Proof of @${target} must be in the result's source file`, proof.file, proof.line, target));
+      if (result.kind === 'definition' && proof.markers.length > 0) diagnostics.push(diagnostic('error', 'DEFINITION_PROOF_MARKER', `@${target} must put its reserved marker at the end of the definition block, not in its linked proof`, proof.file, proof.line, target));
+      result.marker_valid = result.marker_valid
+        && proof.markers.every((marker) => marker.index === proof.marker_index)
+        && (result.kind !== 'definition' || proof.markers.length === 0);
       result.proof_hash = proof.proof_hash;
       result.proof_present = proof.proof_present;
       result.proof_text = proof.proof_text;
-      result.marker = proof.marker;
+      if (result.kind !== 'definition') result.marker = proof.marker;
       result.dependencies = unique([...result.construction_dependencies, ...proof.dependencies]);
       result.uses = result.dependencies;
       result.proof_file = proof.file;
@@ -410,29 +501,41 @@ export async function compileProject(root = process.cwd(), options = {}) {
 
   const verification = await readJson(path.join(root, AUX, 'verification', 'index.json'), {});
   const evidence = await verificationEvidence(root, verification);
+  const currentExternalBasisHash = externalPolicyHash(await readExternalPolicy(root));
+  const currentCheckerContract = checkerContract(config);
   for (const result of allResults) result.status = verificationStatus(result, verification, evidence);
   const compiledFiles = new Map(files.map((file) => [file.path, file]));
   let statusChanged = true;
   while (statusChanged) {
     statusChanged = false;
-    for (const result of allResults.filter((item) => item.status === 'verified')) {
+    for (const result of allResults.filter((item) => ['verified', 'rejected'].includes(item.status))) {
       const entry = verification[result.id];
       const cache = evidence.get(result.id)?.cache;
-      const dependencyChanged = Object.entries(entry.dependency_snapshot ?? {}).some(([id, identity]) => {
+      const dependencySnapshot = entry.dependency_snapshot ?? {};
+      const dependencyChanged = stableJson(Object.keys(dependencySnapshot).sort(), 0) !== stableJson(result.dependencies, 0)
+        || Object.entries(dependencySnapshot).some(([id, identity]) => {
         const dependency = byId.get(id);
         return !dependency || sha256(`${dependency.statement_hash}:${dependency.proof_hash}:${dependency.status}`) !== identity;
       });
-      const scopeChanged = stableJson(cache?.scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
-      const sourceChanged = cache?.source?.file !== result.file;
-      const checkerChanged = cache?.verification?.backend !== config.verification.backend || cache?.verification?.model !== config.verification.model;
-      if (dependencyChanged || scopeChanged || sourceChanged || checkerChanged) {
+      const scope = result.status === 'verified' ? cache?.scope : entry.scope;
+      const sourceFile = result.status === 'verified' ? cache?.source?.file : entry.source_file;
+      const contract = result.status === 'verified' ? cache?.checker_contract : entry.checker_contract;
+      const scopeChanged = stableJson(scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
+      const sourceChanged = sourceFile !== result.file;
+      const checkerChanged = stableJson(contract ?? {}, 0) !== stableJson(currentCheckerContract, 0);
+      const externalBasisChanged = entry.external_basis_hash !== currentExternalBasisHash;
+      if (dependencyChanged || scopeChanged || sourceChanged || checkerChanged || externalBasisChanged) {
+        const previousStatus = result.status;
         result.status = 'candidate';
-        result.stale_reasons = [
+        const reasons = [
           ...(dependencyChanged ? ['dependency-snapshot-changed'] : []),
           ...(scopeChanged ? ['scope-changed'] : []),
           ...(sourceChanged ? ['source-association-changed'] : []),
-          ...(checkerChanged ? ['checker-contract-changed'] : [])
+          ...(checkerChanged ? ['checker-contract-changed'] : []),
+          ...(externalBasisChanged ? ['external-basis-changed'] : [])
         ];
+        if (previousStatus === 'verified') result.stale_reasons = reasons;
+        else result.rejection_stale_reasons = reasons;
         statusChanged = true;
       }
     }
@@ -440,6 +543,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
   for (const result of allResults) {
     const record = verification[result.id];
     if (result.marker === 'VERIFIED' && result.status !== 'verified') diagnostics.push(diagnostic('error', 'VERIFIED_RECORD_INVALID', `${result.id} has VERIFIED without a matching current record`, result.file, result.proof_line ?? result.line, result.id));
+    if (result.marker === 'REJECTED' && result.status !== 'rejected') diagnostics.push(diagnostic('error', 'REJECTED_RECORD_INVALID', `${result.id} has REJECTED without a matching current failed-check record`, result.file, result.proof_line ?? result.line, result.id));
     if (result.marker === 'REVOKED' && result.status !== 'revoked') diagnostics.push(diagnostic('error', 'REVOKED_RECORD_INVALID', `${result.id} has REVOKED without a matching revocation record and reason`, result.file, result.proof_line ?? result.line, result.id));
     if (record?.status === 'verified' && result.marker !== 'VERIFIED') diagnostics.push(diagnostic('error', 'VERIFIED_MARKER_MISSING', `${result.id} has a verification record but no matching VERIFIED marker`, result.file, result.proof_line ?? result.line, result.id));
     for (const check of result.reference_checks ?? []) {
@@ -461,7 +565,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
   allResults.sort((a, b) => a.id.localeCompare(b.id));
   files.sort((a, b) => a.path.localeCompare(b.path));
   diagnostics.sort((a, b) => `${a.file ?? ''}:${a.line ?? 0}:${a.code}`.localeCompare(`${b.file ?? ''}:${b.line ?? 0}:${b.code}`));
-  const manifest = { schema_version: 2, files, results: allResults, proofs: allProofs.map(({ blocks, ...proof }) => proof) };
+  const manifest = { schema_version: 2, files, results: allResults, proofs: allProofs.map(({ blocks, markers, marker_index, ...proof }) => proof) };
   const missingIds = unique(allResults.flatMap((result) => result.dependencies).filter((id) => !byId.has(id)));
   const graph = {
     schema_version: 2,

@@ -87,10 +87,11 @@ is no proposal file type or required proposal directory. Supporting
 calculations or search notes may accompany the mathematics, but are not
 submitted as proof text.
 
-A partial proof begins with a first nonempty paragraph exactly equal to `OPEN`.
+A partial theorem-like proof begins with a first nonempty paragraph exactly equal to `OPEN`.
 A proof retained after rejection begins with `REJECTED`; accepted and revoked
-proofs begin with `VERIFIED` and `REVOKED`, respectively. These control
-paragraphs are excluded from proof identity and verifier input. A workspace may
+proofs begin with `VERIFIED` and `REVOKED`, respectively. A definition puts the
+corresponding marker in its last nonempty block paragraph. These control
+paragraphs are excluded from construction or proof identity and verifier input. A workspace may
 retain multiple inactive marked proofs for one result, but only one unmarked
 candidate or `VERIFIED` proof may be active. Record-backed markers have no
 authority without their exact matching records.
@@ -277,10 +278,12 @@ Before verification, the utility records identities for:
 
 - the target statement and existing canonical proof; and
 - every dependency statement, proof, and verification status used by the
-  candidate.
+  candidate; and
+- the exact external-basis policy supplied to the verifier.
 
-After a successful verdict, it reinspects the project. If the target or any
-dependency changed, the submission is stale and must not be applied.
+After a successful verdict, it reinspects the project. If the target, any
+dependency, or the external-basis policy changed, the submission is stale and
+must not be applied.
 
 For a current submission, the utility:
 
@@ -350,7 +353,7 @@ candidate with:
 
 ```bash
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" \
-  submit-proof .qmd-prover/workspaces/thm-main-uniform-index/main-proof.qmd
+  submit proof .qmd-prover/workspaces/thm-main-uniform-index/main-proof.qmd
 ```
 
 A rejected JSON response directs the host agent to the stored report. An

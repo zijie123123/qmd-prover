@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
+const controlMarkers = new Set(['OPEN', 'REJECTED', 'VERIFIED', 'REVOKED']);
+
 function parseFence(line) {
   const match = line.match(/^(\s*)(:{3,})\s*(?:\{([^}]*)\})?\s*$/);
   return match ? { indent: match[1].length, length: match[2].length, attrs: match[3] ?? '' } : null;
@@ -55,16 +57,36 @@ function body(source, div) {
   return { bodyStart: div.bodyStart, bodyEnd, text: source.slice(div.bodyStart, bodyEnd).trim() };
 }
 
+function definitionMarkerBody(source, div) {
+  const located = body(source, div);
+  if (!located) return null;
+  const raw = source.slice(located.bodyStart, located.bodyEnd);
+  const normalized = raw.replace(/\r\n/g, '\n');
+  const paragraphs = normalized.split(/\n[ \t]*\n/);
+  const last = paragraphs.findLastIndex((paragraph) => paragraph.trim() !== '');
+  const marker = last >= 0 && controlMarkers.has(paragraphs[last].trim()) ? paragraphs[last].trim() : null;
+  if (!marker) return { ...located, marker: null };
+
+  const trimmed = raw.replace(/[ \t\r\n]+$/, '');
+  const markerLine = new RegExp(`(?:^|\\r?\\n[ \\t]*\\r?\\n)[ \\t]*${marker}[ \\t]*$`);
+  const match = markerLine.exec(trimmed);
+  if (!match) return { ...located, marker: null };
+  const construction = trimmed.slice(0, match.index).trim();
+  return { ...located, text: construction, marker };
+}
+
 export async function readLocatedBlock(file, id) {
   const source = await readFile(file, 'utf8');
   const div = locateDiv(source, id);
   if (!div) return null;
   const proofDiv = locateProof(source, id);
+  const statement = div.attrs.classes.includes('definition') ? definitionMarkerBody(source, div) : body(source, div);
   return {
     source,
     div,
     raw: source.slice(div.start, div.end),
-    statement: body(source, div),
+    statement,
+    marker: statement?.marker ?? null,
     proof: proofDiv ? body(source, proofDiv) : null,
     proofDiv
   };
@@ -87,8 +109,6 @@ export function mergeProof(canonical, candidate) {
   return `${before}\n\n${proofText}\n${after ? `\n${after}` : ''}`;
 }
 
-const controlMarkers = new Set(['OPEN', 'REJECTED', 'VERIFIED', 'REVOKED']);
-
 export function setProofMarker(source, target, marker = null) {
   if (marker != null && !controlMarkers.has(marker)) throw new Error(`Invalid proof marker: ${marker}`);
   const proofDiv = locateProof(source, target);
@@ -103,4 +123,42 @@ export function setProofMarker(source, target, marker = null) {
     ? `${marker}${content ? `${newline}${newline}${content}` : ''}${newline}`
     : `${content}${content ? newline : ''}`;
   return `${source.slice(0, proofBody.bodyStart)}${nextBody}${source.slice(proofBody.bodyEnd)}`;
+}
+
+export function setDefinitionMarker(source, target, marker = null) {
+  if (marker != null && !controlMarkers.has(marker)) throw new Error(`Invalid definition marker: ${marker}`);
+  const id = target.replace(/^@/, '');
+  const div = locateDiv(source, id);
+  if (!div || !div.attrs.classes.includes('definition')) throw new Error(`Definition @${id} was not found`);
+  const definitionBody = body(source, div);
+  const raw = source.slice(definitionBody.bodyStart, definitionBody.bodyEnd);
+  const normalized = raw.replace(/\r\n/g, '\n');
+  const paragraphs = normalized.split(/\n[ \t]*\n/);
+  const nonempty = paragraphs.map((paragraph, index) => ({ paragraph: paragraph.trim(), index }))
+    .filter((entry) => entry.paragraph !== '');
+  const markerParagraphs = nonempty.filter((entry) => controlMarkers.has(entry.paragraph));
+  const last = nonempty.at(-1);
+  const trailingMarker = last && controlMarkers.has(last.paragraph) ? last.paragraph : null;
+  if (markerParagraphs.some((entry) => entry.index !== last?.index)) {
+    throw new Error(`Definition @${id} has a reserved marker outside its last nonempty paragraph`);
+  }
+
+  let construction = raw.replace(/[ \t\r\n]+$/, '');
+  if (trailingMarker) {
+    const trailing = new RegExp(`(?:^|\\r?\\n[ \\t]*\\r?\\n)[ \\t]*${trailingMarker}[ \\t]*$`);
+    const match = trailing.exec(construction);
+    if (!match) throw new Error(`Definition @${id} has a malformed trailing marker`);
+    construction = construction.slice(0, match.index).replace(/[ \t\r\n]+$/, '');
+  }
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const nextBody = marker
+    ? `${construction}${construction.trim() ? `${newline}${newline}` : ''}${marker}${newline}`
+    : `${construction}${construction.trim() ? newline : ''}`;
+  return `${source.slice(0, definitionBody.bodyStart)}${nextBody}${source.slice(definitionBody.bodyEnd)}`;
+}
+
+export function setFactMarker(source, target, kind, marker = null) {
+  return kind === 'definition'
+    ? setDefinitionMarker(source, target, marker)
+    : setProofMarker(source, target, marker);
 }

@@ -21,7 +21,7 @@ inspector's source and mathematical checks.
 
 Normally the user installs the skill and asks an agent in natural language to
 initialize a project. That request authorizes creation of a missing root
-`AGENTS.md` through `init-project` only when no project material is already
+`AGENTS.md` through `init` only when no project material is already
 present. If setup discovers existing files or state, the agent reports them and
 asks the user's intention before adopting, appending, or synchronizing.
 
@@ -57,6 +57,21 @@ These additions choose notation and file placement without changing how proofs
 are protected or verified. By contrast, a local rule saying “agents may edit a
 `thm-main-*` statement” contradicts statement protection and is invalid.
 
+## External mathematical basis
+
+The optional project-owned `.qmd-prover/.external.qmd` is ordinary QMD that
+controls which results may be taken from outside the project. Its three states
+are intentional: absence is unrestricted, a whitespace-only file permits no
+external results, and nonempty content describes the allowed results or
+classes of results. Initialization reports this state but never creates or
+rewrites the file.
+
+The host agent reads the policy before writing mathematics. The independent AI
+verifier receives its exact content with each candidate and judges whether an
+external use is allowed. The proving utilities snapshot the policy and reject
+acceptance if it changes during verification. This policy does not replace
+semantic `@id` dependencies between results defined inside the project.
+
 ## Rule categories
 
 The discipline assigns rules to three enforcement mechanisms. Passing one
@@ -69,7 +84,7 @@ mechanism never implies that the other two have passed.
 | Agent conduct | Host-agent instructions | The agent follows project ownership, goal-workspace, semantic-writing, and acceptance boundaries. |
 
 The first category is checked by code. For the second, the inspector calls the
-Codex SDK only after its programmatic checks pass, using a fresh bounded
+configured external verifier only after its programmatic checks pass, using a fresh bounded
 context independent of the proving agent. The third is not generally decidable
 from the final QMD and has no separate automated checker: the skill instructs
 the AI host agent to follow it, while the user remains able to identify a
@@ -124,7 +139,7 @@ proof is already the dependency declaration; no second `Uses` list is needed.
 
 ### Mathematically judged rules
 
-The inspector's independent AI verifier calls the Codex SDK to judge whether
+The inspector's independent AI verifier calls the configured external verifier to judge whether
 the exact construction or proof establishes its declaration, including:
 
 - whether each inference is valid;
@@ -165,11 +180,6 @@ the argument requires. The skill instructs it to:
   definition, result, proof, example, and progress note in that goal workspace;
 - maintain an explicit dependency-linked development rather than stopping at a
   plan or prose sketch;
-- call an unverified main proof a candidate, never complete or accepted merely
-  from the proving agent's own judgment;
-- state the ambient logic and metatheory when a request asks for development
-  “from foundations,” and do not hide requested foundations behind “standard”
-  or “usual” shorthand;
 - introduce precise intermediate results only when useful;
 - keep proof attempts outside canonical QMD until accepted;
 - respond to every concrete verification gap;
@@ -341,10 +351,11 @@ It remains to show that the chosen witness is an integer.
 :::
 ```
 
-`OPEN` marks an incomplete attempt, and `REJECTED` retains an inactive failed
-attempt. `VERIFIED` and `REVOKED` are valid only when qmd-prover has matching
-protected records. These words are proof-state markers, not additional block
-types, and an agent must never add or restore `VERIFIED` manually.
+`OPEN` marks an incomplete attempt. `REJECTED`, `VERIFIED`, and `REVOKED` are
+valid only when qmd-prover has matching protected records. For theorem-like
+facts these words are proof-state markers, while a definition puts its marker
+at the end of its declaration block. They are not additional block types, and
+an agent must never add or restore `VERIFIED` manually.
 
 Within semantic QMD, the declaration block records the definition or claim,
 while its linked proof block records the justification. A declaration has at

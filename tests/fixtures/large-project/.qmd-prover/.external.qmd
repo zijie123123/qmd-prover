@@ -1,0 +1,10 @@
+# External mathematical basis
+
+The project may use standard classical set theory as ambient metatheory,
+including elementary facts about sets, functions, relations, finite sequences,
+induction and recursion on natural numbers, Zorn's lemma, the well-ordering
+theorem, and transfinite induction and recursion.
+
+No external result from first-order proof theory or model theory may be used.
+In particular, completeness, compactness, model existence, the Henkin theorem,
+and any equivalent form of these results must be developed in the workspace.
