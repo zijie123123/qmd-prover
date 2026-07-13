@@ -2,7 +2,7 @@
 
 Copy the managed block below into the root `AGENTS.md` of every mathematical project that uses qmd-prover. Keep the block unchanged. Add project-specific organization, notation, and writing rules outside the managed block.
 
-<!-- qmd-prover-contract:start version=10 -->
+<!-- qmd-prover-contract:start version=12 -->
 
 ## Contents
 
@@ -18,7 +18,7 @@ Copy the managed block below into the root `AGENTS.md` of every mathematical pro
 The user normally adds the `qmd-prover` skill and asks the agent in natural language to initialize the current project. From the project root, run:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init
 ```
 
 The command reports any existing `AGENTS.md`, QMD sources, Quarto configuration, and `.qmd-prover` state. If it returns `intent-required`, summarize what exists and ask whether the user wants to adopt those files in place, inspect them first, or leave them unchanged. Run `--adopt-existing` only after the user chooses adoption.
@@ -125,9 +125,9 @@ Passing one layer does not imply passing another:
 | Mathematical | Inspector's independent AI verifier | Valid inferences, hypotheses, theorem applicability, complete case coverage, and proof sufficiency. |
 | Agent conduct | This contract | Project ownership, protected goals, workspace-only development, and response to verification findings. |
 
-Every `inspect-*` command first checks staleness and removes stale record-backed markers transitively. It then calls the configured external independent verifier in a fresh bounded context for each mechanically eligible fact whose exact verification key is not already cached. The key covers the construction or statement, proof, dependency identities and states, import scope, external basis, checker contract, and verifier protocol. Acceptance requires a correct verdict with no critical errors or gaps. A cached exact acceptance or rejection must be reused without another verifier call.
+Every `inspect *` command first checks staleness and removes stale record-backed markers transitively. It then calls the configured external independent verifier in a fresh bounded context for each mechanically eligible fact whose exact verification key is not already cached. The key covers the construction or statement, proof, dependency identities and states, import scope, external basis, checker contract, and verifier protocol. Acceptance requires a correct verdict with no critical errors or gaps. A cached exact acceptance or rejection must be reused without another verifier call.
 
-Prefer `inspect-fact` or `inspect-path` while iterating and use `inspect-project` for deliberate project-wide audits. Do not loop on an inspection whose report says the verifier command is unconfigured, missing, failing, or malformed: repair `verification.command` or `QMD_PROVER_VERIFIER`, then rerun the narrowest relevant inspection. Until then every affected fact remains unverified; never compensate by writing a marker manually.
+Prefer `inspect fact` or `inspect path` while iterating and use `inspect project` for deliberate project-wide audits. Do not loop on an inspection whose report says the verifier command is unconfigured, missing, failing, or malformed: repair `verification.command` or `QMD_PROVER_VERIFIER`, then rerun the narrowest relevant inspection. Until then every affected fact remains unverified; never compensate by writing a marker manually.
 
 Apply these rules:
 

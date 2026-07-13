@@ -10,12 +10,12 @@ description: Initialize and inspect semantic-QMD mathematical projects; formulat
 When the user asks to initialize qmd-prover in the current project, run this from the project root:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init-project
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init
 ```
 
-Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, `.qmd-prover` state, and external-policy mode, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init-project --adopt-existing` only after the user chooses adoption.
+Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, `.qmd-prover` state, and external-policy mode, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init --adopt-existing` only after the user chooses adoption.
 
-If the status is `append-required`, explain that existing project policy will be preserved and ask before running `init-project --append-contract`. If it is `sync-required`, report the current and canonical contract versions and ask before running `init-project --sync-contract`. Never use any mutation flag without explicit approval. For `already-initialized`, tell the user setup is already complete, summarize existing project material, and ask whether to continue it, inspect it, or change local policy. A successful result returns `.qmd-prover/workspaces` as `workspace_root`; no QMD scaffold or initial theorem is required.
+If the status is `append-required`, explain that existing project policy will be preserved and ask before running `init --append-contract`. If it is `sync-required`, report the current and canonical contract versions and ask before running `init --sync-contract`. Never use any mutation flag without explicit approval. For `already-initialized`, tell the user setup is already complete, summarize existing project material, and ask whether to continue it, inspect it, or change local policy. A successful result returns `.qmd-prover/workspaces` as `workspace_root`; no QMD scaffold or initial theorem is required.
 
 ## Project contract preflight
 
@@ -64,13 +64,13 @@ For theorem-like facts qmd-prover writes record-backed control markers at the st
 
 ## Status and rendering
 
-- Every `inspect-*` operation runs staleness checking first, then independently verifies mechanically eligible cache misses. Exact cached acceptances and rejections are reused without another verifier call.
-- During iteration, use `inspect-fact` or `inspect-path` for the narrowest useful scope. Use `inspect-project` at project-wide audit or reporting milestones, not after every small edit.
+- Every `inspect *` operation runs staleness checking first, then independently verifies mechanically eligible cache misses. Exact cached acceptances and rejections are reused without another verifier call.
+- During iteration, use `inspect fact` or `inspect path` for the narrowest useful scope. Use `inspect project` at project-wide audit or reporting milestones, not after every small edit.
 - If inspection reports that the verifier command is unconfigured, missing, failing, malformed, or schema-invalid, do not rerun it in a loop and never write `VERIFIED` manually. Explain the infrastructure failure, repair `verification.command` or `QMD_PROVER_VERIFIER`, then rerun the narrowest affected scope.
-- Use standalone `check-staleness` when only invalidation is wanted; it removes stale `VERIFIED` markers transitively and reports each invalidation path without starting mathematical verification.
-- Use `inspect-project` for all goal states and diagnostics.
-- Use `inspect-fact` (or the compatible `inspect-theorem` alias) for a bounded target/dependency/history bundle.
-- Use `inspect-path` for one QMD file or folder, and `dependency frontier`, `dependency search`, or the other dependency queries to work from the latest named graph snapshot.
+- Use standalone `check staleness` when only invalidation is wanted; it removes stale `VERIFIED` markers transitively and reports each invalidation path without starting mathematical verification.
+- Use `inspect project` for all goal states and diagnostics.
+- Use `inspect fact` (or the compatible `inspect theorem` alias) for a bounded target/dependency/history bundle.
+- Use `inspect path` for one QMD file or folder, and `dependency frontier`, `dependency search`, or the other dependency queries to work from the latest named graph snapshot.
 - Use `verification show` for the complete stored report.
 - Use `render` to prepare a generated QMD status page, report data, and a dependency graph; use ordinary `quarto render` for final HTML, PDF, or other output.
 - Use `verification revoke @thm-ID --reason "..."` only with a concrete recorded reason.

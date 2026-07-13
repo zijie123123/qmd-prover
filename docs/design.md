@@ -399,7 +399,7 @@ may add requested local notation, writing, or organization rules outside it.
 An existing or divergent project policy is not overwritten without explicit
 approval.
 
-The agent performs this setup with `init-project`. The command inventories
+The agent performs this setup with `init`. The command inventories
 existing policy, QMD, Quarto configuration, qmd-prover state, and the optional
 `.qmd-prover/.external.qmd` policy before writing. It reports but never creates
 that external-basis file.
@@ -478,27 +478,27 @@ QMD_PROVER_ROOT="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover"
 Initialize the project contract:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init-project
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" init
 ```
 
 Inspect the canonical project and print its dependency information:
 
 ```bash
-node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect-project --print
+node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" inspect project --print
 ```
 
 Inspect one theorem, lemma, or definition:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  inspect-theorem @thm-main-even-square --print
+  inspect theorem @thm-main-even-square --print
 ```
 
 Inspect one file or folder:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  inspect-path foundations/ --print
+  inspect path foundations/ --print
 ```
 
 Inspect every mathematical file in the workspace:
@@ -521,14 +521,14 @@ Check cached identities and invalidate stale verification transitively:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  check-staleness --print
+  check staleness --print
 ```
 
 Submit the selected candidate from workspace QMD:
 
 ```bash
 node "$QMD_PROVER_ROOT/scripts/qmd-prover.mjs" \
-  submit-proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
+  submit proof .qmd-prover/workspaces/thm-main-even-square/main-proof.qmd
 ```
 
 Read a stored verification report:

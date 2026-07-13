@@ -9,27 +9,124 @@ import { revokeVerification, showVerification, submitProof } from './verificatio
 import { initializeWorkspace, inspectWorkspace } from './workspace.mjs';
 
 const usage = `Usage:
-  qmd-prover init-project [--adopt-existing|--append-contract|--sync-contract]
-  qmd-prover inspect-project [--print]
-  qmd-prover inspect-fact @ID [--print]
-  qmd-prover inspect-theorem @ID [--print]
-  qmd-prover inspect-path FILE_OR_FOLDER [--print]
-  qmd-prover dependency dependencies|reverse-dependencies|impact|frontier @ID [--print]
+  qmd-prover help [COMMAND...]
+  qmd-prover init [--adopt-existing|--append-contract|--sync-contract]
+  qmd-prover inspect project [--print]
+  qmd-prover inspect fact @ID [--print]
+  qmd-prover inspect theorem @ID [--print]
+  qmd-prover inspect path FILE_OR_FOLDER [--print]
+  qmd-prover dependency dependencies|impact|frontier @ID [--print]
+  qmd-prover dependency reverse dependencies @ID [--print]
   qmd-prover dependency path @FROM @TO [--print]
-  qmd-prover dependency alternative-paths @FROM @TO [--limit N] [--max-depth N] [--print]
+  qmd-prover dependency alternative paths @FROM @TO [--limit N] [--max-depth N] [--print]
   qmd-prover dependency cycles [--print]
-  qmd-prover dependency findings|unused-imports|unused-exports|isolated|unreachable|ready-for-ai [--print]
+  qmd-prover dependency findings|isolated|unreachable [--print]
+  qmd-prover dependency unused imports|exports [--print]
+  qmd-prover dependency ready for ai [--print]
   qmd-prover dependency reused [--limit N] [--print]
   qmd-prover dependency search QUERY [--kind KIND] [--status STATUS] [--origin ORIGIN] [--path PATH]
       [--used-by @ID|--depends-on @ID|--affected-by @ID|--stale-affected-by @ID]
       [--frontier-of @ID] [--cycle-participant] [--direct] [--print]
-  qmd-prover check-staleness [--print]
+  qmd-prover check staleness [--print]
   qmd-prover workspace init @thm-main-ID
   qmd-prover workspace inspect @thm-main-ID [--print]
-  qmd-prover submit-proof PROPOSAL_FILE [--to CANONICAL_QMD]
+  qmd-prover submit proof PROPOSAL_FILE [--to CANONICAL_QMD]
   qmd-prover verification show SUBMISSION_ID
   qmd-prover verification revoke @thm-ID --reason "..."
   qmd-prover render`;
+
+const help = new Map([
+  ['', usage],
+  ['init', `Usage:\n  qmd-prover init [--adopt-existing|--append-contract|--sync-contract]`],
+  ['inspect', `Usage:\n  qmd-prover inspect project [--print]\n  qmd-prover inspect fact @ID [--print]\n  qmd-prover inspect theorem @ID [--print]\n  qmd-prover inspect path FILE_OR_FOLDER [--print]`],
+  ['inspect project', `Usage:\n  qmd-prover inspect project [--print]`],
+  ['inspect fact', `Usage:\n  qmd-prover inspect fact @ID [--print]`],
+  ['inspect theorem', `Usage:\n  qmd-prover inspect theorem @ID [--print]`],
+  ['inspect path', `Usage:\n  qmd-prover inspect path FILE_OR_FOLDER [--print]`],
+  ['dependency', usage.split('\n').filter((line) => line.includes('qmd-prover dependency')).reduce((text, line) => `${text}\n${line}`, 'Usage:')],
+  ['dependency dependencies', `Usage:\n  qmd-prover dependency dependencies @ID [--print]`],
+  ['dependency reverse', `Usage:\n  qmd-prover dependency reverse dependencies @ID [--print]`],
+  ['dependency reverse dependencies', `Usage:\n  qmd-prover dependency reverse dependencies @ID [--print]`],
+  ['dependency impact', `Usage:\n  qmd-prover dependency impact @ID [--print]`],
+  ['dependency frontier', `Usage:\n  qmd-prover dependency frontier @ID [--print]`],
+  ['dependency path', `Usage:\n  qmd-prover dependency path @FROM @TO [--print]`],
+  ['dependency alternative', `Usage:\n  qmd-prover dependency alternative paths @FROM @TO [--limit N] [--max-depth N] [--print]`],
+  ['dependency alternative paths', `Usage:\n  qmd-prover dependency alternative paths @FROM @TO [--limit N] [--max-depth N] [--print]`],
+  ['dependency cycles', `Usage:\n  qmd-prover dependency cycles [--print]`],
+  ['dependency findings', `Usage:\n  qmd-prover dependency findings [--print]`],
+  ['dependency unused', `Usage:\n  qmd-prover dependency unused imports [--print]\n  qmd-prover dependency unused exports [--print]`],
+  ['dependency unused imports', `Usage:\n  qmd-prover dependency unused imports [--print]`],
+  ['dependency unused exports', `Usage:\n  qmd-prover dependency unused exports [--print]`],
+  ['dependency isolated', `Usage:\n  qmd-prover dependency isolated [--print]`],
+  ['dependency unreachable', `Usage:\n  qmd-prover dependency unreachable [--print]`],
+  ['dependency ready', `Usage:\n  qmd-prover dependency ready for ai [--print]`],
+  ['dependency ready for', `Usage:\n  qmd-prover dependency ready for ai [--print]`],
+  ['dependency ready for ai', `Usage:\n  qmd-prover dependency ready for ai [--print]`],
+  ['dependency reused', `Usage:\n  qmd-prover dependency reused [--limit N] [--print]`],
+  ['dependency search', usage.slice(usage.indexOf('  qmd-prover dependency search'), usage.indexOf('  qmd-prover check staleness')).trimEnd().replace(/^/, 'Usage:\n')],
+  ['check', `Usage:\n  qmd-prover check staleness [--print]`],
+  ['check staleness', `Usage:\n  qmd-prover check staleness [--print]`],
+  ['workspace', `Usage:\n  qmd-prover workspace init @thm-main-ID\n  qmd-prover workspace inspect @thm-main-ID [--print]`],
+  ['workspace init', `Usage:\n  qmd-prover workspace init @thm-main-ID`],
+  ['workspace inspect', `Usage:\n  qmd-prover workspace inspect @thm-main-ID [--print]`],
+  ['submit', `Usage:\n  qmd-prover submit proof PROPOSAL_FILE [--to CANONICAL_QMD]`],
+  ['submit proof', `Usage:\n  qmd-prover submit proof PROPOSAL_FILE [--to CANONICAL_QMD]`],
+  ['verification', `Usage:\n  qmd-prover verification show SUBMISSION_ID\n  qmd-prover verification revoke @thm-ID --reason "..."`],
+  ['verification show', `Usage:\n  qmd-prover verification show SUBMISSION_ID`],
+  ['verification revoke', `Usage:\n  qmd-prover verification revoke @thm-ID --reason "..."`],
+  ['render', `Usage:\n  qmd-prover render`]
+]);
+
+const helpGroups = new Set([
+  'inspect', 'dependency', 'dependency reverse', 'dependency alternative',
+  'dependency unused', 'dependency ready', 'dependency ready for', 'check',
+  'workspace', 'submit', 'verification'
+]);
+
+const helpPositionals = new Set([
+  'inspect fact', 'inspect theorem', 'inspect path',
+  'dependency dependencies', 'dependency reverse dependencies', 'dependency impact',
+  'dependency frontier', 'dependency path', 'dependency alternative paths', 'dependency search',
+  'workspace init', 'workspace inspect', 'submit proof', 'verification show', 'verification revoke'
+]);
+
+function emitHelp(args) {
+  let pathArgs;
+  const direct = args[0] === 'help';
+  if (direct) pathArgs = args.slice(1);
+  else {
+    const index = args.findIndex((item) => item === 'help' || item === '--help' || item === '-h');
+    if (index < 0) return false;
+    pathArgs = args.slice(0, index);
+  }
+  let selected = '';
+  for (let length = 1; length <= pathArgs.length; length += 1) {
+    const candidate = pathArgs.slice(0, length).join(' ');
+    if (help.has(candidate)) selected = candidate;
+  }
+  const requested = pathArgs.join(' ');
+  const extra = pathArgs.slice(selected ? selected.split(' ').length : 0);
+  const hasUnexpectedPositional = extra.some((item) => !item.startsWith('--')) && !helpPositionals.has(selected);
+  if (pathArgs.length && (!selected || (direct && !help.has(requested)) || (helpGroups.has(selected) && requested !== selected) || hasUnexpectedPositional)) {
+    throw new Error(`Unknown command: ${pathArgs.join(' ')}\n${usage}`);
+  }
+  process.stdout.write(`${help.get(selected)}\n`);
+  return true;
+}
+
+function dependencyOperation(args) {
+  const compound = [
+    [['reverse', 'dependencies'], 'reverse-dependencies'],
+    [['alternative', 'paths'], 'alternative-paths'],
+    [['unused', 'imports'], 'unused-imports'],
+    [['unused', 'exports'], 'unused-exports'],
+    [['ready', 'for', 'ai'], 'ready-for-ai']
+  ];
+  for (const [tokens, operation] of compound) {
+    if (tokens.every((token, index) => args[index] === token)) return { operation, tail: args.slice(tokens.length) };
+  }
+  return { operation: args[0], tail: args.slice(1), retired: args[0]?.includes('-') === true };
+}
 
 function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
 
@@ -85,11 +182,12 @@ async function history(root, id) {
 export async function main(args, { root = process.cwd(), pandoc = process.env.QMD_PROVER_PANDOC } = {}) {
   const [command, ...rest] = args;
   const options = pandoc ? { pandoc } : {};
-  if (!command || command === '--help' || command === '-h') { process.stdout.write(`${usage}\n`); return; }
-  if (command === 'init-project') {
+  if (!command) { process.stdout.write(`${usage}\n`); return; }
+  if (emitHelp(args)) return;
+  if (command === 'init') {
     const allowed = new Set(['--adopt-existing', '--append-contract', '--sync-contract']);
     if (rest.some((item) => !allowed.has(item)) || new Set(rest).size !== rest.length || rest.length > 1) {
-      throw new Error('init-project accepts only one of --adopt-existing, --append-contract, or --sync-contract');
+      throw new Error('init accepts only one of --adopt-existing, --append-contract, or --sync-contract');
     }
     emit(await initializeProject(root, {
       adoptExisting: rest.includes('--adopt-existing'),
@@ -98,30 +196,34 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
     }), false);
     return;
   }
-  if (command === 'inspect-project') {
+  if (command === 'inspect') {
     const parsed = presentation(rest);
-    if (parsed.args.length) throw new Error('inspect-project accepts only --print');
-    emit(await inspectProject(root, options), parsed.print);
-    return;
-  }
-  if (command === 'inspect-theorem' || command === 'inspect-fact') {
-    const parsed = presentation(rest);
-    if (parsed.args.length !== 1) throw new Error(`${command} requires one semantic ID and optional --print`);
-    const result = await inspectFact(root, parsed.args[0], options);
-    result.verification_history = await history(root, result.fact.id);
-    emit(result, parsed.print);
-    return;
-  }
-  if (command === 'inspect-path') {
-    const parsed = presentation(rest);
-    if (parsed.args.length !== 1) throw new Error('inspect-path requires one QMD file or folder and optional --print');
-    emit(await inspectPath(root, parsed.args[0], options), parsed.print);
-    return;
+    const [subcommand, ...tail] = parsed.args;
+    if (subcommand === 'project') {
+      if (tail.length) throw new Error('inspect project accepts only --print');
+      emit(await inspectProject(root, options), parsed.print);
+      return;
+    }
+    if (subcommand === 'theorem' || subcommand === 'fact') {
+      if (tail.length !== 1) throw new Error(`inspect ${subcommand} requires one semantic ID and optional --print`);
+      const result = await inspectFact(root, tail[0], options);
+      result.verification_history = await history(root, result.fact.id);
+      emit(result, parsed.print);
+      return;
+    }
+    if (subcommand === 'path') {
+      if (tail.length !== 1) throw new Error('inspect path requires one QMD file or folder and optional --print');
+      emit(await inspectPath(root, tail[0], options), parsed.print);
+      return;
+    }
+    throw new Error('inspect requires project, fact, theorem, or path');
   }
   if (command === 'dependency') {
     const parsed = presentation(rest);
-    const [subcommand, ...tail] = parsed.args;
+    const { operation: subcommand, tail, retired } = dependencyOperation(parsed.args);
     if (!subcommand) throw new Error('dependency requires an operation');
+    const operations = new Set(['dependencies', 'reverse-dependencies', 'impact', 'frontier', 'path', 'alternative-paths', 'cycles', 'findings', 'unused-imports', 'unused-exports', 'isolated', 'unreachable', 'ready-for-ai', 'reused', 'search']);
+    if (retired || !operations.has(subcommand)) throw new Error(`Unknown dependency command: ${parsed.args.join(' ')}`);
     if (subcommand === 'search') {
       const extracted = optionValues(
         tail,
@@ -150,7 +252,7 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
     }
     if (subcommand === 'alternative-paths') {
       const extracted = optionValues(tail, new Set(['limit', 'max-depth']));
-      if (extracted.positionals.length !== 2) throw new Error('dependency alternative-paths requires two semantic IDs');
+      if (extracted.positionals.length !== 2) throw new Error('dependency alternative paths requires two semantic IDs');
       emit(await analyzeDependencies(root, subcommand, extracted.positionals, {
         ...options,
         maxPaths: extracted.options.limit,
@@ -164,23 +266,26 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
       emit(await analyzeDependencies(root, subcommand, [], { ...options, limit: extracted.options.limit }), parsed.print);
       return;
     }
-    const noArgument = new Set(['cycles', 'findings', 'unused-imports', 'unused-exports', 'isolated', 'unreachable', 'ready', 'ready-for-ai']);
+    const noArgument = new Set(['cycles', 'findings', 'unused-imports', 'unused-exports', 'isolated', 'unreachable', 'ready-for-ai']);
     const required = noArgument.has(subcommand) ? 0 : subcommand === 'path' ? 2 : 1;
-    if (tail.length !== required) throw new Error(`dependency ${subcommand} requires ${required} semantic ID${required === 1 ? '' : 's'}`);
+    if (tail.length !== required) throw new Error(`dependency ${subcommand.replaceAll('-', ' ')} requires ${required} semantic ID${required === 1 ? '' : 's'}`);
     emit(await analyzeDependencies(root, subcommand, tail, options), parsed.print);
     return;
   }
-  if (command === 'check-staleness') {
+  if (command === 'check') {
     const parsed = presentation(rest);
-    if (parsed.args.length) throw new Error('check-staleness accepts only --print');
+    const [subcommand, ...tail] = parsed.args;
+    if (subcommand !== 'staleness' || tail.length) throw new Error('check staleness accepts only --print');
     emit(await checkStaleness(root, options), parsed.print);
     return;
   }
-  if (command === 'submit-proof') {
-    const destinationIndex = rest.indexOf('--to');
-    const proposal = rest[0];
-    const destination = destinationIndex >= 0 ? rest[destinationIndex + 1] : undefined;
-    if (!proposal || (rest.length !== 1 && !(rest.length === 3 && destinationIndex === 1 && destination))) throw new Error('submit-proof requires one proposal QMD file and optional --to CANONICAL_QMD');
+  if (command === 'submit') {
+    const [subcommand, ...tail] = rest;
+    if (subcommand !== 'proof') throw new Error('submit requires the proof subcommand');
+    const destinationIndex = tail.indexOf('--to');
+    const proposal = tail[0];
+    const destination = destinationIndex >= 0 ? tail[destinationIndex + 1] : undefined;
+    if (!proposal || (tail.length !== 1 && !(tail.length === 3 && destinationIndex === 1 && destination))) throw new Error('submit proof requires one proposal QMD file and optional --to CANONICAL_QMD');
     output(await submitProof(root, proposal, { ...options, destination }));
     return;
   }
@@ -208,6 +313,10 @@ export async function main(args, { root = process.cwd(), pandoc = process.env.QM
     }
     throw new Error('Invalid verification command');
   }
-  if (command === 'render') { output(await renderProject(root, options)); return; }
+  if (command === 'render') {
+    if (rest.length) throw new Error('render accepts no arguments');
+    output(await renderProject(root, options));
+    return;
+  }
   throw new Error(`Unknown command: ${command}\n${usage}`);
 }

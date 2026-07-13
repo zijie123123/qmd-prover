@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "inspect": "node skills/qmd-prover/scripts/qmd-prover.mjs inspect-project",
+    "inspect": "node skills/qmd-prover/scripts/qmd-prover.mjs inspect project",
     "install:skill": "node tooling/install-skill.mjs"
   },
   "engines": {

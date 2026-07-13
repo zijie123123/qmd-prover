@@ -70,7 +70,7 @@ function hasMathematicalProject(existing) {
 
 export async function initializeProject(root, { adoptExisting = false, appendContract = false, syncContract = false } = {}) {
   if ([adoptExisting, appendContract, syncContract].filter(Boolean).length > 1) {
-    throw new Error('init-project accepts only one of --adopt-existing, --append-contract, or --sync-contract');
+    throw new Error('init accepts only one of --adopt-existing, --append-contract, or --sync-contract');
   }
   const canonical = await canonicalContract();
   const policyFile = path.join(root, 'AGENTS.md');
@@ -81,7 +81,7 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
     return result(root, canonical.version, 'intent-required', {
       existing,
       message: 'Existing mathematical project files were found. Ask whether to adopt them in place, inspect them first, or leave them unchanged.',
-      suggested_command: 'qmd-prover init-project --adopt-existing'
+      suggested_command: 'qmd-prover init --adopt-existing'
     });
   }
 
@@ -112,7 +112,7 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
         return result(root, canonical.version, 'append-required', {
           existing,
           message: 'AGENTS.md already exists without a qmd-prover contract.',
-          suggested_command: 'qmd-prover init-project --append-contract'
+          suggested_command: 'qmd-prover init --append-contract'
         });
       }
       const separator = source.endsWith('\n') ? '\n' : '\n\n';
@@ -128,7 +128,7 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
         existing,
         current_contract_version: currentVersion,
         message: 'AGENTS.md contains a different qmd-prover managed block.',
-        suggested_command: 'qmd-prover init-project --sync-contract'
+        suggested_command: 'qmd-prover init --sync-contract'
       });
     }
 

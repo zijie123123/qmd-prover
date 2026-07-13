@@ -21,7 +21,7 @@ inspector's source and mathematical checks.
 
 Normally the user installs the skill and asks an agent in natural language to
 initialize a project. That request authorizes creation of a missing root
-`AGENTS.md` through `init-project` only when no project material is already
+`AGENTS.md` through `init` only when no project material is already
 present. If setup discovers existing files or state, the agent reports them and
 asks the user's intention before adopting, appending, or synchronizing.
 

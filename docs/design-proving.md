@@ -353,7 +353,7 @@ candidate with:
 
 ```bash
 node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" \
-  submit-proof .qmd-prover/workspaces/thm-main-uniform-index/main-proof.qmd
+  submit proof .qmd-prover/workspaces/thm-main-uniform-index/main-proof.qmd
 ```
 
 A rejected JSON response directs the host agent to the stored report. An
