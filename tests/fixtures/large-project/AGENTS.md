@@ -27,6 +27,10 @@ Use @def-example at the point where the definition is needed.
 
 The `of` attribute must name exactly one declaration. Cite every logical dependency with `@id` at its point of use in a definition construction or proof. Do not add a separate dependency list. Ordinary exposition, examples, computations, figures, and bibliographic citations remain ordinary QMD content.
 
+## External mathematical basis
+
+Read `.qmd-prover/.external.qmd` before writing mathematics. If it is absent, external results are unrestricted; if it is whitespace-only, no external mathematical results may be used; otherwise use only the external results described there. Do not change this project-owned policy unless the user asks.
+
 ## Proof-development workspace
 
 When the user asks to prove a `thm-main-*` goal, create or resume

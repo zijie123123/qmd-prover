@@ -1,4 +1,7 @@
 .qmd-prover/
+!tests/fixtures/large-project/.qmd-prover/
+tests/fixtures/large-project/.qmd-prover/*
+!tests/fixtures/large-project/.qmd-prover/.external.qmd
 node_modules/
 *.log
 .DS_Store
