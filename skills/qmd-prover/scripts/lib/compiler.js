@@ -6,9 +6,10 @@ import { loadConfig } from './config.js';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
 import { accepted, checkerContract } from './verifier.js';
-import { CONTROL_MARKER_SET, KIND_BY_PREFIX, RESULT_KINDS, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN } from './constants.js';
+import { CONTROL_MARKER_SET, KIND_BY_PREFIX, RESULT_KINDS, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN, isControlMarker } from './constants.js';
 import { errorMessage, hasErrorCode } from './errors.js';
 import { uniqueSorted } from './collections.js';
+import { asArray, asRecord, asString, isRecord } from './guards.js';
 function diagnostic(severity, code, message, file, line, id) {
     return { severity, code, message, ...(file ? { file } : {}), ...(line ? { line } : {}), ...(id ? { id } : {}) };
 }
@@ -76,23 +77,30 @@ async function discover(directory, root, exclusions, output = []) {
     }
     return output;
 }
-function attrs(tuple = ['', [], []]) {
-    return { id: tuple[0] ?? '', classes: tuple[1] ?? [], values: Object.fromEntries(tuple[2] ?? []) };
+function attrs(value = ['', [], []]) {
+    const tuple = asArray(value);
+    const pairs = asArray(tuple[2]).filter((item) => Array.isArray(item) && item.length >= 2);
+    return {
+        id: asString(tuple[0]),
+        classes: asArray(tuple[1]).map(String),
+        values: Object.fromEntries(pairs.map(([key, item]) => [String(key), item]))
+    };
 }
 function metaValue(value) {
     if (!value || typeof value !== 'object')
         return value;
-    if (value.t === 'MetaMap')
-        return Object.fromEntries(Object.entries(value.c ?? {}).map(([key, item]) => [key, metaValue(item)]));
-    if (value.t === 'MetaList')
-        return (value.c ?? []).map(metaValue);
-    if (value.t === 'MetaString' || value.t === 'MetaBool')
-        return value.c;
-    if (value.t === 'MetaInlines')
-        return inlineText(value.c ?? []);
-    if (value.t === 'MetaBlocks')
-        return inlineText(value.c ?? []);
-    return value.c ?? value;
+    const record = asRecord(value);
+    if (record.t === 'MetaMap')
+        return Object.fromEntries(Object.entries(asRecord(record.c)).map(([key, item]) => [key, metaValue(item)]));
+    if (record.t === 'MetaList')
+        return asArray(record.c).map(metaValue);
+    if (record.t === 'MetaString' || record.t === 'MetaBool')
+        return record.c;
+    if (record.t === 'MetaInlines')
+        return inlineText(record.c);
+    if (record.t === 'MetaBlocks')
+        return inlineText(record.c);
+    return record.c ?? value;
 }
 function importsFromMeta(ast, file, diagnostics) {
     const metadata = metaValue(ast.meta?.['qmd-prover']);
@@ -102,7 +110,7 @@ function importsFromMeta(ast, file, diagnostics) {
         diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'qmd-prover metadata must be a map', file));
         return [];
     }
-    const declarations = metadata.imports ?? [];
+    const declarations = asRecord(metadata).imports ?? [];
     if (!Array.isArray(declarations)) {
         diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'qmd-prover.imports must be a list', file));
         return [];
@@ -112,8 +120,9 @@ function importsFromMeta(ast, file, diagnostics) {
             diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'Each qmd-prover import must be a map', file));
             return { from: '', use: [] };
         }
-        const from = typeof entry.from === 'string' ? entry.from : '';
-        const use = Array.isArray(entry.use) ? entry.use.map(String).map(cleanId) : [];
+        const record = asRecord(entry);
+        const from = typeof record.from === 'string' ? record.from : '';
+        const use = Array.isArray(record.use) ? record.use.map(String).map(cleanId) : [];
         if (!from)
             diagnostics.push(diagnostic('error', 'IMPORT_FROM_MISSING', 'Import metadata requires a from path', file));
         if (use.length === 0)
@@ -126,8 +135,9 @@ function semanticDivs(ast) {
     walk(ast.blocks ?? [], (node) => {
         if (node.t !== 'Div')
             return;
-        const attribute = attrs(node.c?.[0]);
-        const blocks = node.c?.[1] ?? [];
+        const content = asArray(node.c);
+        const attribute = attrs(content[0]);
+        const blocks = asArray(content[1]).filter((block) => isRecord(block) && typeof block.t === 'string');
         const kind = RESULT_KINDS.find((candidate) => attribute.classes.includes(candidate));
         if (attribute.classes.includes('proof'))
             entries.push({ type: 'proof', attribute, blocks });
@@ -137,15 +147,15 @@ function semanticDivs(ast) {
     return entries;
 }
 function markerParagraph(block) {
-    if (!['Para', 'Plain'].includes(block?.t))
+    if (!block || !['Para', 'Plain'].includes(block.t))
         return null;
     const marker = inlineText(block.c ?? []);
-    return CONTROL_MARKER_SET.has(marker) ? marker : null;
+    return isControlMarker(marker) ? marker : null;
 }
 function proofContent(blocks) {
     const index = blocks.findIndex((block) => block.t !== 'Null');
     const markers = blocks.map((block, blockIndex) => ({ marker: markerParagraph(block), index: blockIndex }))
-        .filter((entry) => entry.marker);
+        .filter((entry) => entry.marker !== null);
     const marker = index >= 0 ? markerParagraph(blocks[index]) : null;
     return {
         marker,
@@ -158,7 +168,7 @@ function definitionContent(blocks) {
     const nonempty = blocks.map((block, index) => ({ block, index })).filter(({ block }) => block.t !== 'Null');
     const last = nonempty.at(-1)?.index ?? -1;
     const markers = blocks.map((block, index) => ({ marker: markerParagraph(block), index }))
-        .filter((entry) => entry.marker);
+        .filter((entry) => entry.marker !== null);
     const marker = last >= 0 ? markerParagraph(blocks[last]) : null;
     return {
         marker,
@@ -227,7 +237,7 @@ function verificationStatus(result, verification, evidence) {
         && record.proof_hash === result.proof_hash;
     if (record?.status === 'stale')
         return 'stale';
-    if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && record.reason?.trim())
+    if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && typeof record.reason === 'string' && record.reason.trim())
         return 'revoked';
     if (marker === 'VERIFIED' && record?.status === 'verified' && identityMatches && evidence.get(result.id)?.valid)
         return 'verified';
@@ -252,7 +262,7 @@ async function verificationEvidence(root, verification) {
         return absolute.startsWith(`${verificationRoot}${path.sep}`) ? absolute : null;
     }
     await Promise.all(Object.entries(verification).map(async ([id, entry]) => {
-        if (!['verified', 'rejected'].includes(entry.status))
+        if (typeof entry.status !== 'string' || !['verified', 'rejected'].includes(entry.status))
             return;
         let record = null;
         let cache = null;
@@ -268,7 +278,11 @@ async function verificationEvidence(root, verification) {
                 cache = await readJson(cacheFile);
         }
         catch { /* Invalid evidence fails closed below. */ }
-        const sharedValid = record?.submission_id === entry.submission_id
+        if (!record) {
+            evidence.set(id, { valid: false, record: null, cache });
+            return;
+        }
+        const sharedValid = record.submission_id === entry.submission_id
             && record.target === id
             && record.statement_hash === entry.statement_hash
             && record.title_hash === entry.title_hash
@@ -277,9 +291,9 @@ async function verificationEvidence(root, verification) {
             && record.external_basis_hash === entry.external_basis_hash
             && stableJson(record.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
             && stableJson(record.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
-            && record.report
+            && isRecord(record.report)
             && record.accepted === accepted(record.report);
-        const valid = entry.status === 'verified'
+        const valid = Boolean(entry.status === 'verified'
             ? sharedValid
                 && record.accepted === true
                 && record.proof_hash === entry.proof_hash
@@ -294,7 +308,7 @@ async function verificationEvidence(root, verification) {
                 && stableJson(cache.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
             : sharedValid
                 && record.accepted === false
-                && record.proof_hash === entry.rejected_proof_hash;
+                && record.proof_hash === entry.rejected_proof_hash);
         evidence.set(id, { valid, record, cache });
     }));
     return evidence;
@@ -376,7 +390,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
                     id, file: file.relative, line, kind, classes: [...classes].sort(), title, date,
                     origin: id.startsWith(config.goals['id-prefix']) ? 'user' : 'agent',
                     status: 'candidate',
-                    export: values.export ?? null,
+                    export: values.export == null ? null : String(values.export),
                     statement_text: statementText,
                     statement_hash: statementHash,
                     title_hash: sha256(title),
@@ -421,7 +435,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
                 }
                 else if (content.markers.length > 0)
                     diagnostics.push(diagnostic('error', 'RESULT_MARKER_LOCATION', `${id} must put its reserved marker in the first nonempty paragraph of its linked proof`, file.relative, line, id));
-                const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(block.c?.[2] ?? []).toLowerCase()));
+                const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(asArray(block.c)[2]).toLowerCase()));
                 if (legacyHeaders.length)
                     diagnostics.push(diagnostic('error', 'LEGACY_RESULT_SECTIONS', `${id} must use a result body and a separate linked .proof block, not Statement/Uses/Proof headings`, file.relative, line, id));
             }
@@ -437,12 +451,12 @@ export async function compileProject(root = process.cwd(), options = {}) {
     for (const result of allResults) {
         idCounts.set(result.id, (idCounts.get(result.id) ?? 0) + 1);
         if (byId.has(result.id))
-            diagnostics.push(diagnostic('error', 'DUPLICATE_ID', `${result.id} is also defined in ${byId.get(result.id).file}`, result.file, result.line, result.id));
+            diagnostics.push(diagnostic('error', 'DUPLICATE_ID', `${result.id} is also defined in ${byId.get(result.id)?.file}`, result.file, result.line, result.id));
         else
             byId.set(result.id, result);
         if (result.export) {
             if (byExport.has(result.export))
-                diagnostics.push(diagnostic('error', 'DUPLICATE_EXPORT', `Export name ${result.export} is also used by @${byExport.get(result.export).id}`, result.file, result.line, result.id));
+                diagnostics.push(diagnostic('error', 'DUPLICATE_EXPORT', `Export name ${result.export} is also used by @${byExport.get(result.export)?.id}`, result.file, result.line, result.id));
             else
                 byExport.set(result.export, result);
         }
@@ -454,7 +468,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
             continue;
         if (!proofsByTarget.has(proof.target))
             proofsByTarget.set(proof.target, []);
-        proofsByTarget.get(proof.target).push(proof);
+        proofsByTarget.get(proof.target)?.push(proof);
     }
     for (const [target, proofs] of proofsByTarget) {
         const result = byId.get(target);
@@ -469,6 +483,8 @@ export async function compileProject(root = process.cwd(), options = {}) {
             continue;
         }
         const proof = proofs[0];
+        if (!proof)
+            continue;
         if (result) {
             if (proof.file !== result.file)
                 diagnostics.push(diagnostic('error', 'PROOF_DIFFERENT_FILE', `Proof of @${target} must be in the result's source file`, proof.file, proof.line, target));
@@ -500,7 +516,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
                 diagnostics.push(diagnostic('error', 'IMPORT_FILE_MISSING', `Imported file does not exist: ${declaration.from}`, file.path));
                 continue;
             }
-            importAdjacency.get(file.path).push(importedPath);
+            importAdjacency.get(file.path)?.push(importedPath);
             for (const id of declaration.use) {
                 const target = byId.get(id);
                 if (!target || target.file !== importedPath)
@@ -569,16 +585,16 @@ export async function compileProject(root = process.cwd(), options = {}) {
     while (statusChanged) {
         statusChanged = false;
         for (const result of allResults.filter((item) => ['verified', 'rejected'].includes(item.status))) {
-            const entry = verification[result.id];
+            const entry = verification[result.id] ?? {};
             const cache = evidence.get(result.id)?.cache;
-            const dependencySnapshot = entry.dependency_snapshot ?? {};
+            const dependencySnapshot = asRecord(entry.dependency_snapshot);
             const dependencyChanged = stableJson(Object.keys(dependencySnapshot).sort(), 0) !== stableJson(result.dependencies, 0)
                 || Object.entries(dependencySnapshot).some(([id, identity]) => {
                     const dependency = byId.get(id);
                     return !dependency || sha256(`${dependency.statement_hash}:${dependency.proof_hash}:${dependency.status}`) !== identity;
                 });
             const scope = result.status === 'verified' ? cache?.scope : entry.scope;
-            const sourceFile = result.status === 'verified' ? cache?.source?.file : entry.source_file;
+            const sourceFile = result.status === 'verified' ? asRecord(cache?.source).file : entry.source_file;
             const contract = result.status === 'verified' ? cache?.checker_contract : entry.checker_contract;
             const scopeChanged = stableJson(scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
             const sourceChanged = sourceFile !== result.file;
@@ -618,7 +634,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
             check.cycle = cycleEdges.has(`${result.id}\0${check.dependency}`) ? 'fail' : 'pass';
             check.ai_sufficiency = result.status === 'verified' ? 'pass' : 'not-run';
             if (check.existence === 'pass' && check.scope === 'pass' && check.cycle === 'pass' && check.status === 'fail') {
-                diagnostics.push(diagnostic('error', 'DEPENDENCY_STATUS_INSUFFICIENT', `${result.id} cites @${check.dependency}, whose current status is ${premise.status}`, result.file, result.proof_line ?? result.line, result.id));
+                diagnostics.push(diagnostic('error', 'DEPENDENCY_STATUS_INSUFFICIENT', `${result.id} cites @${check.dependency}, whose current status is ${premise?.status ?? 'missing'}`, result.file, result.proof_line ?? result.line, result.id));
             }
         }
         if (result.status === 'verified') {

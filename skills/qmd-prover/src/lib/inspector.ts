@@ -5,15 +5,48 @@ import { AUX, cleanId, readJson, relativePosix } from './files.js';
 import { inspectCanonicalScope } from './inspection-verification.js';
 import { readLocatedBlock } from './source.js';
 import { indexBy } from './collections.js';
-import type { Compilation, DependencyGraph, Diagnostic, JsonObject, OperationResult, RuntimeOptions, SemanticResult } from './types.js';
+import { asRecord } from './guards.js';
+import type {
+  AiCheck, Compilation, DependencyGraph, Diagnostic, GraphNode, Manifest, OperationResult,
+  RuntimeOptions, SemanticResult, StalenessReport, InspectionVerificationSummary, GraphFindings,
+  InspectProjectResult, InspectFactResult, InspectPathResult, DependencyAnalysisResult
+} from './types.js';
 
 const unusableStatuses = new Set([
   'open', 'candidate', 'rejected', 'revoked', 'stale', 'missing',
   'workspace-open', 'workspace-candidate', 'workspace-rejected', 'workspace-revoked', 'workspace-stale'
 ]);
 
-function byId(items: any[]): Map<string, any> {
+function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return indexBy(items, (item) => item.id);
+}
+
+interface ProjectSnapshot {
+  snapshot_id?: string;
+  manifest: Manifest;
+  graph: DependencyGraph;
+  diagnostics: Diagnostic[];
+}
+
+interface PathSearchResult {
+  paths: string[][];
+  truncated: boolean;
+  explored: number;
+  limits: { max_paths: number; max_depth: number; max_explored: number };
+}
+
+interface FactCheck {
+  id: string;
+  status: string;
+  programmatic: { status: 'pass' | 'fail'; references: NonNullable<SemanticResult['reference_checks']> };
+  ai: AiCheck;
+  diagnostics: Diagnostic[];
+}
+
+interface FindingSelection {
+  node(node: GraphNode): boolean;
+  file(file: string): boolean;
+  result(result: SemanticResult): boolean;
 }
 
 function adjacency(graph: DependencyGraph, reverse = false): Map<string, string[]> {
@@ -22,7 +55,7 @@ function adjacency(graph: DependencyGraph, reverse = false): Map<string, string[
     const from = reverse ? edge.to : edge.from;
     const to = reverse ? edge.from : edge.to;
     if (!output.has(from)) output.set(from, []);
-    output.get(from).push(to);
+    output.get(from)?.push(to);
   }
   for (const values of output.values()) values.sort();
   return output;
@@ -34,6 +67,7 @@ function traverse(graph: DependencyGraph, start: string, reverse = false): Set<s
   const queue = [...(links.get(start) ?? [])];
   while (queue.length) {
     const current = queue.shift();
+    if (!current) continue;
     if (seen.has(current)) continue;
     seen.add(current);
     queue.push(...(links.get(current) ?? []));
@@ -48,7 +82,7 @@ function boundedInteger(value: unknown, fallback: number, { name, min, max }: { 
   return parsed;
 }
 
-function allSimplePaths(graph: DependencyGraph, start: string, goal: string, options: RuntimeOptions = {}): JsonObject {
+function allSimplePaths(graph: DependencyGraph, start: string, goal: string, options: RuntimeOptions = {}): PathSearchResult {
   const maxPaths = boundedInteger(options.maxPaths, 5, { name: 'max paths', min: 1, max: 25 });
   const maxDepth = boundedInteger(options.maxDepth, Math.min(Math.max(graph.nodes.length - 1, 1), 64), { name: 'max depth', min: 1, max: 100 });
   const maxExplored = boundedInteger(options.maxExplored, 10000, { name: 'max explored paths', min: 1, max: 100000 });
@@ -61,9 +95,10 @@ function allSimplePaths(graph: DependencyGraph, start: string, goal: string, opt
   let generationCapped = false;
   while (queue.length && paths.length < maxPaths && explored < maxExplored) {
     const current = queue.shift();
+    if (!current) continue;
     explored += 1;
     if (current.length - 1 >= maxDepth) continue;
-    for (const next of links.get(current.at(-1)) ?? []) {
+    for (const next of links.get(current[current.length - 1] ?? '') ?? []) {
       if (current.includes(next)) continue;
       const candidate = [...current, next];
       if (next === goal) paths.push(candidate);
@@ -89,7 +124,8 @@ function shortestPath(graph: DependencyGraph, start: string, goal: string, rever
   const seen = new Set<string>([start]);
   while (queue.length) {
     const current = queue.shift();
-    for (const next of links.get(current.at(-1)) ?? []) {
+    if (!current) continue;
+    for (const next of links.get(current[current.length - 1] ?? '') ?? []) {
       if (seen.has(next)) continue;
       const candidate = [...current, next];
       if (next === goal) return candidate;
@@ -111,16 +147,18 @@ function subgraph(graph: DependencyGraph, ids: Iterable<string>): DependencyGrap
   };
 }
 
-function aiCheck(result: SemanticResult, inspected: JsonObject | null = null): JsonObject {
+function aiCheck(result: SemanticResult, inspected: AiCheck | null = null): AiCheck {
   if (inspected) return inspected;
   if (result.status === 'verified') return { status: 'pass', source: 'verification-record' };
   if (result.status === 'rejected') return { status: 'fail', source: 'verification-record' };
   return { status: 'not-run', reason: 'The fact was not eligible for independent verification.' };
 }
 
-function factCheck(result: SemanticResult, diagnostics: Diagnostic[], inspected: JsonObject | null = null): JsonObject {
+function factCheck(result: SemanticResult, diagnostics: Diagnostic[], inspected: AiCheck | null = null): FactCheck {
   const relevant = diagnostics.filter((item) => item.id ? item.id === result.id : item.file === result.file);
-  const referenceFailure = (result.reference_checks ?? []).some((check) => ['existence', 'scope', 'status', 'cycle'].some((name) => check[name] === 'fail'));
+  const referenceFailure = (result.reference_checks ?? []).some((check) => (
+    check.existence === 'fail' || check.scope === 'fail' || check.status === 'fail' || check.cycle === 'fail'
+  ));
   const programmatic = referenceFailure || relevant.some((item) => item.severity === 'error') ? 'fail' : 'pass';
   return {
     id: result.id,
@@ -131,9 +169,9 @@ function factCheck(result: SemanticResult, diagnostics: Diagnostic[], inspected:
   };
 }
 
-function resultSummary(results: SemanticResult[]): JsonObject {
-  const kindCounts = new Map();
-  const statusCounts = new Map();
+function resultSummary(results: SemanticResult[]): { facts: number; kinds: Record<string, number>; statuses: Record<string, number> } {
+  const kindCounts = new Map<string, number>();
+  const statusCounts = new Map<string, number>();
   for (const result of results) {
     kindCounts.set(result.kind, (kindCounts.get(result.kind) ?? 0) + 1);
     statusCounts.set(result.status, (statusCounts.get(result.status) ?? 0) + 1);
@@ -143,7 +181,7 @@ function resultSummary(results: SemanticResult[]): JsonObject {
   return { facts: results.length, kinds, statuses };
 }
 
-function findingSelection(options: RuntimeOptions = {}): JsonObject {
+function findingSelection(options: RuntimeOptions = {}): FindingSelection {
   const ids = options.selectedIds ? new Set([...options.selectedIds].map(cleanId)) : null;
   const files = options.selectedFiles ? new Set(options.selectedFiles) : null;
   return {
@@ -153,7 +191,7 @@ function findingSelection(options: RuntimeOptions = {}): JsonObject {
   };
 }
 
-function staleFactIds(snapshot: JsonObject): Set<string> {
+function staleFactIds(snapshot: Pick<ProjectSnapshot, 'manifest' | 'diagnostics'>): Set<string> {
   const ids = new Set<string>();
   for (const result of snapshot.manifest?.results ?? []) {
     if (result.status === 'stale' || (result.stale_reasons?.length ?? 0) > 0) ids.add(result.id);
@@ -168,7 +206,7 @@ function importTarget(importer: string, imported: string): string | null {
   return target.startsWith('../') || path.posix.isAbsolute(target) ? null : target;
 }
 
-export function deriveGraphFindings(snapshot: JsonObject, options: RuntimeOptions = {}): JsonObject {
+export function deriveGraphFindings(snapshot: ProjectSnapshot, options: RuntimeOptions = {}): GraphFindings {
   const graph = snapshot.graph;
   const manifest = snapshot.manifest ?? { files: [], results: [] };
   const diagnostics = snapshot.diagnostics ?? [];
@@ -201,7 +239,7 @@ export function deriveGraphFindings(snapshot: JsonObject, options: RuntimeOption
   const unusedExports = (manifest.results ?? []).filter((result) => result.export && !importedExports.has(result.id) && selection.result(result))
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((result) => ({ id: result.id, export: result.export, file: result.file, line: result.line }));
-  const mathematicalNodes = graph.nodes.filter((node) => ['canonical', 'workspace'].includes(node.origin));
+  const mathematicalNodes = graph.nodes.filter((node) => node.origin !== undefined && ['canonical', 'workspace'].includes(node.origin));
   const isolatedFacts = mathematicalNodes.filter((node) => selection.node(node) && (outgoing.get(node.id)?.length ?? 0) === 0 && (incoming.get(node.id)?.length ?? 0) === 0)
     .sort((left, right) => left.id.localeCompare(right.id));
 
@@ -220,8 +258,11 @@ export function deriveGraphFindings(snapshot: JsonObject, options: RuntimeOption
   const errorFiles = new Set(diagnostics.filter((item) => item.severity === 'error' && !item.id && item.file).map((item) => item.file));
   const candidateStatuses = new Set(['candidate', 'workspace-candidate']);
   const candidateReadyForAi = mathematicalNodes.filter((node) => {
-    if (!selection.node(node) || !candidateStatuses.has(node.status) || errorIds.has(node.id) || errorFiles.has(node.file)) return false;
-    return (graph.edges.filter((edge) => edge.from === node.id)).every((edge) => ['existence', 'scope', 'status', 'cycle'].every((check) => edge.checks?.[check] === 'pass'));
+    if (!selection.node(node) || !candidateStatuses.has(node.status) || errorIds.has(node.id) || (node.file !== undefined && errorFiles.has(node.file))) return false;
+    return graph.edges.filter((edge) => edge.from === node.id).every((edge) => (
+      edge.checks?.existence === 'pass' && edge.checks.scope === 'pass'
+      && edge.checks.status === 'pass' && edge.checks.cycle === 'pass'
+    ));
   }).sort((left, right) => left.id.localeCompare(right.id));
 
   const invalidRoots = staleFactIds({ manifest, diagnostics });
@@ -260,9 +301,12 @@ export function deriveGraphFindings(snapshot: JsonObject, options: RuntimeOption
   };
 }
 
-function blockerPaths(graph: DependencyGraph, roots: string[]): JsonObject[] {
-  const output = [];
-  const seen = new Set();
+interface FrontierItem { fact: GraphNode; path: string[] | null }
+interface BlockerPath { root: string; blocker: GraphNode; path: string[] | null }
+
+function blockerPaths(graph: DependencyGraph, roots: string[]): BlockerPath[] {
+  const output: BlockerPath[] = [];
+  const seen = new Set<string>();
   for (const root of [...new Set(roots)].sort()) {
     if (!graph.nodes.some((node) => node.id === root)) continue;
     for (const item of frontier(graph, root)) {
@@ -275,7 +319,7 @@ function blockerPaths(graph: DependencyGraph, roots: string[]): JsonObject[] {
   return output;
 }
 
-export async function inspectProject(root = process.cwd(), options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function inspectProject(root = process.cwd(), options: RuntimeOptions = {}): Promise<InspectProjectResult> {
   const inspected = await inspectCanonicalScope(root, (compilation) => compilation.manifest.results, options);
   const { compilation } = inspected;
   const diagnostics = [...compilation.diagnostics, ...inspected.diagnostics];
@@ -299,7 +343,7 @@ export async function inspectProject(root = process.cwd(), options: RuntimeOptio
   };
 }
 
-export async function inspectFact(root: string, requested: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function inspectFact(root: string, requested: string, options: RuntimeOptions = {}): Promise<InspectFactResult> {
   const id = cleanId(requested);
   const inspected = await inspectCanonicalScope(root, (compilation) => compilation.manifest.results.filter((result) => result.id === id), options);
   const { compilation } = inspected;
@@ -342,14 +386,14 @@ function isWithinPath(file: string, selected: string, isDirectory: boolean): boo
   return isDirectory ? file === selected || file.startsWith(`${selected}/`) : file === selected;
 }
 
-export async function inspectPath(root: string, requestedPath: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function inspectPath(root: string, requestedPath: string, options: RuntimeOptions = {}): Promise<InspectPathResult> {
   root = path.resolve(root);
   const absolute = path.resolve(root, requestedPath);
   const relative = relativePosix(root, absolute);
   if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) throw new Error('Inspection path must stay inside the project');
   const info = await stat(absolute);
   if (!info.isDirectory() && !(info.isFile() && absolute.endsWith('.qmd'))) throw new Error('Inspection path must be a QMD file or directory');
-  const select = (compilation) => compilation.manifest.results.filter((result) => isWithinPath(result.file, relative, info.isDirectory()));
+  const select = (compilation: Compilation) => compilation.manifest.results.filter((result) => isWithinPath(result.file, relative, info.isDirectory()));
   const inspected = await inspectCanonicalScope(root, select, options);
   const { compilation } = inspected;
   const selectedFiles = new Set<string>(compilation.manifest.files.filter((file) => isWithinPath(file.path, relative, info.isDirectory())).map((file) => file.path));
@@ -358,7 +402,7 @@ export async function inspectPath(root: string, requestedPath: string, options: 
   const contextIds = new Set<string>(selectedIds);
   for (const id of selectedIds) for (const dependency of traverse(compilation.graph, id)) contextIds.add(dependency);
   const diagnostics = [
-    ...compilation.diagnostics.filter((item) => selectedIds.has(item.id) || (item.file && isWithinPath(item.file, relative, info.isDirectory()))),
+    ...compilation.diagnostics.filter((item) => (item.id !== undefined && selectedIds.has(item.id)) || (item.file !== undefined && isWithinPath(item.file, relative, info.isDirectory()))),
     ...inspected.diagnostics
   ];
   const graph = subgraph(compilation.graph, contextIds);
@@ -381,41 +425,42 @@ export async function inspectPath(root: string, requestedPath: string, options: 
   };
 }
 
-async function latestSnapshot(root: string, options: RuntimeOptions = {}): Promise<JsonObject> {
+async function latestSnapshot(root: string, options: RuntimeOptions = {}): Promise<ProjectSnapshot> {
   root = path.resolve(root);
-  let pointer = await readJson(path.join(root, AUX, 'graphs', 'latest.json'), null);
+  let pointer = await readJson<{ file: string; snapshot_id: string } | null>(path.join(root, AUX, 'graphs', 'latest.json'), null);
   if (!pointer) {
     const compilation = await compileProject(root, options);
     if (!compilation.complete) throw new Error('No complete dependency snapshot is available; repair parse failures and inspect again');
-    pointer = await readJson(path.join(root, AUX, 'graphs', 'latest.json'));
+    pointer = await readJson<{ file: string; snapshot_id: string }>(path.join(root, AUX, 'graphs', 'latest.json'));
   }
+  if (!pointer) throw new Error('The latest dependency snapshot pointer is missing');
   const graphsRoot = path.join(root, AUX, 'graphs');
   const snapshotFile = typeof pointer.file === 'string' ? path.resolve(root, pointer.file) : '';
   if (!snapshotFile.startsWith(`${graphsRoot}${path.sep}`)) throw new Error('The latest dependency snapshot pointer is corrupt');
-  const snapshot = await readJson(snapshotFile);
+  const snapshot = await readJson<ProjectSnapshot>(snapshotFile);
   if (snapshot.snapshot_id !== pointer.snapshot_id || snapshot.graph.snapshot_id !== pointer.snapshot_id) throw new Error('The latest dependency snapshot pointer is corrupt');
   return snapshot;
 }
 
-function requireNode(graph: DependencyGraph, requested: string): any {
+function requireNode(graph: DependencyGraph, requested: string): GraphNode {
   const id = cleanId(requested);
   const node = graph.nodes.find((item) => item.id === id);
   if (!node) throw new Error(`Unknown fact in dependency snapshot: @${id}`);
   return node;
 }
 
-function frontier(graph: DependencyGraph, requested: string): any[] {
+function frontier(graph: DependencyGraph, requested: string): FrontierItem[] {
   const target = requireNode(graph, requested);
   const closure = new Set([target.id, ...traverse(graph, target.id)]);
   const nodes = byId(graph.nodes);
   const unresolved = [...closure].filter((id) => unusableStatuses.has(nodes.get(id)?.status ?? 'missing'));
   const cycleSets = (graph.cycles ?? []).map((cycle) => new Set(cycle.slice(0, -1)));
-  const sameCycle = (left, right) => cycleSets.some((cycle) => cycle.has(left) && cycle.has(right));
+  const sameCycle = (left: string, right: string) => cycleSets.some((cycle) => cycle.has(left) && cycle.has(right));
   const lowest = unresolved.filter((id) => ![...traverse(graph, id)].some((dependency) => dependency !== id && unresolved.includes(dependency) && !sameCycle(id, dependency)));
   return lowest.sort().map((id) => ({ fact: nodes.get(id) ?? { id, status: 'missing' }, path: shortestPath(graph, target.id, id) }));
 }
 
-export async function analyzeDependencies(root: string, operation: string, args: string[] = [], options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function analyzeDependencies(root: string, operation: string, args: string[] = [], options: RuntimeOptions = {}): Promise<DependencyAnalysisResult> {
   const snapshot = await latestSnapshot(root, options);
   const { graph } = snapshot;
   const requested = args[0];
@@ -426,7 +471,11 @@ export async function analyzeDependencies(root: string, operation: string, args:
     const directIds = adjacency(graph, reverse).get(node.id) ?? [];
     const transitiveIds = [...traverse(graph, node.id, reverse)].sort();
     const nodes = byId(graph.nodes);
-    result = { target: node, direct: directIds.map((id) => nodes.get(id)), transitive: transitiveIds.map((id) => nodes.get(id)) };
+    result = {
+      target: node,
+      direct: directIds.map((id) => nodes.get(id)).filter((item): item is GraphNode => item !== undefined),
+      transitive: transitiveIds.map((id) => nodes.get(id)).filter((item): item is GraphNode => item !== undefined)
+    };
   } else if (operation === 'path') {
     requireNode(graph, requested);
     requireNode(graph, args[1]);
@@ -445,7 +494,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
     const nodes = byId(graph.nodes);
     result = {
       target: node,
-      affected: [...traverse(graph, node.id, true)].sort().map((id) => nodes.get(id)).filter((item) => item.status === 'verified')
+      affected: [...traverse(graph, node.id, true)].sort().map((id) => nodes.get(id)).filter((item): item is GraphNode => item?.status === 'verified')
     };
   } else if (operation === 'frontier') {
     result = { target: requireNode(graph, requested), frontier: frontier(graph, requested) };
@@ -474,7 +523,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
         && (!options.origin || node.origin === options.origin)
         && (!options.path || node.file === options.path || node.file?.startsWith(`${options.path}/`));
     });
-    const relatedIds = (selected, reverse = false) => {
+    const relatedIds = (selected: string, reverse = false): Set<string> => {
       const target = requireNode(graph, selected);
       return options.direct === true
         ? new Set(adjacency(graph, reverse).get(target.id) ?? [])
@@ -532,55 +581,117 @@ export async function analyzeDependencies(root: string, operation: string, args:
   return { schema_version: 2, operation: `dependency-${operation}`, snapshot_id: snapshot.snapshot_id, ...result };
 }
 
-function formatPath(ids: string[]): string {
+function formatPath(ids: string[] | null | undefined): string {
   return ids?.map((id) => `@${id}`).join(' -> ') ?? 'none';
 }
 
-function formatCounts(counts: JsonObject = {}): string {
+interface CheckedReportItem {
+  id: string;
+  programmatic: FactCheck['programmatic'];
+  ai: AiCheck;
+}
+
+interface ReportItem {
+  id: string;
+  kind?: string;
+  status?: string;
+  file?: string;
+  line?: number;
+  export?: string | null;
+  programmatic?: FactCheck['programmatic'];
+  ai?: AiCheck;
+  fact?: GraphNode;
+  direct_dependents?: number;
+  transitive_dependents?: number;
+  verified_dependents?: number;
+}
+
+interface ReportResult {
+  operation?: string;
+  snapshot_id?: string;
+  ok?: boolean;
+  scope?: { type: string; id?: string; path?: string };
+  workspace?: string;
+  target?: GraphNode;
+  workspace_staleness?: { stale: boolean; target_stale: boolean; dependency_stale: boolean };
+  summary?: { files?: number; facts?: number; results?: number; kinds?: Record<string, number>; statuses?: Record<string, number>; errors?: number };
+  verification?: InspectionVerificationSummary;
+  staleness?: StalenessReport;
+  fact?: SemanticResult;
+  graph?: DependencyGraph;
+  manifest?: Manifest & { canonical_results?: SemanticResult[] };
+  diagnostics?: Diagnostic[];
+  check?: CheckedReportItem;
+  facts?: ReportItem[];
+  direct_dependencies?: GraphNode[];
+  transitive_dependencies?: GraphNode[];
+  direct_reverse_dependencies?: string[];
+  blockers?: BlockerPath[];
+  frontier?: FrontierItem[];
+  changed?: StalenessReport['changed'];
+  invalidated?: StalenessReport['invalidated'];
+  direct?: GraphNode[];
+  transitive?: GraphNode[];
+  path?: string[] | null;
+  paths?: string[][];
+  truncated?: boolean;
+  cycles?: string[][];
+  affected?: GraphNode[];
+  matches?: GraphNode[];
+  findings?: GraphFindings;
+  unused_imports?: GraphFindings['unused_imports'];
+  unused_exports?: GraphFindings['unused_exports'];
+  candidates?: GraphNode[];
+  total?: number;
+}
+
+function formatCounts(counts: Record<string, number> = {}): string {
   const entries = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right));
   return entries.map(([name, count]) => `${name}=${count}`).join(', ') || 'none';
 }
 
-function inspectedNodes(result: OperationResult): any[] {
+function inspectedNodes(result: ReportResult): GraphNode[] {
   if (!result.graph?.nodes) return [];
   const nodes = byId(result.graph.nodes);
-  let ids = [];
+  let ids: string[] = [];
   if (result.fact) ids = [result.fact.id];
   else if (result.facts?.some((item) => item.programmatic)) ids = result.facts.map((item) => item.id);
   else if (result.manifest?.results) ids = result.manifest.results.map((item) => item.id);
   else ids = result.graph.nodes.filter((node) => node.scope !== 'external' && node.origin !== 'unresolved').map((node) => node.id);
-  return [...new Set(ids)].map((id) => nodes.get(id)).filter(Boolean).sort((left, right) => left.id.localeCompare(right.id));
+  return [...new Set(ids)].map((id) => nodes.get(id))
+    .filter((node): node is GraphNode => node !== undefined)
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
-function reportFindings(lines: string[], findings: JsonObject): void {
+function reportFindings(lines: string[], findings: Partial<GraphFindings> | null): void {
   if (!findings) return;
   lines.push('graph findings:');
-  if (Object.hasOwn(findings, 'unused_imports')) {
+  if (findings.unused_imports !== undefined) {
     lines.push(`  unused imports: ${findings.unused_imports.length}`);
     for (const item of findings.unused_imports) lines.push(`    ${item.file}: @${item.id} from ${item.from}`);
   }
-  if (Object.hasOwn(findings, 'unused_exports')) {
+  if (findings.unused_exports !== undefined) {
     lines.push(`  unused exports: ${findings.unused_exports.length}`);
     for (const item of findings.unused_exports) lines.push(`    @${item.id} (${item.export}) ${item.file}:${item.line ?? '?'}`);
   }
-  if (Object.hasOwn(findings, 'isolated_facts')) {
+  if (findings.isolated_facts !== undefined) {
     lines.push(`  isolated facts: ${findings.isolated_facts.length}`);
     for (const item of findings.isolated_facts) lines.push(`    @${item.id} [${item.status}] ${item.file ?? ''}`.trimEnd());
   }
-  if (Object.hasOwn(findings, 'unreachable')) {
+  if (findings.unreachable !== undefined) {
     const unreachable = findings.unreachable;
     lines.push(`  unreachable facts: ${unreachable.applicable === false ? 'not applicable (no goal root)' : unreachable.facts.length}`);
     for (const item of unreachable.facts) lines.push(`    @${item.id} [${item.status}] ${item.file ?? ''}`.trimEnd());
   }
-  if (Object.hasOwn(findings, 'candidate_ready_for_ai')) {
+  if (findings.candidate_ready_for_ai !== undefined) {
     lines.push(`  candidates ready for AI: ${findings.candidate_ready_for_ai.length}`);
     for (const item of findings.candidate_ready_for_ai) lines.push(`    @${item.id} [${item.kind}] ${item.file ?? ''}`.trimEnd());
   }
-  if (Object.hasOwn(findings, 'invalid_evidence_dependents')) {
+  if (findings.invalid_evidence_dependents !== undefined) {
     lines.push(`  invalid-evidence dependents: ${findings.invalid_evidence_dependents.length}`);
     for (const item of findings.invalid_evidence_dependents) lines.push(`    @${item.fact.id} via ${item.invalid_sources.map((id) => `@${id}`).join(', ')}`);
   }
-  if (Object.hasOwn(findings, 'heavily_reused')) {
+  if (findings.heavily_reused !== undefined) {
     lines.push(`  heavily reused facts: ${findings.heavily_reused.length}`);
     for (const item of findings.heavily_reused.slice(0, 20)) {
       lines.push(`    @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
@@ -588,7 +699,8 @@ function reportFindings(lines: string[], findings: JsonObject): void {
   }
 }
 
-export function printReport(result: OperationResult): string {
+export function printReport(input: OperationResult): string {
+  const result = input as unknown as ReportResult;
   const lines = [`qmd-prover ${result.operation}`, `snapshot: ${result.snapshot_id ?? 'none'}`];
   if (typeof result.ok === 'boolean') lines.push(`status: ${result.ok ? 'ok' : 'failed'}`);
   if (result.scope) lines.push(`scope: ${result.scope.type} ${result.scope.id ? `@${result.scope.id}` : result.scope.path}`);
@@ -619,18 +731,19 @@ export function printReport(result: OperationResult): string {
   const nodes = inspectedNodes(result);
   if (nodes.length) {
     if (!result.summary) {
-      const kinds = {};
-      const statuses = {};
+      const kinds: Record<string, number> = {};
+      const statuses: Record<string, number> = {};
       for (const node of nodes) {
-        kinds[node.kind] = (kinds[node.kind] ?? 0) + 1;
+        const kind = node.kind ?? 'unknown';
+        kinds[kind] = (kinds[kind] ?? 0) + 1;
         statuses[node.status] = (statuses[node.status] ?? 0) + 1;
       }
       lines.push(`facts: ${nodes.length}`, `kinds: ${formatCounts(kinds)}`, `statuses: ${formatCounts(statuses)}`);
     }
-    const byFile = new Map();
+    const byFile = new Map<string, GraphNode[]>();
     for (const node of nodes) {
       if (!byFile.has(node.file ?? '(unknown)')) byFile.set(node.file ?? '(unknown)', []);
-      byFile.get(node.file ?? '(unknown)').push(node);
+      byFile.get(node.file ?? '(unknown)')?.push(node);
     }
     lines.push('facts by file:');
     for (const [file, facts] of [...byFile].sort(([left], [right]) => left.localeCompare(right))) {
@@ -644,7 +757,9 @@ export function printReport(result: OperationResult): string {
     }
   }
 
-  const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.programmatic);
+  const checks: CheckedReportItem[] = result.check ? [result.check] : (result.facts ?? []).filter(
+    (item): item is ReportItem & CheckedReportItem => item.programmatic !== undefined && item.ai !== undefined
+  );
   if (checks.length) {
     lines.push('checks:');
     for (const check of [...checks].sort((left, right) => left.id.localeCompare(right.id))) {
@@ -712,7 +827,7 @@ export function printReport(result: OperationResult): string {
   }
 
   const reportDerivedFindings = result.findings ?? (result.operation === 'workspace-inspect' && result.graph && result.manifest
-    ? deriveGraphFindings({ graph: result.graph, manifest: result.manifest, diagnostics: result.diagnostics })
+    ? deriveGraphFindings({ graph: result.graph, manifest: result.manifest, diagnostics: result.diagnostics ?? [] })
     : null);
   reportFindings(lines, reportDerivedFindings);
   if (result.unused_imports) reportFindings(lines, { unused_imports: result.unused_imports });
@@ -727,15 +842,15 @@ export function printReport(result: OperationResult): string {
   }
   if (result.operation === 'dependency-reused') {
     lines.push(`heavily reused facts (${result.total} total):`);
-    for (const item of result.facts ?? []) lines.push(`  @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
+    for (const item of result.facts ?? []) if (item.fact) lines.push(`  @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
   }
 
   if (result.graph?.edges?.length) {
     const graphNodes = byId(result.graph.nodes);
     lines.push('dependencies:');
     for (const edge of result.graph.edges) {
-      const checks = edge.checks ?? {};
-      lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks.existence}, scope=${checks.scope}, status=${checks.status}, cycle=${checks.cycle}, ai=${checks.ai_sufficiency}]`);
+      const checks = edge.checks;
+      lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks?.existence}, scope=${checks?.scope}, status=${checks?.status}, cycle=${checks?.cycle}, ai=${checks?.ai_sufficiency}]`);
     }
     const crossFile = result.graph.edges.filter((edge) => {
       const from = graphNodes.get(edge.from)?.file;
@@ -744,7 +859,7 @@ export function printReport(result: OperationResult): string {
     });
     if (crossFile.length) {
       lines.push('cross-file dependencies:');
-      for (const edge of crossFile) lines.push(`  ${graphNodes.get(edge.from).file} @${edge.from} -> ${graphNodes.get(edge.to).file} @${edge.to}`);
+      for (const edge of crossFile) lines.push(`  ${graphNodes.get(edge.from)?.file} @${edge.from} -> ${graphNodes.get(edge.to)?.file} @${edge.to}`);
     }
   }
   if (result.diagnostics?.length) {

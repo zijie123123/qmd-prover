@@ -9,6 +9,7 @@ import { checkStaleness } from './staleness.js';
 import { revokeVerification, showVerification, submitProof } from './verification.js';
 import { initializeWorkspace, inspectWorkspace } from './workspace.js';
 import { hasErrorCode } from './errors.js';
+import { asRecord } from './guards.js';
 import type { JsonObject, OperationResult, RuntimeOptions } from './types.js';
 
 const usage = rootUsage;
@@ -60,8 +61,11 @@ function emit(value: OperationResult, print: boolean): void {
   if (value.ok === false) process.exitCode = 2;
 }
 
-function optionValues(args: string[], names: Set<string>, flags = new Set<string>()): { options: JsonObject; positionals: string[] } {
-  const options: JsonObject = {};
+type OptionMap = Record<string, string | boolean>;
+const optionString = (value: string | boolean | undefined): string | undefined => typeof value === 'string' ? value : undefined;
+
+function optionValues(args: string[], names: Set<string>, flags = new Set<string>()): { options: OptionMap; positionals: string[] } {
+  const options: OptionMap = {};
   const positionals: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
@@ -88,7 +92,7 @@ async function history(root: string, id: string): Promise<JsonObject[]> {
       let entries: string[] = [];
       try { entries = await readdir(selected); } catch (error) { if (!hasErrorCode(error, 'ENOENT')) throw error; }
       for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
-        const record = await readJson(path.join(selected, name));
+        const record = await readJson<JsonObject>(path.join(selected, name));
         if (record.target === id && typeof record.verdict === 'string') records.push(record);
       }
     }
@@ -130,7 +134,7 @@ export async function main(
     if (subcommand === 'theorem' || subcommand === 'fact') {
       if (tail.length !== 1) throw new Error(`inspect ${subcommand} requires one semantic ID and optional --print`);
       const result: OperationResult = await inspectFact(root, tail[0], options);
-      result.verification_history = await history(root, result.fact.id);
+      result.verification_history = await history(root, String(asRecord(result.fact).id ?? ''));
       emit(result, parsed.print);
       return;
     }
@@ -154,18 +158,18 @@ export async function main(
         new Set(['reverse', 'direct', 'cycle-participant'])
       );
       if (extracted.positionals.length !== 1) throw new Error('dependency search requires one query');
-      const queryOptions = {
+      const queryOptions: RuntimeOptions = {
         ...options,
-        kind: extracted.options.kind,
-        status: extracted.options.status,
-        origin: extracted.options.origin,
-        path: extracted.options.path,
-        relatedTo: extracted.options.relatedto,
-        frontierOf: extracted.options.frontierof,
-        usedBy: extracted.options.usedby,
-        dependsOn: extracted.options.dependson,
-        affectedBy: extracted.options.affectedby,
-        staleAffectedBy: extracted.options.staleaffectedby,
+        kind: optionString(extracted.options.kind),
+        status: optionString(extracted.options.status),
+        origin: optionString(extracted.options.origin),
+        path: optionString(extracted.options.path),
+        relatedTo: optionString(extracted.options.relatedto),
+        frontierOf: optionString(extracted.options.frontierof),
+        usedBy: optionString(extracted.options.usedby),
+        dependsOn: optionString(extracted.options.dependson),
+        affectedBy: optionString(extracted.options.affectedby),
+        staleAffectedBy: optionString(extracted.options.staleaffectedby),
         reverse: extracted.options.reverse === true,
         direct: extracted.options.direct === true,
         cycleParticipant: extracted.options.cycleparticipant === true
@@ -178,15 +182,15 @@ export async function main(
       if (extracted.positionals.length !== 2) throw new Error('dependency alternative paths requires two semantic IDs');
       emit(await analyzeDependencies(root, subcommand, extracted.positionals, {
         ...options,
-        maxPaths: extracted.options.limit,
-        maxDepth: extracted.options.maxdepth
+        maxPaths: optionString(extracted.options.limit),
+        maxDepth: optionString(extracted.options.maxdepth)
       }), parsed.print);
       return;
     }
     if (subcommand === 'reused') {
       const extracted = optionValues(tail, new Set(['limit']));
       if (extracted.positionals.length) throw new Error('dependency reused accepts only --limit N and --print');
-      emit(await analyzeDependencies(root, subcommand, [], { ...options, limit: extracted.options.limit }), parsed.print);
+      emit(await analyzeDependencies(root, subcommand, [], { ...options, limit: typeof extracted.options.limit === 'string' ? extracted.options.limit : undefined }), parsed.print);
       return;
     }
     const noArgument = new Set(['cycles', 'findings', 'unused-imports', 'unused-exports', 'isolated', 'unreachable', 'ready-for-ai']);

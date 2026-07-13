@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { readExternalPolicy } from './external.js';
 import { atomicWrite, AUX, exists, relativePosix, withWriteLock } from './files.js';
-import type { JsonObject, OperationResult } from './types.js';
+import type { ExistingProjectInventory, InitializeProjectResult, JsonObject } from './types.js';
 
 const START = '<!-- qmd-prover-contract:start version=';
 const END = '<!-- qmd-prover-contract:end -->';
@@ -16,7 +16,7 @@ async function canonicalContract() {
   return { block: matches[0][0], version: Number(matches[0][1]) };
 }
 
-function result(root: string, version: number, status: string, extra: JsonObject = {}): OperationResult {
+function result(root: string, version: number, status: string, extra: JsonObject = {}): InitializeProjectResult {
   return {
     schema_version: 1,
     operation: 'init-project',
@@ -28,19 +28,19 @@ function result(root: string, version: number, status: string, extra: JsonObject
   };
 }
 
-function projectPolicy(block) {
+function projectPolicy(block: string): string {
   return `# Mathematical project instructions\n\n${block}\n\n## Project-specific additions\n\n`;
 }
 
-async function successfulResult(root: string, version: number, status: string, extra: JsonObject = {}): Promise<OperationResult> {
+async function successfulResult(root: string, version: number, status: string, extra: JsonObject = {}): Promise<InitializeProjectResult> {
   const workspaceRoot = path.join(root, AUX, 'workspaces');
   await mkdir(workspaceRoot, { recursive: true });
   return result(root, version, status, { workspace_root: relativePosix(root, workspaceRoot), ...extra });
 }
 
-async function findQmdFiles(root, directory = root) {
+async function findQmdFiles(root: string, directory = root): Promise<string[]> {
   const ignored = new Set(['.git', '.qmd-prover', '.quarto', 'node_modules']);
-  const files = [];
+  const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
     const file = path.join(directory, entry.name);
@@ -50,8 +50,8 @@ async function findQmdFiles(root, directory = root) {
   return files.sort();
 }
 
-async function inspectExistingProject(root) {
-  const quartoConfigs = [];
+async function inspectExistingProject(root: string): Promise<ExistingProjectInventory> {
+  const quartoConfigs: string[] = [];
   for (const name of ['_quarto.yml', '_quarto.yaml']) if (await exists(path.join(root, name))) quartoConfigs.push(name);
   const qmdFiles = await findQmdFiles(root);
   const externalPolicy = await readExternalPolicy(root);
@@ -65,7 +65,7 @@ async function inspectExistingProject(root) {
   };
 }
 
-function hasMathematicalProject(existing) {
+function hasMathematicalProject(existing: ExistingProjectInventory): boolean {
   return existing.qmd_prover_state || existing.quarto_configs.length > 0 || existing.qmd_file_count > 0;
 }
 
@@ -76,7 +76,7 @@ export async function initializeProject(
     appendContract?: boolean;
     syncContract?: boolean;
   } = {}
-): Promise<OperationResult> {
+): Promise<InitializeProjectResult> {
   const requestedMutations = [adoptExisting, appendContract, syncContract].filter(Boolean).length;
   if (requestedMutations > 1) {
     throw new Error('init accepts only one of --adopt-existing, --append-contract, or --sync-contract');

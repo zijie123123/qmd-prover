@@ -6,7 +6,7 @@ import { compileProject } from '../skills/qmd-prover/src/lib/compiler.js';
 import { readJson } from '../skills/qmd-prover/src/lib/files.js';
 import { initializeWorkspace, inspectWorkspace } from '../skills/qmd-prover/src/lib/workspace.js';
 import { submitProof } from '../skills/qmd-prover/src/lib/verification.js';
-import { document, options, project, proposalPath, proof, result, staleVerifier, verifier } from './support.js';
+import { document, must, options, project, proposalPath, proof, result, staleVerifier, verifier } from './support.js';
 
 test('goal workspaces preserve a protected target snapshot and report staleness', async () => {
   const root = await project();
@@ -26,8 +26,8 @@ test('goal workspaces preserve a protected target snapshot and report staleness'
   const inspected = await inspectWorkspace(root, '@thm-main-work', options);
   assert.equal(inspected.stale, false);
   assert.ok(inspected.manifest.results.every((item) => item.origin === 'workspace'));
-  assert.equal(inspected.manifest.results.find((item) => item.id === 'lem-work').status, 'workspace-candidate');
-  assert.equal(inspected.manifest.results.find((item) => item.id === 'thm-main-work').status, 'workspace-candidate');
+  assert.equal(must(inspected.manifest.results.find((item) => item.id === 'lem-work')).status, 'workspace-candidate');
+  assert.equal(must(inspected.manifest.results.find((item) => item.id === 'thm-main-work')).status, 'workspace-candidate');
   assert.ok(!inspected.manifest.results.some((item) => ['lem-hidden-work', 'lem-generated-work'].includes(item.id)));
   assert.ok(inspected.graph.edges.some((edge) => edge.from === 'thm-main-work' && edge.to === 'lem-work'));
   await writeFile(canonical, result('thm-main-work', 'Do the work.', { title: 'Workspace theorem', proofText: 'A concurrent proof.' }));
@@ -56,9 +56,9 @@ test('workspace inspection verifies a provisional dependency chain and reuses ex
     assert.deepEqual(first.facts.map((fact) => fact.status), ['workspace-verified', 'workspace-verified', 'workspace-verified']);
     assert.doesNotMatch(await readFile(route, 'utf8'), /VERIFIED/);
     const firstSnapshot = first.snapshot_id;
-    const firstPointer = await readJson(path.join(workspace, 'latest.json'));
+    const firstPointer = await readJson<{ snapshot_id: string; file: string }>(path.join(workspace, 'latest.json'));
     assert.equal(firstPointer.snapshot_id, firstSnapshot);
-    assert.equal((await readJson(path.join(workspace, firstPointer.file))).snapshot_id, firstSnapshot);
+    assert.equal((await readJson<{ snapshot_id: string }>(path.join(workspace, firstPointer.file))).snapshot_id, firstSnapshot);
 
     const second = await inspectWorkspace(root, '@thm-main-workspace-ai', options);
     assert.equal(second.ok, true);
@@ -105,8 +105,8 @@ test('workspace inspection admits only current verified canonical imports from t
   await writeFile(attempt, proof('thm-main-workspace-scope', 'Apply @lem-workspace-import.'));
   const available = await inspectWorkspace(root, '@thm-main-workspace-scope', options);
   assert.equal(available.ok, true, JSON.stringify(available.diagnostics));
-  assert.equal(available.graph.edges[0].checks.scope, 'pass');
-  assert.equal(available.graph.edges[0].checks.status, 'pass');
+  assert.equal(must(available.graph.edges[0]?.checks).scope, 'pass');
+  assert.equal(must(available.graph.edges[0]?.checks).status, 'pass');
   await writeFile(attempt, proof('thm-main-workspace-scope', 'Apply @lem-workspace-hidden.'));
   const unavailable = await inspectWorkspace(root, '@thm-main-workspace-scope', options);
   assert.equal(unavailable.ok, false);

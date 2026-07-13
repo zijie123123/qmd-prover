@@ -7,13 +7,15 @@ import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.j
 import { locateDiv, locateProof } from './source.js';
 import { accepted, checkerContract } from './verifier.js';
 import {
-  CONTROL_MARKER_SET, KIND_BY_PREFIX, RESULT_KINDS, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN
+  CONTROL_MARKER_SET, KIND_BY_PREFIX, RESULT_KINDS, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN, isControlMarker
 } from './constants.js';
 import { errorMessage, hasErrorCode } from './errors.js';
 import { uniqueSorted } from './collections.js';
+import { asArray, asRecord, asString, isRecord } from './guards.js';
+import type { PandocDocument, PandocNode } from './pandoc.js';
 import type {
   Compilation, CompilerOptions, DependencyGraph, Diagnostic, DiagnosticSeverity, ImportDeclaration,
-  Manifest, ProofRecord, QmdProverConfig, SemanticResult, SourceFileRecord
+  Manifest, ProofRecord, QmdProverConfig, ResultKind, SemanticResult, SourceFileRecord, UnknownRecord
 } from './types.js';
 
 function diagnostic(
@@ -90,28 +92,45 @@ async function discover(directory: string, root: string, exclusions: Exclusion[]
   return output;
 }
 
-function attrs(tuple: any = ['', [], []]): { id: string; classes: string[]; values: Record<string, any> } {
-  return { id: tuple[0] ?? '', classes: tuple[1] ?? [], values: Object.fromEntries(tuple[2] ?? []) };
+interface PandocAttributes { id: string; classes: string[]; values: Record<string, unknown> }
+interface SemanticEntry { type: 'proof' | 'result'; attribute: PandocAttributes; blocks: PandocNode[]; kind?: ResultKind }
+interface MarkerEntry { marker: import('./constants.js').ControlMarker; index: number }
+interface ParsedProof extends ProofRecord {
+  marker: import('./constants.js').ControlMarker | null;
+  marker_index: number | null;
+  markers: MarkerEntry[];
+  blocks: PandocNode[];
 }
 
-function metaValue(value: any): any {
+function attrs(value: unknown = ['', [], []]): PandocAttributes {
+  const tuple = asArray(value);
+  const pairs = asArray(tuple[2]).filter((item): item is [unknown, unknown] => Array.isArray(item) && item.length >= 2);
+  return {
+    id: asString(tuple[0]),
+    classes: asArray(tuple[1]).map(String),
+    values: Object.fromEntries(pairs.map(([key, item]) => [String(key), item]))
+  };
+}
+
+function metaValue(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
-  if (value.t === 'MetaMap') return Object.fromEntries(Object.entries(value.c ?? {}).map(([key, item]) => [key, metaValue(item)]));
-  if (value.t === 'MetaList') return (value.c ?? []).map(metaValue);
-  if (value.t === 'MetaString' || value.t === 'MetaBool') return value.c;
-  if (value.t === 'MetaInlines') return inlineText(value.c ?? []);
-  if (value.t === 'MetaBlocks') return inlineText(value.c ?? []);
-  return value.c ?? value;
+  const record = asRecord(value);
+  if (record.t === 'MetaMap') return Object.fromEntries(Object.entries(asRecord(record.c)).map(([key, item]) => [key, metaValue(item)]));
+  if (record.t === 'MetaList') return asArray(record.c).map(metaValue);
+  if (record.t === 'MetaString' || record.t === 'MetaBool') return record.c;
+  if (record.t === 'MetaInlines') return inlineText(record.c);
+  if (record.t === 'MetaBlocks') return inlineText(record.c);
+  return record.c ?? value;
 }
 
-function importsFromMeta(ast: any, file: string, diagnostics: Diagnostic[]): ImportDeclaration[] {
+function importsFromMeta(ast: PandocDocument, file: string, diagnostics: Diagnostic[]): ImportDeclaration[] {
   const metadata = metaValue(ast.meta?.['qmd-prover']);
   if (metadata == null) return [];
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
     diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'qmd-prover metadata must be a map', file));
     return [];
   }
-  const declarations = metadata.imports ?? [];
+  const declarations = asRecord(metadata).imports ?? [];
   if (!Array.isArray(declarations)) {
     diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'qmd-prover.imports must be a list', file));
     return [];
@@ -121,20 +140,22 @@ function importsFromMeta(ast: any, file: string, diagnostics: Diagnostic[]): Imp
       diagnostics.push(diagnostic('error', 'IMPORT_METADATA_INVALID', 'Each qmd-prover import must be a map', file));
       return { from: '', use: [] };
     }
-    const from = typeof entry.from === 'string' ? entry.from : '';
-    const use = Array.isArray(entry.use) ? entry.use.map(String).map(cleanId) : [];
+    const record = asRecord(entry);
+    const from = typeof record.from === 'string' ? record.from : '';
+    const use = Array.isArray(record.use) ? record.use.map(String).map(cleanId) : [];
     if (!from) diagnostics.push(diagnostic('error', 'IMPORT_FROM_MISSING', 'Import metadata requires a from path', file));
     if (use.length === 0) diagnostics.push(diagnostic('error', 'IMPORT_USE_MISSING', 'Import metadata requires an explicit, nonempty use list', file));
     return { from, use };
   });
 }
 
-function semanticDivs(ast: any): any[] {
-  const entries: any[] = [];
+function semanticDivs(ast: PandocDocument): SemanticEntry[] {
+  const entries: SemanticEntry[] = [];
   walk(ast.blocks ?? [], (node) => {
     if (node.t !== 'Div') return;
-    const attribute = attrs(node.c?.[0]);
-    const blocks = node.c?.[1] ?? [];
+    const content = asArray(node.c);
+    const attribute = attrs(content[0]);
+    const blocks = asArray(content[1]).filter((block): block is PandocNode => isRecord(block) && typeof block.t === 'string');
     const kind = RESULT_KINDS.find((candidate) => attribute.classes.includes(candidate));
     if (attribute.classes.includes('proof')) entries.push({ type: 'proof', attribute, blocks });
     else if (attribute.id && (SEMANTIC_PREFIX_PATTERN.test(attribute.id) || kind)) entries.push({ type: 'result', attribute, blocks, kind });
@@ -142,16 +163,16 @@ function semanticDivs(ast: any): any[] {
   return entries;
 }
 
-function markerParagraph(block: any): string | null {
-  if (!['Para', 'Plain'].includes(block?.t)) return null;
+function markerParagraph(block: PandocNode | undefined): import('./constants.js').ControlMarker | null {
+  if (!block || !['Para', 'Plain'].includes(block.t)) return null;
   const marker = inlineText(block.c ?? []);
-  return CONTROL_MARKER_SET.has(marker) ? marker : null;
+  return isControlMarker(marker) ? marker : null;
 }
 
-function proofContent(blocks: any[]): any {
+function proofContent(blocks: PandocNode[]): { marker: import('./constants.js').ControlMarker | null; marker_index: number | null; markers: MarkerEntry[]; blocks: PandocNode[] } {
   const index = blocks.findIndex((block) => block.t !== 'Null');
   const markers = blocks.map((block, blockIndex) => ({ marker: markerParagraph(block), index: blockIndex }))
-    .filter((entry) => entry.marker);
+    .filter((entry): entry is MarkerEntry => entry.marker !== null);
   const marker = index >= 0 ? markerParagraph(blocks[index]) : null;
   return {
     marker,
@@ -161,11 +182,11 @@ function proofContent(blocks: any[]): any {
   };
 }
 
-function definitionContent(blocks: any[]): any {
+function definitionContent(blocks: PandocNode[]): { marker: import('./constants.js').ControlMarker | null; marker_index: number | null; markers: MarkerEntry[]; blocks: PandocNode[] } {
   const nonempty = blocks.map((block, index) => ({ block, index })).filter(({ block }) => block.t !== 'Null');
   const last = nonempty.at(-1)?.index ?? -1;
   const markers = blocks.map((block, index) => ({ marker: markerParagraph(block), index }))
-    .filter((entry) => entry.marker);
+    .filter((entry): entry is MarkerEntry => entry.marker !== null);
   const marker = last >= 0 ? markerParagraph(blocks[last]) : null;
   return {
     marker,
@@ -220,7 +241,7 @@ export function findCycles(adjacency: Map<string, string[]>): string[][] {
   return cycles.sort((left, right) => left.join('\0').localeCompare(right.join('\0')));
 }
 
-function verificationStatus(result: SemanticResult, verification: Record<string, any>, evidence: Map<string, any>): SemanticResult['status'] {
+function verificationStatus(result: SemanticResult, verification: Record<string, UnknownRecord>, evidence: Map<string, VerificationEvidence>): SemanticResult['status'] {
   const record = verification[result.id];
   const marker = result.marker_valid ? result.marker : null;
   const identityMatches = record?.statement_hash === result.statement_hash
@@ -228,7 +249,7 @@ function verificationStatus(result: SemanticResult, verification: Record<string,
     && record?.kind === result.kind
     && record.proof_hash === result.proof_hash;
   if (record?.status === 'stale') return 'stale';
-  if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && record.reason?.trim()) return 'revoked';
+  if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && typeof record.reason === 'string' && record.reason.trim()) return 'revoked';
   if (marker === 'VERIFIED' && record?.status === 'verified' && identityMatches && evidence.get(result.id)?.valid) return 'verified';
   if (record?.status === 'rejected'
     && record.statement_hash === result.statement_hash
@@ -240,8 +261,10 @@ function verificationStatus(result: SemanticResult, verification: Record<string,
   return 'candidate';
 }
 
-async function verificationEvidence(root: string, verification: Record<string, any>): Promise<Map<string, any>> {
-  const evidence = new Map<string, any>();
+interface VerificationEvidence { valid: boolean; record: UnknownRecord | null; cache: UnknownRecord | null }
+
+async function verificationEvidence(root: string, verification: Record<string, UnknownRecord>): Promise<Map<string, VerificationEvidence>> {
+  const evidence = new Map<string, VerificationEvidence>();
   const verificationRoot = path.join(root, AUX, 'verification');
   function evidencePath(relative: unknown): string | null {
     if (typeof relative !== 'string') return null;
@@ -249,14 +272,18 @@ async function verificationEvidence(root: string, verification: Record<string, a
     return absolute.startsWith(`${verificationRoot}${path.sep}`) ? absolute : null;
   }
   await Promise.all(Object.entries(verification).map(async ([id, entry]) => {
-    if (!['verified', 'rejected'].includes(entry.status)) return;
-    let record = null;
-    let cache = null;
+    if (typeof entry.status !== 'string' || !['verified', 'rejected'].includes(entry.status)) return;
+    let record: UnknownRecord | null = null;
+    let cache: UnknownRecord | null = null;
     const recordFile = evidencePath(entry.record);
     const cacheFile = evidencePath(entry.cache);
-    try { if (recordFile) record = await readJson(recordFile); } catch { /* Invalid evidence fails closed below. */ }
-    try { if (cacheFile) cache = await readJson(cacheFile); } catch { /* Invalid evidence fails closed below. */ }
-    const sharedValid = record?.submission_id === entry.submission_id
+    try { if (recordFile) record = await readJson<UnknownRecord>(recordFile); } catch { /* Invalid evidence fails closed below. */ }
+    try { if (cacheFile) cache = await readJson<UnknownRecord>(cacheFile); } catch { /* Invalid evidence fails closed below. */ }
+    if (!record) {
+      evidence.set(id, { valid: false, record: null, cache });
+      return;
+    }
+    const sharedValid = record.submission_id === entry.submission_id
       && record.target === id
       && record.statement_hash === entry.statement_hash
       && record.title_hash === entry.title_hash
@@ -265,9 +292,9 @@ async function verificationEvidence(root: string, verification: Record<string, a
       && record.external_basis_hash === entry.external_basis_hash
       && stableJson(record.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
       && stableJson(record.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
-      && record.report
+      && isRecord(record.report)
       && record.accepted === accepted(record.report);
-    const valid = entry.status === 'verified'
+    const valid = Boolean(entry.status === 'verified'
       ? sharedValid
         && record.accepted === true
         && record.proof_hash === entry.proof_hash
@@ -282,7 +309,7 @@ async function verificationEvidence(root: string, verification: Record<string, a
         && stableJson(cache.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
       : sharedValid
         && record.accepted === false
-        && record.proof_hash === entry.rejected_proof_hash;
+        && record.proof_hash === entry.rejected_proof_hash);
     evidence.set(id, { valid, record, cache });
   }));
   return evidence;
@@ -310,7 +337,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   const diagnostics: Diagnostic[] = [];
   const files: SourceFileRecord[] = [];
   const allResults: SemanticResult[] = [];
-  const allProofs: ProofRecord[] = [];
+  const allProofs: ParsedProof[] = [];
 
   for (const file of discovered) {
     try {
@@ -318,7 +345,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
       const imports = importsFromMeta(ast, file.relative, diagnostics);
       const entries = semanticDivs(ast);
       const results: SemanticResult[] = [];
-      const proofs: ProofRecord[] = [];
+      const proofs: ParsedProof[] = [];
       for (const entry of entries) {
         const { id, classes, values } = entry.attribute;
         if (entry.type === 'proof') {
@@ -326,7 +353,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
           const located = target ? locateProof(source, target) : null;
           const line = located?.startLine;
           const content = proofContent(entry.blocks);
-          const proof = {
+          const proof: ParsedProof = {
             target, file: file.relative, line,
             marker: content.marker,
             proof_hash: sha256(stableJson(normalizedAst(content.blocks), 0)),
@@ -347,7 +374,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
 
         const located = locateDiv(source, id);
         const line = located?.startLine;
-        const semanticKinds = classes.filter((item) => RESULT_KINDS.includes(item));
+        const semanticKinds = classes.filter((item): item is ResultKind => RESULT_KINDS.includes(item as ResultKind));
         const kind = entry.kind ?? 'unknown';
         const title = String(values.name ?? '');
         const date = String(values.date ?? '');
@@ -361,7 +388,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
           id, file: file.relative, line, kind, classes: [...classes].sort(), title, date,
           origin: id.startsWith(config.goals['id-prefix']) ? 'user' : 'agent',
           status: 'candidate',
-          export: values.export ?? null,
+          export: values.export == null ? null : String(values.export),
           statement_text: statementText,
           statement_hash: statementHash,
           title_hash: sha256(title),
@@ -393,7 +420,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
           if (content.markers.length > 1) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_MULTIPLE', `${id} has more than one reserved control marker`, file.relative, line, id));
           if (content.markers.some((marker) => marker.index !== content.marker_index)) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_POSITION', `${id} must put its reserved marker in the last nonempty paragraph of the definition block`, file.relative, line, id));
         } else if (content.markers.length > 0) diagnostics.push(diagnostic('error', 'RESULT_MARKER_LOCATION', `${id} must put its reserved marker in the first nonempty paragraph of its linked proof`, file.relative, line, id));
-        const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(block.c?.[2] ?? []).toLowerCase()));
+        const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(asArray(block.c)[2]).toLowerCase()));
         if (legacyHeaders.length) diagnostics.push(diagnostic('error', 'LEGACY_RESULT_SECTIONS', `${id} must use a result body and a separate linked .proof block, not Statement/Uses/Proof headings`, file.relative, line, id));
       }
       files.push({ path: file.relative, imports, results: results.map((result) => result.id), proofs: proofs.map((proof) => proof.target) });
@@ -407,20 +434,20 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   const byExport = new Map<string, SemanticResult>();
   for (const result of allResults) {
     idCounts.set(result.id, (idCounts.get(result.id) ?? 0) + 1);
-    if (byId.has(result.id)) diagnostics.push(diagnostic('error', 'DUPLICATE_ID', `${result.id} is also defined in ${byId.get(result.id).file}`, result.file, result.line, result.id));
+    if (byId.has(result.id)) diagnostics.push(diagnostic('error', 'DUPLICATE_ID', `${result.id} is also defined in ${byId.get(result.id)?.file}`, result.file, result.line, result.id));
     else byId.set(result.id, result);
     if (result.export) {
-      if (byExport.has(result.export)) diagnostics.push(diagnostic('error', 'DUPLICATE_EXPORT', `Export name ${result.export} is also used by @${byExport.get(result.export).id}`, result.file, result.line, result.id));
+      if (byExport.has(result.export)) diagnostics.push(diagnostic('error', 'DUPLICATE_EXPORT', `Export name ${result.export} is also used by @${byExport.get(result.export)?.id}`, result.file, result.line, result.id));
       else byExport.set(result.export, result);
     }
   }
 
   const externalTargets = new Set((options.externalTargets ?? []).map(cleanId));
-  const proofsByTarget = new Map<string, ProofRecord[]>();
+  const proofsByTarget = new Map<string, ParsedProof[]>();
   for (const proof of allProofs) {
     if (!proof.target) continue;
     if (!proofsByTarget.has(proof.target)) proofsByTarget.set(proof.target, []);
-    proofsByTarget.get(proof.target).push(proof);
+    proofsByTarget.get(proof.target)?.push(proof);
   }
   for (const [target, proofs] of proofsByTarget) {
     const result = byId.get(target);
@@ -433,6 +460,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
       continue;
     }
     const proof = proofs[0];
+    if (!proof) continue;
     if (result) {
       if (proof.file !== result.file) diagnostics.push(diagnostic('error', 'PROOF_DIFFERENT_FILE', `Proof of @${target} must be in the result's source file`, proof.file, proof.line, target));
       if (result.kind === 'definition' && proof.markers.length > 0) diagnostics.push(diagnostic('error', 'DEFINITION_PROOF_MARKER', `@${target} must put its reserved marker at the end of the definition block, not in its linked proof`, proof.file, proof.line, target));
@@ -461,7 +489,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         diagnostics.push(diagnostic('error', 'IMPORT_FILE_MISSING', `Imported file does not exist: ${declaration.from}`, file.path));
         continue;
       }
-      importAdjacency.get(file.path).push(importedPath);
+      importAdjacency.get(file.path)?.push(importedPath);
       for (const id of declaration.use) {
         const target = byId.get(id);
         if (!target || target.file !== importedPath) diagnostics.push(diagnostic('error', 'IMPORT_ID_MISSING', `@${id} is not defined in ${importedPath}`, file.path));
@@ -496,7 +524,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   }
 
   const locksFile = path.join(root, AUX, 'statement-locks.json');
-  const locks = await readJson(locksFile, {});
+  const locks = await readJson<Record<string, UnknownRecord>>(locksFile, {});
   const protectStatements = options.protectStatements ?? !options.files;
   if (protectStatements) {
     for (const result of allResults.filter((item) => item.origin === 'user')) {
@@ -509,7 +537,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
     }
   }
 
-  const verification = await readJson(path.join(root, AUX, 'verification', 'index.json'), {});
+  const verification = await readJson<Record<string, UnknownRecord>>(path.join(root, AUX, 'verification', 'index.json'), {});
   const evidence = await verificationEvidence(root, verification);
   const currentExternalBasisHash = externalPolicyHash(await readExternalPolicy(root));
   const currentCheckerContract = checkerContract(config);
@@ -519,16 +547,16 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   while (statusChanged) {
     statusChanged = false;
     for (const result of allResults.filter((item) => ['verified', 'rejected'].includes(item.status))) {
-      const entry = verification[result.id];
+      const entry = verification[result.id] ?? {};
       const cache = evidence.get(result.id)?.cache;
-      const dependencySnapshot = entry.dependency_snapshot ?? {};
+      const dependencySnapshot = asRecord(entry.dependency_snapshot);
       const dependencyChanged = stableJson(Object.keys(dependencySnapshot).sort(), 0) !== stableJson(result.dependencies, 0)
         || Object.entries(dependencySnapshot).some(([id, identity]) => {
         const dependency = byId.get(id);
         return !dependency || sha256(`${dependency.statement_hash}:${dependency.proof_hash}:${dependency.status}`) !== identity;
       });
       const scope = result.status === 'verified' ? cache?.scope : entry.scope;
-      const sourceFile = result.status === 'verified' ? cache?.source?.file : entry.source_file;
+      const sourceFile = result.status === 'verified' ? asRecord(cache?.source).file : entry.source_file;
       const contract = result.status === 'verified' ? cache?.checker_contract : entry.checker_contract;
       const scopeChanged = stableJson(scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
       const sourceChanged = sourceFile !== result.file;
@@ -562,7 +590,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
       check.cycle = cycleEdges.has(`${result.id}\0${check.dependency}`) ? 'fail' : 'pass';
       check.ai_sufficiency = result.status === 'verified' ? 'pass' : 'not-run';
       if (check.existence === 'pass' && check.scope === 'pass' && check.cycle === 'pass' && check.status === 'fail') {
-        diagnostics.push(diagnostic('error', 'DEPENDENCY_STATUS_INSUFFICIENT', `${result.id} cites @${check.dependency}, whose current status is ${premise.status}`, result.file, result.proof_line ?? result.line, result.id));
+        diagnostics.push(diagnostic('error', 'DEPENDENCY_STATUS_INSUFFICIENT', `${result.id} cites @${check.dependency}, whose current status is ${premise?.status ?? 'missing'}`, result.file, result.proof_line ?? result.line, result.id));
       }
     }
     if (result.status === 'verified') {
@@ -584,7 +612,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         id, title, kind, status, file, line, origin: 'canonical', ownership: origin,
         identity: { statement_hash, proof_hash }
       })),
-      ...missingIds.map((id) => ({ id, title: '', kind: 'unknown', status: 'missing', origin: 'unresolved' }))
+      ...missingIds.map((id) => ({ id, title: '', kind: 'unknown' as const, status: 'missing', origin: 'unresolved' }))
     ],
     edges: allResults.flatMap((result) => result.dependencies.map((dependency) => {
       const check = result.reference_checks?.find((item) => item.dependency === dependency);

@@ -8,6 +8,7 @@ import { checkStaleness } from './staleness.js';
 import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, readVerifierDecision, verifierErrorDetails, verifierDecisionLocation, verificationKey } from './verifier.js';
 import { CONTROL_MARKER_SET } from './constants.js';
 import { asErrorLike, hasErrorCode } from './errors.js';
+import { asStringArray } from './guards.js';
 const retryableStatuses = new Set(['candidate', 'stale']);
 const fatalVerifierCodes = new Set(['unconfigured', 'not-found', 'exit', 'malformed', 'schema']);
 function cleanSemanticText(text, kind, markerAtEnd = false) {
@@ -127,20 +128,23 @@ async function packetForResult(root, compilation, result) {
         config: compilation.config
     });
 }
+function reportFromRecord(record) {
+    return {
+        verdict: record.verdict === 'correct' ? 'correct' : 'incorrect',
+        summary: typeof record.summary === 'string' ? record.summary : '',
+        critical_errors: asStringArray(record.critical_errors),
+        gaps: asStringArray(record.gaps),
+        nonblocking_comments: asStringArray(record.nonblocking_comments ?? record.comments),
+        repair_hints: typeof record.repair_hints === 'string' ? record.repair_hints : ''
+    };
+}
 async function storedAiCheck(root, result) {
     const index = await readJson(path.join(root, AUX, 'verification', 'index.json'), {});
     const entry = index[result.id];
     if (!entry)
         return null;
     const record = await readEvidence(root, entry.record ?? `${AUX}/verification/${entry.submission_id}.json`);
-    const report = record ? {
-        verdict: record.verdict,
-        summary: record.summary ?? '',
-        critical_errors: record.critical_errors ?? [],
-        gaps: record.gaps ?? [],
-        nonblocking_comments: record.nonblocking_comments ?? record.comments ?? [],
-        repair_hints: record.repair_hints ?? ''
-    } : null;
+    const report = record ? reportFromRecord(record) : null;
     if (result.status === 'verified')
         return { status: 'pass', source: 'verification-record', cached: true, report };
     if (result.status === 'rejected')
@@ -311,7 +315,7 @@ export async function verifyCanonicalFact(root, requested, options = {}) {
     }
     catch (error) {
         const failure = asErrorLike(error);
-        return { status: 'error', code: failure.code ?? 'INSPECTION_SOURCE_STALE', error: failure.message };
+        return { status: 'error', code: String(failure.code ?? 'INSPECTION_SOURCE_STALE'), error: failure.message };
     }
     const key = verificationKey(packet);
     const cached = await readVerifierDecision(root, key, packet);
@@ -380,7 +384,7 @@ export async function verifyCanonicalFact(root, requested, options = {}) {
     catch (error) {
         const failure = asErrorLike(error);
         return {
-            status: 'error', code: failure.code ?? 'INSPECTION_WRITE_FAILED', error: failure.message,
+            status: 'error', code: String(failure.code ?? 'INSPECTION_WRITE_FAILED'), error: failure.message,
             remediation: 'The verification decision was not applied. Repair the reported state and rerun inspection; do not edit status markers manually.'
         };
     }
@@ -404,7 +408,7 @@ export async function inspectCanonicalScope(root, select, options = {}) {
         staleness = await checkStaleness(root, options);
     }
     catch (error) {
-        stalenessFailure = { code: 'STALENESS_CHECK_FAILED', message: asErrorLike(error).message };
+        stalenessFailure = { code: 'STALENESS_CHECK_FAILED', message: asErrorLike(error).message ?? String(error) };
         staleness = { schema_version: 2, operation: 'check-staleness', ok: false, changed: [], invalidated: [] };
     }
     let compilation = await compileProject(root, options);
@@ -448,9 +452,9 @@ export async function inspectCanonicalScope(root, select, options = {}) {
     compilation = await compileProject(root, options);
     const selected = select(compilation).slice().sort((left, right) => left.id.localeCompare(right.id));
     for (const result of selected) {
-        if (aiChecks.has(result.id) && ['error', 'not-run'].includes(aiChecks.get(result.id).status))
-            continue;
         const existing = aiChecks.get(result.id);
+        if (existing && ['error', 'not-run'].includes(existing.status))
+            continue;
         const stored = await storedAiCheck(root, result);
         if (!existing && stored?.cached)
             recordHits += 1;

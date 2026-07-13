@@ -127,6 +127,7 @@ function childCommands(parent: HelpCommand): HelpCommand[] {
 
 export function findHelpCommand(pathArgs: string[]): HelpCommand {
   let selected = byPath.get('');
+  if (!selected) throw new Error('Root help command is not registered');
   for (let length = 1; length <= pathArgs.length; length += 1) {
     const candidate = byPath.get(pathArgs.slice(0, length).join(' '));
     if (candidate) selected = candidate;
@@ -162,4 +163,4 @@ export function renderHelp(item: HelpCommand): string {
   return lines.join('\n');
 }
 
-export const rootUsage = renderHelp(byPath.get(''));
+export const rootUsage = renderHelp(findHelpCommand([]));

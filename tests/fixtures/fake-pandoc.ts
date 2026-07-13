@@ -3,23 +3,27 @@
 import { readFileSync } from 'node:fs';
 
 const file = process.argv.at(-1);
+if (!file) throw new Error('Expected a QMD file argument');
 const source = readFileSync(file, 'utf8');
 
-function metaString(value) { return { t: 'MetaString', c: value }; }
+interface PandocNode { t: string; c?: unknown }
+interface ImportSpec { from: string; use: string[] }
 
-function parseMetadata(text) {
+function metaString(value: string): PandocNode { return { t: 'MetaString', c: value }; }
+
+function parseMetadata(text: string): Record<string, unknown> {
   const lines = text.split(/\r?\n/);
-  const first = lines.findIndex((line) => line.trim() === '---');
+  const first = lines.findIndex((line: string) => line.trim() === '---');
   if (first < 0) return {};
-  const last = lines.findIndex((line, index) => index > first && line.trim() === '---');
+  const last = lines.findIndex((line: string, index: number) => index > first && line.trim() === '---');
   if (last < 0) return {};
-  const imports = [];
-  let current = null;
+  const imports: ImportSpec[] = [];
+  let current: ImportSpec | null = null;
   let inQmdProver = false;
   let inImports = false;
   let inUse = false;
   for (const raw of lines.slice(first + 1, last)) {
-    const indent = raw.match(/^\s*/)[0].length;
+    const indent = raw.match(/^\s*/)?.[0].length ?? 0;
     const line = raw.trim();
     if (indent === 0) {
       inQmdProver = line === 'qmd-prover:';
@@ -45,9 +49,9 @@ function parseMetadata(text) {
   };
 }
 
-function inlines(text) {
-  const output = [];
-  const parts = text.trim().split(/(\s+|@(def|lem|thm|prp|cor)-[A-Za-z0-9_:-]+(?:\.[A-Za-z0-9_:-]+)*)/).filter((part) => part && !/^(def|lem|thm|prp|cor)$/.test(part));
+function inlines(text: string): PandocNode[] {
+  const output: PandocNode[] = [];
+  const parts = text.trim().split(/(\s+|@(def|lem|thm|prp|cor)-[A-Za-z0-9_:-]+(?:\.[A-Za-z0-9_:-]+)*)/).filter((part: string) => part && !/^(def|lem|thm|prp|cor)$/.test(part));
   for (const part of parts) {
     if (/^\s+$/.test(part)) output.push({ t: 'Space' });
     else if (/^@(def|lem|thm|prp|cor)-/.test(part)) {
@@ -58,17 +62,18 @@ function inlines(text) {
   return output;
 }
 
-function attribute(text) {
+function attribute(text: string): [string, string[], Array<[string, string]>] {
   const id = text.match(/#([^\s}]+)/)?.[1] ?? '';
-  const classes = [...text.matchAll(/\.([^\s}]+)/g)].map((match) => match[1]);
-  const values = [...text.matchAll(/([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s}]+))/g)].map((match) => [match[1], match[2] ?? match[3] ?? match[4]]);
+  const classes = [...text.matchAll(/\.([^\s}]+)/g)].map((match) => match[1] ?? '');
+  const values: Array<[string, string]> = [...text.matchAll(/([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s}]+))/g)]
+    .map((match) => [match[1] ?? '', match[2] ?? match[3] ?? match[4] ?? '']);
   return [id, classes, values];
 }
 
-function blocks(text) {
-  const output = [];
-  let paragraph = [];
-  function flush() {
+function blocks(text: string): PandocNode[] {
+  const output: PandocNode[] = [];
+  let paragraph: string[] = [];
+  function flush(): void {
     if (paragraph.length) { output.push({ t: 'Para', c: inlines(paragraph.join(' ')) }); paragraph = []; }
   }
   for (const line of text.split(/\r?\n/)) {
@@ -81,14 +86,14 @@ function blocks(text) {
   return output;
 }
 
-const astBlocks = [];
+const astBlocks: PandocNode[] = [];
 const lines = source.split(/\r?\n/);
 for (let index = 0; index < lines.length; index += 1) {
-  const open = lines[index].match(/^\s*:::\s*\{([^}]*)\}\s*$/);
+  const open = lines[index]?.match(/^\s*:::\s*\{([^}]*)\}\s*$/);
   if (!open) continue;
   let end = index + 1;
   while (end < lines.length && !/^\s*:::\s*$/.test(lines[end])) end += 1;
-  astBlocks.push({ t: 'Div', c: [attribute(open[1]), blocks(lines.slice(index + 1, end).join('\n'))] });
+  astBlocks.push({ t: 'Div', c: [attribute(open[1] ?? ''), blocks(lines.slice(index + 1, end).join('\n'))] });
   index = end;
 }
 

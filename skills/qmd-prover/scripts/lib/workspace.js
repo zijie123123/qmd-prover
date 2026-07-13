@@ -9,6 +9,7 @@ import { checkStaleness } from './staleness.js';
 import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, verificationKey, verifierErrorDetails } from './verifier.js';
 import { CONTROL_MARKER_SET } from './constants.js';
 import { asErrorLike, hasErrorCode } from './errors.js';
+import { asRecord, asStringArray, isRecord } from './guards.js';
 function cleanVerifierText(value, markerPosition = null) {
     const lines = String(value ?? '').split(/\r?\n/);
     if (markerPosition === 'first') {
@@ -53,8 +54,8 @@ function topologicalOrder(results) {
     ]));
     const dependents = new Map(results.map((result) => [result.id, []]));
     for (const result of results) {
-        for (const dependency of pending.get(result.id))
-            dependents.get(dependency).push(result.id);
+        for (const dependency of pending.get(result.id) ?? [])
+            dependents.get(dependency)?.push(result.id);
     }
     for (const values of dependents.values())
         values.sort();
@@ -63,10 +64,15 @@ function topologicalOrder(results) {
     const ordered = [];
     while (ready.length) {
         const id = ready.shift();
-        ordered.push(byId.get(id));
+        if (!id)
+            continue;
+        const selected = byId.get(id);
+        if (!selected)
+            continue;
+        ordered.push(selected);
         for (const dependent of dependents.get(id) ?? []) {
-            pending.get(dependent).delete(id);
-            if (pending.get(dependent).size === 0 && !scheduled.has(dependent)) {
+            pending.get(dependent)?.delete(id);
+            if (pending.get(dependent)?.size === 0 && !scheduled.has(dependent)) {
                 ready.push(dependent);
                 scheduled.add(dependent);
                 ready.sort();
@@ -84,6 +90,18 @@ function cacheLocation(directory, key) {
         file: path.join(directory, 'verification', 'checks', `${digest}.json`)
     };
 }
+function verifierReport(value) {
+    if (!isRecord(value) || (value.verdict !== 'correct' && value.verdict !== 'incorrect'))
+        return null;
+    return {
+        verdict: value.verdict,
+        summary: typeof value.summary === 'string' ? value.summary : '',
+        critical_errors: asStringArray(value.critical_errors),
+        gaps: asStringArray(value.gaps),
+        nonblocking_comments: asStringArray(value.nonblocking_comments),
+        repair_hints: typeof value.repair_hints === 'string' ? value.repair_hints : ''
+    };
+}
 async function cachedWorkspaceDecision(directory, workspace, target, key, packet) {
     const location = cacheLocation(directory, key);
     let record;
@@ -93,14 +111,26 @@ async function cachedWorkspaceDecision(directory, workspace, target, key, packet
     catch (error) {
         return { location, record: null, invalid: !hasErrorCode(error, 'ENOENT') };
     }
-    const valid = record?.workspace === workspace
+    const report = verifierReport(record.report);
+    if (!report || typeof record.accepted !== 'boolean')
+        return { location, record: null, invalid: true };
+    const valid = record.workspace === workspace
         && record?.target === target
         && record?.verification_key === key
         && record?.packet_hash === sha256(stableJson(packet, 0))
         && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-        && record?.report
-        && record.accepted === accepted(record.report);
-    return { location, record: valid ? record : null, invalid: !valid };
+        && record.accepted === accepted(report);
+    const cached = valid && report ? {
+        ...record,
+        workspace,
+        target,
+        verification_key: key,
+        packet_hash: String(record.packet_hash),
+        checker_contract: asRecord(record.checker_contract),
+        report,
+        accepted: record.accepted
+    } : null;
+    return { location, record: cached, invalid: !valid };
 }
 async function workspaceSourceFingerprint(directory) {
     const files = await discoverActive(directory);
@@ -130,12 +160,12 @@ function verifierFailure(error, target, inherited = false) {
     const details = inherited ? failure.details : verifierErrorDetails(error);
     return {
         status: 'error',
-        code: failure.code ?? 'WORKSPACE_VERIFIER_FAILED',
+        code: String(failure.code ?? 'WORKSPACE_VERIFIER_FAILED'),
         error: inherited
             ? `Independent verification stopped after the verifier command failed while checking @${target}`
             : failure.message,
         remediation: 'Repair verification.command or QMD_PROVER_VERIFIER, then rerun workspace inspect. The workspace fact remains unverified; never add VERIFIED manually.',
-        ...(details ? { details } : {}),
+        ...(isRecord(details) ? { details } : {}),
         fatal: true,
         ...(inherited ? { inherited: true, failed_target: target } : {})
     };
@@ -175,6 +205,8 @@ export async function initializeWorkspace(root, requested, options = {}) {
         return { schema_version: 1, status: 'resumed', workspace: relativePosix(root, directory), metadata: await readJson(metadataFile) };
     }
     const located = await readLocatedBlock(path.join(root, target.file), id);
+    if (!located)
+        throw new Error(`Canonical source block for @${id} was not found`);
     const targetFile = compilation.manifest.files.find((file) => file.path === target.file);
     const availableIds = new Set([
         ...theoremBundle(compilation, id).dependencies.map((result) => result.id),
@@ -278,7 +310,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
     if (stalenessFailure)
         diagnostics.push({
             severity: 'error', code: 'STALENESS_CHECK_FAILED',
-            message: stalenessFailure.message,
+            message: stalenessFailure.message ?? 'Staleness check failed',
             file: relativePosix(root, path.join(directory, 'workspace.json')), id,
             remediation: 'Repair canonical parsing or protected verification state, then rerun workspace inspect before using any VERIFIED fact.'
         });
@@ -472,7 +504,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
             reason = 'proof-missing';
         else if (errors.length)
             reason = 'programmatic-check-failed';
-        else if (references.some((check) => ['existence', 'scope', 'status', 'cycle'].some((field) => check[field] !== 'pass')))
+        else if (references.some((check) => (check.existence !== 'pass' || check.scope !== 'pass' || check.status !== 'pass' || check.cycle !== 'pass')))
             reason = 'reference-check-failed';
         return {
             status: reason ? 'fail' : 'pass',
@@ -485,11 +517,12 @@ export async function inspectWorkspace(root, requested, options = {}) {
     const locatedBlocks = new Map();
     async function located(result, origin) {
         const key = `${origin}:${result.id}:${result.file}`;
-        if (locatedBlocks.has(key))
-            return locatedBlocks.get(key);
+        const cached = locatedBlocks.get(key);
+        if (cached)
+            return cached;
         const file = origin === 'canonical'
             ? path.join(root, result.file)
-            : path.join(root, sourceRootById.get(result.id));
+            : path.join(root, sourceRootById.get(result.id) ?? result.file);
         const value = await readLocatedBlock(file, result.id);
         if (!value)
             throw Object.assign(new Error(`Source block for @${result.id} disappeared during workspace inspection`), { code: 'WORKSPACE_SOURCE_STALE' });
@@ -515,6 +548,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
             proof = cleanVerifierText(block.proof?.text, 'first');
         }
         else {
+            if (!currentTarget)
+                throw Object.assign(new Error(`Canonical target @${id} disappeared`), { code: 'WORKSPACE_SOURCE_STALE' });
             const block = await located(currentTarget, 'canonical');
             statement = cleanVerifierText(block.statement?.text, currentTarget.kind === 'definition' ? 'last' : null);
             const proofFile = sourceRootById.get(result.id);
@@ -529,7 +564,10 @@ export async function inspectWorkspace(root, requested, options = {}) {
         for (const dependency of [...new Set(result.dependencies)].sort()) {
             const workspaceDependency = workspaceById.get(dependency);
             if (workspaceDependency) {
-                const dependencyBlock = await located(localResultById.get(dependency), 'workspace');
+                const localDependency = localResultById.get(dependency);
+                if (!localDependency)
+                    throw Object.assign(new Error(`Workspace dependency @${dependency} disappeared`), { code: 'WORKSPACE_SOURCE_STALE' });
+                const dependencyBlock = await located(localDependency, 'workspace');
                 const outcome = outcomes.get(dependency);
                 dependencies.push({
                     id: dependency,
@@ -564,7 +602,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 source: { file: canonicalDependency.file }
             });
         }
-        const sourceFile = fileByRootPath.get(sourceRootById.get(result.id));
+        const sourceRoot = sourceRootById.get(result.id);
+        const sourceFile = sourceRoot ? fileByRootPath.get(sourceRoot) : undefined;
         const scope = {
             type: 'selected-workspace',
             workspace: id,
@@ -643,7 +682,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
         }
         catch (error) {
             fatal = verifierFailure(error, result.id);
-            fatal.code = error.code ?? 'WORKSPACE_SOURCE_STALE';
+            fatal.code = String(asErrorLike(error).code ?? 'WORKSPACE_SOURCE_STALE');
             fatal.failed_target = result.id;
             outcomes.set(result.id, fatal);
             verification.stopped_after = result.id;
@@ -724,7 +763,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 report,
                 statement_hash: result.statement_hash,
                 proof_hash: result.proof_hash,
-                dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [dependency.id, {
+                dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [String(dependency.id), {
                         origin: dependency.origin,
                         status: dependency.status,
                         identity: dependency.identity
@@ -766,6 +805,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 reason: 'Independent verification did not run because the workspace fact was not eligible.'
             });
         const outcome = outcomes.get(result.id);
+        if (!outcome)
+            throw new Error(`Workspace outcome for @${result.id} was not recorded`);
         if (outcome.status === 'fail')
             diagnostics.push({
                 severity: 'error', code: 'WORKSPACE_AI_CHECK_REJECTED',
@@ -783,13 +824,13 @@ export async function inspectWorkspace(root, requested, options = {}) {
     }
     const citedCanonicalIds = new Set(workspaceResults.flatMap((result) => result.dependencies)
         .filter((dependency) => canonicalById.has(dependency) && !workspaceIds.has(dependency)));
-    const canonicalNodes = [...citedCanonicalIds].sort().map((dependency) => {
+    const canonicalNodes = [...citedCanonicalIds].sort().flatMap((dependency) => {
         const result = canonicalById.get(dependency);
-        return {
-            id: result.id, title: result.title, kind: result.kind, status: result.status,
-            file: result.file, line: result.line, origin: 'canonical',
-            identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash }
-        };
+        return result ? [{
+                id: result.id, title: result.title, kind: result.kind, status: result.status,
+                file: result.file, line: result.line, origin: 'canonical',
+                identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash }
+            }] : [];
     });
     const knownIds = new Set([...workspaceResults.map((result) => result.id), ...canonicalNodes.map((result) => result.id)]);
     const unresolvedNodes = [...new Set(workspaceResults.flatMap((result) => result.dependencies).filter((dependency) => !knownIds.has(dependency)))].sort()
@@ -803,7 +844,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 ai: { status: outcomes.get(resultId)?.status ?? 'not-run' }
             })),
             ...canonicalNodes,
-            ...unresolvedNodes
+            ...unresolvedNodes.map((node) => ({ ...node, kind: 'unknown' }))
         ],
         edges: workspaceResults.flatMap((result) => result.dependencies.map((dependency) => {
             const check = referenceChecks(result).find((item) => item.dependency === dependency);
@@ -829,7 +870,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
         file: result.file,
         line: result.line,
         programmatic: programmaticCheck(result),
-        ai: outcomes.get(result.id)
+        ai: outcomes.get(result.id) ?? { status: 'not-run', reason: 'No outcome was recorded.' }
     }));
     verification.passed = facts.filter((fact) => fact.ai.status === 'pass').length;
     verification.rejected = facts.filter((fact) => fact.ai.status === 'fail').length;
@@ -846,6 +887,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
             path: relativePosix(directory, path.resolve(root, file.path))
         })),
         results: workspaceResults.map((result) => ({ ...result, ai: outcomes.get(result.id) })),
+        proofs: provisional.manifest.proofs,
         canonical_results: canonicalNodes
     };
     diagnostics.sort((left, right) => `${left.file ?? ''}:${left.line ?? 0}:${left.code}:${left.id ?? ''}`.localeCompare(`${right.file ?? ''}:${right.line ?? 0}:${right.code}:${right.id ?? ''}`));

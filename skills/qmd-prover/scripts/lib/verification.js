@@ -80,7 +80,14 @@ export async function submitProof(root, proposalFile, options = {}) {
     const isNewResult = !canonicalTarget;
     if (isNewResult && !options.destination)
         throw new Error('A new-result proposal requires a canonical destination');
-    const target = canonicalTarget ?? { ...proposedResult, file: null, status: 'open' };
+    let target;
+    if (canonicalTarget)
+        target = canonicalTarget;
+    else {
+        if (!proposedResult)
+            throw new Error(`Proposal target @${proposalProof.target} does not exist in canonical QMD`);
+        target = { ...proposedResult, file: null, status: 'open' };
+    }
     const candidateResult = {
         ...target,
         proof_hash: proposalProof.proof_hash,
@@ -92,7 +99,17 @@ export async function submitProof(root, proposalFile, options = {}) {
         throw new Error('Proposal proof is empty');
     if (target.status === 'verified')
         throw new Error(`@${target.id} is already verified; revoke it with a recorded reason before replacing its proof`);
-    const destination = isNewResult ? path.resolve(root, options.destination) : path.join(root, target.file);
+    let destination;
+    if (isNewResult) {
+        if (!options.destination)
+            throw new Error('A new-result proposal requires a canonical destination');
+        destination = path.resolve(root, options.destination);
+    }
+    else {
+        if (!target.file)
+            throw new Error(`Canonical target @${target.id} has no source file`);
+        destination = path.join(root, target.file);
+    }
     const destinationRelative = path.relative(root, destination).split(path.sep).join('/');
     if (isNewResult && (destinationRelative.startsWith('../') || destinationRelative === AUX || destinationRelative.startsWith(`${AUX}/`))) {
         throw new Error('A new result must be promoted to canonical QMD outside .qmd-prover');
@@ -124,6 +141,8 @@ export async function submitProof(root, proposalFile, options = {}) {
     await copyFile(proposalFile, storedProposal);
     const dependencySnapshot = Object.fromEntries(candidateResult.dependencies.map((id) => {
         const item = initial.manifest.results.find((result) => result.id === id);
+        if (!item)
+            throw new Error(`Proposal dependency @${id} disappeared`);
         return [id, sha256(`${item.statement_hash}:${item.proof_hash}:${item.status}`)];
     }));
     const metadata = {
@@ -246,6 +265,8 @@ export async function submitProof(root, proposalFile, options = {}) {
         if (isNewResult) {
             const fullProposal = await readFile(storedProposal, 'utf8');
             const newResult = await readLocatedBlock(storedProposal, target.id);
+            if (!newResult || !proposed)
+                throw new Error('Stored new-result proposal is incomplete');
             const payload = `${newResult.raw.trim()}\n\n${proposed.raw.trim()}\n`;
             const frontMatter = fullProposal.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)?.[0].trim() ?? '';
             merged = original == null ? `${frontMatter ? `${frontMatter}\n\n` : ''}${payload}` : `${original.replace(/\s*$/, '')}\n\n${payload}`;
@@ -273,7 +294,7 @@ export async function submitProof(root, proposalFile, options = {}) {
             schema_version: 3,
             id: target.id,
             source: { file: destinationRelative, line: locateDiv(merged, target.id)?.startLine },
-            statement: packet.target.construction ?? packet.target.statement,
+            statement: String(packet.target.construction ?? packet.target.statement ?? ''),
             proof: packet.target.proof,
             statement_hash: target.statement_hash,
             title_hash: target.title_hash,

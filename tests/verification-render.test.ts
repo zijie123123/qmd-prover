@@ -9,6 +9,8 @@ import { renderProject } from '../skills/qmd-prover/src/lib/render.js';
 import { checkStaleness } from '../skills/qmd-prover/src/lib/staleness.js';
 import { revokeVerification, submitProof } from '../skills/qmd-prover/src/lib/verification.js';
 import { document, options, project, proposalPath, proof, result, staleVerifier, verifier, malformedVerifier } from './support.js';
+import { must } from './support.js';
+import { asRecord } from '../skills/qmd-prover/src/lib/guards.js';
 
 test('inspection verifies ready facts in dependency order, caches exact checks, and marks definitions at block end', async () => {
   const root = await project();
@@ -21,7 +23,7 @@ test('inspection verifies ready facts in dependency order, caches exact checks, 
       result('lem-auto-result', 'The auto object exists.', { proofText: 'Apply @def-auto-object.' })
     ].join('\n'));
     const before = await compileProject(root, options);
-    const constructionHash = before.manifest.results.find((item) => item.id === 'def-auto-object').statement_hash;
+    const constructionHash = must(before.manifest.results.find((item) => item.id === 'def-auto-object')).statement_hash;
 
     const first = await inspectProject(root, options);
     assert.equal(first.ok, true, JSON.stringify(first.diagnostics));
@@ -35,8 +37,8 @@ test('inspection verifies ready facts in dependency order, caches exact checks, 
     assert.match(source, /Define the auto object directly\.\n\nVERIFIED\n:::/);
     assert.match(source, /\.proof of="lem-auto-result"\}\nVERIFIED\n\nApply @def-auto-object\./);
     const after = await compileProject(root, options);
-    assert.equal(after.manifest.results.find((item) => item.id === 'def-auto-object').statement_hash, constructionHash);
-    assert.equal(after.graph.edges[0].checks.ai_sufficiency, 'pass');
+    assert.equal(must(after.manifest.results.find((item) => item.id === 'def-auto-object')).statement_hash, constructionHash);
+    assert.equal(must(after.graph.edges[0]?.checks).ai_sufficiency, 'pass');
 
     const second = await inspectProject(root, options);
     assert.equal(second.ok, true);
@@ -64,12 +66,12 @@ test('inspection removes stale VERIFIED before failing closed on an unavailable 
   assert.equal(failed.ok, false);
   assert.equal(failed.check.ai.status, 'error');
   assert.equal(failed.check.ai.code, 'unconfigured');
-  assert.match(failed.check.ai.remediation, /rerun inspection/);
+  assert.match(must(failed.check.ai.remediation), /rerun inspection/);
   assert.deepEqual(failed.staleness.changed.map((item) => item.id), ['lem-inspection-stale']);
   assert.doesNotMatch(await readFile(sourceFile, 'utf8'), /VERIFIED/);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'stale');
-  const staleIndex = await readJson(path.join(root, '.qmd-prover', 'verification', 'index.json'));
-  assert.equal((await readJson(path.join(root, staleIndex['lem-inspection-stale'].cache))).stale, true);
+  assert.equal(must((await compileProject(root, options)).manifest.results[0]).status, 'stale');
+  const staleIndex = await readJson<Record<string, { cache: string }>>(path.join(root, '.qmd-prover', 'verification', 'index.json'));
+  assert.equal((await readJson<{ stale: boolean }>(path.join(root, must(staleIndex['lem-inspection-stale']).cache))).stale, true);
 
   await writeFile(sourceFile, (await readFile(sourceFile, 'utf8')).replace('A changed proof.', 'The original proof.'));
   const restored = await inspectFact(root, '@lem-inspection-stale', options);
@@ -88,7 +90,7 @@ test('inspection caches rejected mathematical verdicts and malformed verifier ou
   const rejected = await inspectFact(root, '@lem-auto-rejected', options);
   assert.equal(rejected.ok, false);
   assert.equal(rejected.check.ai.status, 'fail');
-  assert.deepEqual(rejected.check.ai.report.gaps, ['justify the missing step']);
+  assert.deepEqual(must(rejected.check.ai.report).gaps, ['justify the missing step']);
   const repeated = await inspectFact(root, '@lem-auto-rejected', options);
   assert.equal(repeated.verification.verifier_calls, 0);
   assert.equal(repeated.verification.cache_hits, 1);
@@ -107,7 +109,7 @@ test('inspection caches rejected mathematical verdicts and malformed verifier ou
   assert.equal(malformed.ok, false);
   assert.equal(malformed.check.ai.status, 'error');
   assert.equal(malformed.check.ai.code, 'malformed');
-  assert.equal(malformed.check.ai.details.stdout_excerpt, '{not-json');
+  assert.equal(must(malformed.check.ai.details).stdout_excerpt, '{not-json');
   assert.doesNotMatch(await readFile(path.join(root, 'malformed.qmd'), 'utf8'), /VERIFIED/);
   delete process.env.QMD_PROVER_VERIFIER;
 });
@@ -117,10 +119,10 @@ test('record-backed markers fail closed when their exact evidence is absent', as
   await writeFile(path.join(root, 'unsupported.qmd'), result('lem-unsupported-marker', 'A claim.', { proofText: 'VERIFIED\n\nA purported proof.' }));
   const compilation = await compileProject(root, options);
   const fact = compilation.manifest.results.find((item) => item.id === 'lem-unsupported-marker');
-  assert.equal(fact.status, 'candidate');
+  assert.equal(must(fact).status, 'candidate');
   assert.ok(compilation.diagnostics.some((item) => item.code === 'VERIFIED_RECORD_INVALID'));
   const stale = await checkStaleness(root, options);
-  assert.deepEqual(stale.changed[0].reasons, ['verified-marker-without-current-record']);
+  assert.deepEqual(must(stale.changed[0]).reasons, ['verified-marker-without-current-record']);
   assert.doesNotMatch(await readFile(path.join(root, 'unsupported.qmd'), 'utf8'), /VERIFIED/);
 });
 
@@ -136,15 +138,15 @@ test('rejected linked-proof proposals preserve canonical QMD and accepted repair
   const rejected = await submitProof(root, badProposal, options);
   assert.equal(rejected.status, 'rejected');
   assert.equal(await readFile(canonicalFile, 'utf8'), initial);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'open');
+  assert.equal(must((await compileProject(root, options)).manifest.results[0]).status, 'open');
   const goodProposal = proposalPath(root, 'good.qmd');
   await writeFile(goodProposal, proof('thm-main-proof', 'By reflexivity, one equals one.'));
   const accepted = await submitProof(root, goodProposal, options);
   assert.equal(accepted.status, 'verified');
-  assert.match(accepted.report.summary, /external:declared:Finite group theory may be used/);
+  assert.match(must(accepted.report).summary, /external:declared:Finite group theory may be used/);
   const merged = await readFile(canonicalFile, 'utf8');
   assert.match(merged, /:::\n\n::: \{\.proof of="thm-main-proof"\}\nVERIFIED\n\nBy reflexivity/);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'verified');
+  assert.equal(must((await compileProject(root, options)).manifest.results[0]).status, 'verified');
   await assert.rejects(() => submitProof(root, goodProposal, options), /already verified/);
   assert.equal((await revokeVerification(root, '@thm-main-proof', 'New concern', options)).status, 'revoked');
   delete process.env.QMD_PROVER_VERIFIER;
@@ -162,7 +164,7 @@ test('a correct verdict with a gap is rejected and proposals cannot redefine can
   await writeFile(gap, proof('thm-main-gap', 'GAP in justification.'));
   const rejected = await submitProof(root, gap, options);
   assert.equal(rejected.status, 'rejected');
-  assert.deepEqual(rejected.report.gaps, ['justify the missing step']);
+  assert.deepEqual(must(rejected.report).gaps, ['justify the missing step']);
   assert.equal(await readFile(target, 'utf8'), original);
   assert.equal((await submitProof(root, gap, options)).status, 'rejected');
   assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['thm-main-gap']);
@@ -190,7 +192,7 @@ test('accepted new-result proposals are promoted atomically to an explicit canon
   const promoted = await readFile(path.join(root, 'lemmas.qmd'), 'utf8');
   assert.match(promoted, /#lem-new/);
   assert.match(promoted, /\.proof of="lem-new"/);
-  assert.equal((await compileProject(root, options)).manifest.results.find((item) => item.id === 'lem-new').status, 'verified');
+  assert.equal(must((await compileProject(root, options)).manifest.results.find((item) => item.id === 'lem-new')).status, 'verified');
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -210,15 +212,15 @@ test('staleness invalidates verified reverse dependencies and retains exact path
   await writeFile(targetProposal, proof('thm-main-stale-chain', 'Apply @lem-stale-base.'));
   assert.equal((await submitProof(root, targetProposal, options)).status, 'verified');
   assert.deepEqual((await compileProject(root, options)).manifest.results.map((item) => item.status), ['verified', 'verified']);
-  assert.deepEqual((await analyzeDependencies(root, 'impact', ['@lem-stale-base'], options)).affected.map((item) => item.id), ['thm-main-stale-chain']);
+  assert.deepEqual(must((await analyzeDependencies(root, 'impact', ['@lem-stale-base'], options)).affected).map((item) => item.id), ['thm-main-stale-chain']);
 
   await writeFile(baseFile, result('lem-stale-base', 'The stable premise.', { proofText: 'A changed proof.', exported: true }));
   const stale = await checkStaleness(root, options);
   assert.deepEqual(stale.changed.map((item) => item.id), ['lem-stale-base']);
-  assert.deepEqual(stale.invalidated.find((item) => item.id === 'thm-main-stale-chain').path, ['lem-stale-base', 'thm-main-stale-chain']);
-  const index = await readJson(path.join(root, '.qmd-prover', 'verification', 'index.json'));
-  assert.equal(index['lem-stale-base'].status, 'stale');
-  assert.equal(index['thm-main-stale-chain'].status, 'stale');
+  assert.deepEqual(must(stale.invalidated.find((item) => item.id === 'thm-main-stale-chain')).path, ['lem-stale-base', 'thm-main-stale-chain']);
+  const index = await readJson<Record<string, { status: string }>>(path.join(root, '.qmd-prover', 'verification', 'index.json'));
+  assert.equal(must(index['lem-stale-base']).status, 'stale');
+  assert.equal(must(index['thm-main-stale-chain']).status, 'stale');
   assert.doesNotMatch(await readFile(path.join(root, 'goal.qmd'), 'utf8'), /^VERIFIED$/m);
   assert.deepEqual((await compileProject(root, options)).manifest.results.map((item) => item.status), ['stale', 'stale']);
   delete process.env.QMD_PROVER_VERIFIER;
@@ -233,8 +235,8 @@ test('staleness fails closed when the configured checker contract changes', asyn
   assert.equal((await submitProof(root, proposal, options)).status, 'verified');
   await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  backend: none\n  model: changed-model\n');
   const stale = await checkStaleness(root, options);
-  assert.deepEqual(stale.changed[0].reasons, ['checker-contract-changed']);
-  assert.equal((await compileProject(root, options)).manifest.results[0].status, 'stale');
+  assert.deepEqual(must(stale.changed[0]).reasons, ['checker-contract-changed']);
+  assert.equal(must((await compileProject(root, options)).manifest.results[0]).status, 'stale');
   delete process.env.QMD_PROVER_VERIFIER;
 });
 
@@ -250,9 +252,10 @@ test('staleness invalidates verified results when the external basis changes', a
   assert.equal((await submitProof(root, proposal, options)).status, 'verified');
   await writeFile(policyFile, '  \n');
   const stale = await checkStaleness(root, options);
-  assert.equal(stale.changed[0].id, 'thm-main-external-policy');
-  assert.deepEqual(stale.changed[0].reasons, ['external-basis-changed']);
-  assert.notEqual(stale.changed[0].previous.external_basis_hash, stale.changed[0].current.external_basis_hash);
+  const change = must(stale.changed[0]);
+  assert.equal(change.id, 'thm-main-external-policy');
+  assert.deepEqual(change.reasons, ['external-basis-changed']);
+  assert.notEqual(asRecord(change.previous).external_basis_hash, asRecord(change.current).external_basis_hash);
   assert.doesNotMatch(await readFile(targetFile, 'utf8'), /VERIFIED/);
   delete process.env.QMD_PROVER_VERIFIER;
 });
@@ -268,6 +271,6 @@ test('render prepares Quarto-compatible status QMD and an SVG linked to canonica
   assert.match(statusQmd, /\| @thm-main-render \| open \|/);
   assert.match(graph, /goal\.qmd#thm-main-render/);
   assert.match(graph, /Render &lt; safely/);
-  assert.equal((await readJson(path.join(root, '.qmd-prover', 'reports', 'status.json'))).summary.results, 1);
+  assert.equal((await readJson<{ summary: { results: number } }>(path.join(root, '.qmd-prover', 'reports', 'status.json'))).summary.results, 1);
   await assert.rejects(() => stat(path.join(root, '.qmd-prover', 'site')), /ENOENT/);
 });

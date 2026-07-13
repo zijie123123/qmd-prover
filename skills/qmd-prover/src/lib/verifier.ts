@@ -3,19 +3,19 @@ import path from 'node:path';
 import { externalPolicyHash } from './external.js';
 import { AUX, readJson, sha256, stableJson } from './files.js';
 import { asErrorLike } from './errors.js';
-import type { JsonObject, QmdProverConfig, VerifierPacketInput, VerifierReport } from './types.js';
+import { asRecord, isRecord } from './guards.js';
+import type { JsonObject, QmdProverConfig, UnknownRecord, VerificationDecisionRecord, VerifierDecisionLocation, VerifierDecisionLookup, VerifierPacket, VerifierPacketInput, VerifierReport, VerifierTarget } from './types.js';
 
 export const VERIFIER_PROTOCOL_VERSION = 2;
 
 const PROTOCOL_NAME = 'qmd-prover-independent-verifier';
 
 function verificationConfig(config: QmdProverConfig | JsonObject = {}): JsonObject {
-  return config.verification && typeof config.verification === 'object'
-    ? config.verification
-    : config;
+  if (isRecord(config) && isRecord(config.verification)) return config.verification;
+  return isRecord(config) ? config : {};
 }
 
-function setting(config: JsonObject, hyphenated: string, underscored: string, fallback: any): any {
+function setting(config: QmdProverConfig | JsonObject, hyphenated: string, underscored: string, fallback: unknown): unknown {
   const verification = verificationConfig(config);
   if (verification[hyphenated] !== undefined) return verification[hyphenated];
   if (verification[underscored] !== undefined) return verification[underscored];
@@ -96,11 +96,23 @@ function targetMode(target: JsonObject): string {
     : 'proof';
 }
 
-function normalizedTarget(target: JsonObject = {}): JsonObject {
+function normalizedTarget(target: JsonObject = {}): VerifierTarget {
   const value = cloneJson(target, {});
   const kind = String(value.kind ?? 'theorem').toLowerCase();
   const mode = targetMode(value);
-  const normalized: JsonObject = { ...value, kind, verification_mode: mode };
+  const identity = asRecord(value.identity);
+  const source = asRecord(value.source);
+  const normalized: VerifierTarget = {
+    ...value,
+    id: String(value.id ?? ''),
+    kind,
+    semantic_text: String(value.semantic_text ?? value.statement ?? value.construction ?? ''),
+    proof: String(value.proof ?? ''),
+    cited_dependencies: [],
+    identity: { statement_hash: String(identity.statement_hash ?? ''), proof_hash: String(identity.proof_hash ?? '') },
+    source: { file: String(source.file ?? '') },
+    verification_mode: mode
+  };
 
   if (mode === 'definition-construction') {
     normalized.construction = String(value.construction ?? value.statement ?? value.body ?? '');
@@ -141,7 +153,7 @@ export function buildVerifierPacket({
   externalBasis = null,
   scope = null,
   config = {}
-}: VerifierPacketInput): JsonObject {
+}: VerifierPacketInput): VerifierPacket {
   if (!target || typeof target !== 'object' || Array.isArray(target)) {
     throw new TypeError('buildVerifierPacket requires a target object');
   }
@@ -156,7 +168,7 @@ export function buildVerifierPacket({
     instructions: reviewPrompt(mode, contract),
     target: normalized,
     dependencies: cloneJson(Array.isArray(dependencies) ? dependencies : [], []),
-    external_basis: cloneJson(externalBasis, { mode: 'none', content: '' }),
+    external_basis: cloneJson(externalBasis ?? { mode: 'none', content: '' }, { mode: 'none', content: '' }),
     scope: cloneJson(scope, null),
     output_schema: {
       verdict: '"correct" or "incorrect"',
@@ -169,16 +181,16 @@ export function buildVerifierPacket({
   };
 }
 
-export function verificationKey(packetOrInput: any, config: QmdProverConfig | JsonObject | undefined = undefined): string {
-  const wrapped = packetOrInput && typeof packetOrInput === 'object'
-    && !Array.isArray(packetOrInput) && Object.hasOwn(packetOrInput, 'packet');
-  const packet = wrapped ? packetOrInput.packet : packetOrInput;
-  const suppliedContract = wrapped ? packetOrInput.checker_contract : undefined;
-  const contract = suppliedContract ?? packet?.checker_contract ?? checkerContract(config ?? {});
+export function verificationKey(packetOrInput: unknown, config: QmdProverConfig | JsonObject | undefined = undefined): string {
+  const input = asRecord(packetOrInput);
+  const wrapped = Object.hasOwn(input, 'packet');
+  const packet = wrapped ? input.packet : packetOrInput;
+  const suppliedContract = wrapped ? input.checker_contract : undefined;
+  const contract = suppliedContract ?? asRecord(packet).checker_contract ?? checkerContract(config ?? {});
   return sha256(stableJson({ packet, checker_contract: contract }, 0));
 }
 
-export function verifierDecisionLocation(root: string, key: string): { id: string; relative: string; file: string } {
+export function verifierDecisionLocation(root: string, key: string): VerifierDecisionLocation {
   const digest = String(key).replace(/^sha256:/, '');
   return {
     id: `inspection-${digest.slice(0, 24)}`,
@@ -187,21 +199,32 @@ export function verifierDecisionLocation(root: string, key: string): { id: strin
   };
 }
 
-export async function readVerifierDecision(root: string, key: string, packet: JsonObject): Promise<JsonObject> {
+export async function readVerifierDecision(root: string, key: string, packet: VerifierPacket): Promise<VerifierDecisionLookup> {
   const location = verifierDecisionLocation(root, key);
-  let record;
-  try { record = await readJson(location.file); }
-  catch (error) { return { location, record: null, invalid: error.code !== 'ENOENT' }; }
-  const valid = record?.verification_key === key
+  let record: UnknownRecord;
+  try { record = await readJson<UnknownRecord>(location.file); }
+  catch (error) { return { location, record: null, invalid: asErrorLike(error).code !== 'ENOENT' }; }
+  let report: VerifierReport | null = null;
+  try { report = normalizeReport(record.report); } catch { /* Invalid cached decisions fail closed. */ }
+  if (!report || typeof record.submission_id !== 'string' || typeof record.source !== 'string' || typeof record.accepted !== 'boolean') {
+    return { location, record: null, invalid: true };
+  }
+  const valid = record.verification_key === key
     && record?.packet_hash === sha256(stableJson(packet, 0))
-    && record?.target === packet.target.id
-    && record?.statement_hash === packet.target.identity?.statement_hash
-    && record?.proof_hash === packet.target.identity?.proof_hash
+    && record.target === packet.target.id
+    && record.statement_hash === packet.target.identity.statement_hash
+    && record.proof_hash === packet.target.identity.proof_hash
     && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-    && record?.external_basis_hash === externalPolicyHash(packet.external_basis)
-    && record?.report
-    && record.accepted === accepted(record.report);
-  return { location, record: valid ? record : null, invalid: !valid };
+    && record.external_basis_hash === externalPolicyHash(packet.external_basis)
+    && record.accepted === accepted(report);
+  const decision: VerificationDecisionRecord | null = valid && report ? {
+    ...record,
+    submission_id: record.submission_id,
+    accepted: record.accepted,
+    source: record.source,
+    report
+  } : null;
+  return { location, record: decision, invalid: !valid };
 }
 
 function listOfStrings(report: JsonObject, field: string, { optional = false }: { optional?: boolean } = {}): string[] {
@@ -221,10 +244,11 @@ function stringField(report: JsonObject, field: string): string {
   return report[field];
 }
 
-function normalizeReport(report: any): VerifierReport {
-  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+function normalizeReport(value: unknown): VerifierReport {
+  if (!isRecord(value)) {
     throw new VerifierError('schema', 'Verifier output must be a JSON object');
   }
+  const report = value;
   if (report.verdict !== 'correct' && report.verdict !== 'incorrect') {
     throw new VerifierError('schema', 'Verifier verdict must be "correct" or "incorrect"', { field: 'verdict' });
   }
@@ -250,7 +274,9 @@ export function accepted(report: Partial<VerifierReport> | null | undefined): bo
     && report.gaps.length === 0;
 }
 
-function execute(command: string, args: string[], packet: JsonObject): Promise<JsonObject> {
+interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
+
+function execute(command: string, args: string[], packet: VerifierPacket): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -275,7 +301,7 @@ function execute(command: string, args: string[], packet: JsonObject): Promise<J
   });
 }
 
-export async function invokeVerifier(packet: JsonObject, config: QmdProverConfig | JsonObject = {}): Promise<VerifierReport> {
+export async function invokeVerifier(packet: VerifierPacket, config: QmdProverConfig | JsonObject = {}): Promise<VerifierReport> {
   const executable = verifierCommand(config);
   if (!executable) {
     throw new VerifierError(
@@ -310,7 +336,7 @@ export async function invokeVerifier(packet: JsonObject, config: QmdProverConfig
     });
   }
 
-  let report;
+  let report: unknown;
   try {
     report = JSON.parse(result.stdout);
   } catch {

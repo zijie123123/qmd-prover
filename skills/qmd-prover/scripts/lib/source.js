@@ -113,6 +113,8 @@ export function setProofMarker(source, target, marker = null) {
     if (!proofDiv)
         throw new Error(`Linked proof of @${target.replace(/^@/, '')} was not found`);
     const proofBody = body(source, proofDiv);
+    if (!proofBody)
+        throw new Error(`Linked proof of @${target.replace(/^@/, '')} has no readable body`);
     const newline = source.includes('\r\n') ? '\r\n' : '\n';
     const lines = source.slice(proofBody.bodyStart, proofBody.bodyEnd).split(/\r?\n/);
     const firstContent = lines.findIndex((line) => line.trim() !== '');
@@ -132,6 +134,8 @@ export function setDefinitionMarker(source, target, marker = null) {
     if (!div || !div.attrs.classes.includes('definition'))
         throw new Error(`Definition @${id} was not found`);
     const definitionBody = body(source, div);
+    if (!definitionBody)
+        throw new Error(`Definition @${id} has no readable body`);
     const raw = source.slice(definitionBody.bodyStart, definitionBody.bodyEnd);
     const normalized = raw.replace(/\r\n/g, '\n');
     const paragraphs = normalized.split(/\n[ \t]*\n/);

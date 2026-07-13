@@ -1,9 +1,12 @@
 import { spawn } from 'node:child_process';
 import { asErrorLike } from './errors.js';
+import { asArray, asRecord, asString, isRecord } from './guards.js';
 function collect(child, input) {
     return new Promise((resolve, reject) => {
         let stdout = '';
         let stderr = '';
+        if (!child.stdout || !child.stderr)
+            return reject(new Error('Pandoc process pipes were not created'));
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
         child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -28,7 +31,10 @@ export async function readAst(file, { pandoc = process.env.QMD_PROVER_PANDOC || 
     if (result.code !== 0)
         throw new Error(`Pandoc could not parse ${file}: ${result.stderr.trim()}`);
     try {
-        return JSON.parse(result.stdout);
+        const parsed = JSON.parse(result.stdout);
+        if (!isRecord(parsed) || !Array.isArray(parsed.blocks))
+            throw new Error('invalid Pandoc document');
+        return { ...parsed, meta: asRecord(parsed.meta), blocks: parsed.blocks };
     }
     catch {
         throw new Error(`Pandoc returned invalid JSON for ${file}`);
@@ -37,8 +43,8 @@ export async function readAst(file, { pandoc = process.env.QMD_PROVER_PANDOC || 
 export function walk(value, visit) {
     if (!value || typeof value !== 'object')
         return;
-    if (typeof value.t === 'string')
-        visit(value);
+    if (isRecord(value) && typeof value.t === 'string')
+        visit({ ...value, t: value.t });
     if (Array.isArray(value))
         for (const item of value)
             walk(item, visit);
@@ -50,20 +56,22 @@ export function inlineText(inlines = []) {
     let text = '';
     walk(inlines, (node) => {
         if (node.t === 'Str')
-            text += node.c;
+            text += asString(node.c);
         else if (node.t === 'Space' || node.t === 'SoftBreak' || node.t === 'LineBreak')
             text += ' ';
         else if (node.t === 'Code' || node.t === 'Math')
-            text += Array.isArray(node.c) ? node.c.at(-1) : '';
+            text += asString(asArray(node.c).at(-1));
     });
     return text.replace(/\s+/g, ' ').trim();
 }
 export function references(value) {
     const found = new Set();
     walk(value, (node) => {
-        if (node.t === 'Cite' && Array.isArray(node.c?.[0])) {
-            for (const citation of node.c[0]) {
-                const id = citation.citationId;
+        const content = asArray(node.c);
+        if (node.t === 'Cite' && Array.isArray(content[0])) {
+            for (const value of content[0]) {
+                const citation = asRecord(value);
+                const id = asString(citation.citationId);
                 if (/^(def|lem|thm|prp|cor)-/.test(id))
                     found.add(id);
             }
@@ -76,10 +84,11 @@ export function normalizedAst(value) {
         return value.map(normalizedAst);
     if (!value || typeof value !== 'object')
         return value;
-    if (value.t === 'Space' || value.t === 'SoftBreak' || value.t === 'LineBreak')
+    const record = asRecord(value);
+    if (record.t === 'Space' || record.t === 'SoftBreak' || record.t === 'LineBreak')
         return { t: 'Space' };
     const output = {};
-    for (const key of Object.keys(value).sort())
-        output[key] = normalizedAst(value[key]);
+    for (const key of Object.keys(record).sort())
+        output[key] = normalizedAst(record[key]);
     return output;
 }

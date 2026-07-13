@@ -3,12 +3,13 @@ import path from 'node:path';
 import { externalPolicyHash } from './external.js';
 import { AUX, readJson, sha256, stableJson } from './files.js';
 import { asErrorLike } from './errors.js';
+import { asRecord, isRecord } from './guards.js';
 export const VERIFIER_PROTOCOL_VERSION = 2;
 const PROTOCOL_NAME = 'qmd-prover-independent-verifier';
 function verificationConfig(config = {}) {
-    return config.verification && typeof config.verification === 'object'
-        ? config.verification
-        : config;
+    if (isRecord(config) && isRecord(config.verification))
+        return config.verification;
+    return isRecord(config) ? config : {};
 }
 function setting(config, hyphenated, underscored, fallback) {
     const verification = verificationConfig(config);
@@ -88,7 +89,19 @@ function normalizedTarget(target = {}) {
     const value = cloneJson(target, {});
     const kind = String(value.kind ?? 'theorem').toLowerCase();
     const mode = targetMode(value);
-    const normalized = { ...value, kind, verification_mode: mode };
+    const identity = asRecord(value.identity);
+    const source = asRecord(value.source);
+    const normalized = {
+        ...value,
+        id: String(value.id ?? ''),
+        kind,
+        semantic_text: String(value.semantic_text ?? value.statement ?? value.construction ?? ''),
+        proof: String(value.proof ?? ''),
+        cited_dependencies: [],
+        identity: { statement_hash: String(identity.statement_hash ?? ''), proof_hash: String(identity.proof_hash ?? '') },
+        source: { file: String(source.file ?? '') },
+        verification_mode: mode
+    };
     if (mode === 'definition-construction') {
         normalized.construction = String(value.construction ?? value.statement ?? value.body ?? '');
         normalized.proof = String(value.proof ?? '');
@@ -135,7 +148,7 @@ export function buildVerifierPacket({ target, dependencies = [], externalBasis =
         instructions: reviewPrompt(mode, contract),
         target: normalized,
         dependencies: cloneJson(Array.isArray(dependencies) ? dependencies : [], []),
-        external_basis: cloneJson(externalBasis, { mode: 'none', content: '' }),
+        external_basis: cloneJson(externalBasis ?? { mode: 'none', content: '' }, { mode: 'none', content: '' }),
         scope: cloneJson(scope, null),
         output_schema: {
             verdict: '"correct" or "incorrect"',
@@ -148,11 +161,11 @@ export function buildVerifierPacket({ target, dependencies = [], externalBasis =
     };
 }
 export function verificationKey(packetOrInput, config = undefined) {
-    const wrapped = packetOrInput && typeof packetOrInput === 'object'
-        && !Array.isArray(packetOrInput) && Object.hasOwn(packetOrInput, 'packet');
-    const packet = wrapped ? packetOrInput.packet : packetOrInput;
-    const suppliedContract = wrapped ? packetOrInput.checker_contract : undefined;
-    const contract = suppliedContract ?? packet?.checker_contract ?? checkerContract(config ?? {});
+    const input = asRecord(packetOrInput);
+    const wrapped = Object.hasOwn(input, 'packet');
+    const packet = wrapped ? input.packet : packetOrInput;
+    const suppliedContract = wrapped ? input.checker_contract : undefined;
+    const contract = suppliedContract ?? asRecord(packet).checker_contract ?? checkerContract(config ?? {});
     return sha256(stableJson({ packet, checker_contract: contract }, 0));
 }
 export function verifierDecisionLocation(root, key) {
@@ -170,18 +183,32 @@ export async function readVerifierDecision(root, key, packet) {
         record = await readJson(location.file);
     }
     catch (error) {
-        return { location, record: null, invalid: error.code !== 'ENOENT' };
+        return { location, record: null, invalid: asErrorLike(error).code !== 'ENOENT' };
     }
-    const valid = record?.verification_key === key
+    let report = null;
+    try {
+        report = normalizeReport(record.report);
+    }
+    catch { /* Invalid cached decisions fail closed. */ }
+    if (!report || typeof record.submission_id !== 'string' || typeof record.source !== 'string' || typeof record.accepted !== 'boolean') {
+        return { location, record: null, invalid: true };
+    }
+    const valid = record.verification_key === key
         && record?.packet_hash === sha256(stableJson(packet, 0))
-        && record?.target === packet.target.id
-        && record?.statement_hash === packet.target.identity?.statement_hash
-        && record?.proof_hash === packet.target.identity?.proof_hash
+        && record.target === packet.target.id
+        && record.statement_hash === packet.target.identity.statement_hash
+        && record.proof_hash === packet.target.identity.proof_hash
         && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-        && record?.external_basis_hash === externalPolicyHash(packet.external_basis)
-        && record?.report
-        && record.accepted === accepted(record.report);
-    return { location, record: valid ? record : null, invalid: !valid };
+        && record.external_basis_hash === externalPolicyHash(packet.external_basis)
+        && record.accepted === accepted(report);
+    const decision = valid && report ? {
+        ...record,
+        submission_id: record.submission_id,
+        accepted: record.accepted,
+        source: record.source,
+        report
+    } : null;
+    return { location, record: decision, invalid: !valid };
 }
 function listOfStrings(report, field, { optional = false } = {}) {
     const value = report[field];
@@ -200,10 +227,11 @@ function stringField(report, field) {
     }
     return report[field];
 }
-function normalizeReport(report) {
-    if (!report || typeof report !== 'object' || Array.isArray(report)) {
+function normalizeReport(value) {
+    if (!isRecord(value)) {
         throw new VerifierError('schema', 'Verifier output must be a JSON object');
     }
+    const report = value;
     if (report.verdict !== 'correct' && report.verdict !== 'incorrect') {
         throw new VerifierError('schema', 'Verifier verdict must be "correct" or "incorrect"', { field: 'verdict' });
     }

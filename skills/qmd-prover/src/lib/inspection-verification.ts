@@ -17,7 +17,12 @@ import {
 } from './verifier.js';
 import { CONTROL_MARKER_SET } from './constants.js';
 import { asErrorLike, hasErrorCode } from './errors.js';
-import type { Compilation, JsonObject, RuntimeOptions, SemanticResult } from './types.js';
+import { asStringArray } from './guards.js';
+import type {
+  AiCheck, CanonicalScopeInspection, Compilation, Diagnostic, JsonObject, ProgrammaticEligibility,
+  RuntimeOptions, SemanticResult, VerificationDecisionRecord, VerifierDecisionLocation, VerifierPacket,
+  VerifierReport
+} from './types.js';
 
 const retryableStatuses = new Set(['candidate', 'stale']);
 const fatalVerifierCodes = new Set(['unconfigured', 'not-found', 'exit', 'malformed', 'schema']);
@@ -61,13 +66,13 @@ function dependencySnapshot(compilation: Compilation, result: SemanticResult): J
   }));
 }
 
-function relevantErrors(compilation: Compilation, result: SemanticResult): JsonObject[] {
+function relevantErrors(compilation: Compilation, result: SemanticResult): Diagnostic[] {
   return compilation.diagnostics.filter((item) => item.severity === 'error' && (
     item.id ? item.id === result.id : item.file === result.file
   ));
 }
 
-export function programmaticEligibility(compilation: Compilation, result: SemanticResult): JsonObject {
+export function programmaticEligibility(compilation: Compilation, result: SemanticResult): ProgrammaticEligibility {
   if (!retryableStatuses.has(result.status)) {
     return { ready: false, reason: `status-${result.status}` };
   }
@@ -88,7 +93,7 @@ export function programmaticEligibility(compilation: Compilation, result: Semant
   return errors.length ? { ready: false, reason: 'programmatic-check-failed', diagnostics: errors } : { ready: true };
 }
 
-async function packetForResult(root: string, compilation: Compilation, result: SemanticResult): Promise<JsonObject> {
+async function packetForResult(root: string, compilation: Compilation, result: SemanticResult): Promise<VerifierPacket> {
   const located = await readLocatedBlock(path.join(root, result.file), result.id);
   if (!located) throw Object.assign(new Error(`Source block for @${result.id} disappeared`), { code: 'INSPECTION_SOURCE_STALE' });
   const byId = new Map<string, SemanticResult>(compilation.manifest.results.map((item) => [item.id, item]));
@@ -132,26 +137,30 @@ async function packetForResult(root: string, compilation: Compilation, result: S
   });
 }
 
-async function storedAiCheck(root: string, result: SemanticResult): Promise<JsonObject | null> {
+function reportFromRecord(record: JsonObject): VerifierReport {
+  return {
+    verdict: record.verdict === 'correct' ? 'correct' : 'incorrect',
+    summary: typeof record.summary === 'string' ? record.summary : '',
+    critical_errors: asStringArray(record.critical_errors),
+    gaps: asStringArray(record.gaps),
+    nonblocking_comments: asStringArray(record.nonblocking_comments ?? record.comments),
+    repair_hints: typeof record.repair_hints === 'string' ? record.repair_hints : ''
+  };
+}
+
+async function storedAiCheck(root: string, result: SemanticResult): Promise<AiCheck | null> {
   const index = await readJson<Record<string, JsonObject>>(path.join(root, AUX, 'verification', 'index.json'), {});
   const entry = index[result.id];
   if (!entry) return null;
   const record = await readEvidence(root, entry.record ?? `${AUX}/verification/${entry.submission_id}.json`);
-  const report = record ? {
-    verdict: record.verdict,
-    summary: record.summary ?? '',
-    critical_errors: record.critical_errors ?? [],
-    gaps: record.gaps ?? [],
-    nonblocking_comments: record.nonblocking_comments ?? record.comments ?? [],
-    repair_hints: record.repair_hints ?? ''
-  } : null;
+  const report = record ? reportFromRecord(record) : null;
   if (result.status === 'verified') return { status: 'pass', source: 'verification-record', cached: true, report };
   if (result.status === 'rejected') return { status: 'fail', source: 'verification-record', cached: true, report };
   if (result.status === 'revoked') return { status: 'not-run', reason: 'Verification was explicitly revoked.' };
   return null;
 }
 
-async function applyDecision(root: string, id: string, expectedKey: string, packet: JsonObject, recordLocation: JsonObject, record: JsonObject, options: RuntimeOptions): Promise<JsonObject> {
+async function applyDecision(root: string, id: string, expectedKey: string, packet: VerifierPacket, recordLocation: VerifierDecisionLocation, record: VerificationDecisionRecord, options: RuntimeOptions): Promise<AiCheck> {
   return withWriteLock(root, async () => {
     const current = await compileProject(root, { ...options, write: false });
     if (!current.complete) throw Object.assign(new Error('Project changed and no longer has a complete semantic parse'), { code: 'INSPECTION_SOURCE_STALE' });
@@ -284,7 +293,7 @@ async function applyDecision(root: string, id: string, expectedKey: string, pack
   });
 }
 
-export async function verifyCanonicalFact(root: string, requested: string, options: RuntimeOptions = {}): Promise<JsonObject> {
+export async function verifyCanonicalFact(root: string, requested: string, options: RuntimeOptions = {}): Promise<AiCheck> {
   root = path.resolve(root);
   const compilation = await compileProject(root, { ...options, write: false });
   const id = String(requested).replace(/^@/, '');
@@ -299,7 +308,7 @@ export async function verifyCanonicalFact(root: string, requested: string, optio
   try { packet = await packetForResult(root, compilation, result); }
   catch (error) {
     const failure = asErrorLike(error);
-    return { status: 'error', code: failure.code ?? 'INSPECTION_SOURCE_STALE', error: failure.message };
+    return { status: 'error', code: String(failure.code ?? 'INSPECTION_SOURCE_STALE'), error: failure.message };
   }
   const key = verificationKey(packet);
   const cached = await readVerifierDecision(root, key, packet);
@@ -363,13 +372,13 @@ export async function verifyCanonicalFact(root: string, requested: string, optio
   catch (error) {
     const failure = asErrorLike(error);
     return {
-      status: 'error', code: failure.code ?? 'INSPECTION_WRITE_FAILED', error: failure.message,
+      status: 'error', code: String(failure.code ?? 'INSPECTION_WRITE_FAILED'), error: failure.message,
       remediation: 'The verification decision was not applied. Repair the reported state and rerun inspection; do not edit status markers manually.'
     };
   }
 }
 
-function skippedAiCheck(result: SemanticResult, fatal: JsonObject | null = null): JsonObject {
+function skippedAiCheck(result: SemanticResult, fatal: AiCheck | null = null): AiCheck {
   if (fatal && retryableStatuses.has(result.status)) return { ...fatal, status: 'error', inherited: true };
   if (result.status === 'open') return { status: 'not-run', reason: result.marker === 'OPEN' ? 'Fact is explicitly OPEN.' : 'No complete proof is present.' };
   if (result.status === 'revoked') return { status: 'not-run', reason: 'Verification was explicitly revoked.' };
@@ -377,18 +386,18 @@ function skippedAiCheck(result: SemanticResult, fatal: JsonObject | null = null)
   return { status: 'not-run', reason: 'Programmatic checks did not make this fact eligible for independent verification.' };
 }
 
-export async function inspectCanonicalScope(root: string, select: (compilation: Compilation) => SemanticResult[], options: RuntimeOptions = {}): Promise<JsonObject> {
+export async function inspectCanonicalScope(root: string, select: (compilation: Compilation) => SemanticResult[], options: RuntimeOptions = {}): Promise<CanonicalScopeInspection> {
   root = path.resolve(root);
   let staleness;
-  let stalenessFailure: JsonObject | null = null;
+  let stalenessFailure: { code: string; message: string } | null = null;
   try { staleness = await checkStaleness(root, options); }
   catch (error) {
-    stalenessFailure = { code: 'STALENESS_CHECK_FAILED', message: asErrorLike(error).message };
+    stalenessFailure = { code: 'STALENESS_CHECK_FAILED', message: asErrorLike(error).message ?? String(error) };
     staleness = { schema_version: 2, operation: 'check-staleness', ok: false, changed: [], invalidated: [] };
   }
   let compilation = await compileProject(root, options);
-  const aiChecks = new Map<string, JsonObject>();
-  let fatal: JsonObject | null = stalenessFailure ? {
+  const aiChecks = new Map<string, AiCheck>();
+  let fatal: AiCheck | null = stalenessFailure ? {
     status: 'error', code: stalenessFailure.code, error: stalenessFailure.message,
     remediation: 'Repair parsing or protected state so stale markers can be removed safely, then rerun inspection.'
   } : null;
@@ -421,13 +430,13 @@ export async function inspectCanonicalScope(root: string, select: (compilation: 
   compilation = await compileProject(root, options);
   const selected = select(compilation).slice().sort((left, right) => left.id.localeCompare(right.id));
   for (const result of selected) {
-    if (aiChecks.has(result.id) && ['error', 'not-run'].includes(aiChecks.get(result.id).status)) continue;
     const existing = aiChecks.get(result.id);
+    if (existing && ['error', 'not-run'].includes(existing.status)) continue;
     const stored = await storedAiCheck(root, result);
     if (!existing && stored?.cached) recordHits += 1;
     aiChecks.set(result.id, existing ?? stored ?? skippedAiCheck(result, fatal));
   }
-  const diagnostics: JsonObject[] = [];
+  const diagnostics: Diagnostic[] = [];
   if (stalenessFailure) diagnostics.push({ severity: 'error', code: stalenessFailure.code, message: stalenessFailure.message });
   for (const result of selected) {
     const check = aiChecks.get(result.id);

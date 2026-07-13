@@ -5,7 +5,7 @@ import test from 'node:test';
 import { compileProject, theoremBundle } from '../skills/qmd-prover/src/lib/compiler.js';
 import { readJson } from '../skills/qmd-prover/src/lib/files.js';
 import { analyzeDependencies, inspectFact, inspectPath, inspectProject } from '../skills/qmd-prover/src/lib/inspector.js';
-import { document, options, project, result, proof } from './support.js';
+import { document, must, options, project, result, proof } from './support.js';
 
 test('compiler reads metadata imports, linked proofs, and deterministic semantic indexes', async () => {
   const root = await project();
@@ -23,12 +23,12 @@ test('compiler reads metadata imports, linked proofs, and deterministic semantic
   assert.equal(first.complete, true);
   assert.equal(second.ok, false);
   assert.equal(firstManifest, secondManifest);
-  assert.deepEqual(first.summary.goals.map((goal) => goal.id), ['thm-main-goal']);
+  assert.deepEqual(must(first.summary.goals).map((goal) => goal.id), ['thm-main-goal']);
   assert.deepEqual(first.graph.edges.map(({ from, to }) => ({ from, to })), [{ from: 'thm-main-goal', to: 'lem-base' }]);
-  assert.deepEqual(first.manifest.results.find((item) => item.id === 'thm-main-goal').dependencies, ['lem-base']);
+  assert.deepEqual(must(first.manifest.results.find((item) => item.id === 'thm-main-goal')).dependencies, ['lem-base']);
   assert.ok(first.diagnostics.some((item) => item.code === 'DEPENDENCY_STATUS_INSUFFICIENT' && item.severity === 'error'));
-  assert.equal(first.graph.edges[0].checks.status, 'fail');
-  assert.equal(theoremBundle(first, '@thm-main-goal').dependencies[0].id, 'lem-base');
+  assert.equal(must(first.graph.edges[0]?.checks).status, 'fail');
+  assert.equal(must(theoremBundle(first, '@thm-main-goal').dependencies[0]).id, 'lem-base');
 });
 
 test('source discovery honors configured exclusions and gitignore reinclusions deterministically', async () => {
@@ -71,7 +71,7 @@ test('compiler rejects semantic dependency cycles and legacy section layout', as
   assert.ok(codes.has('DEPENDENCY_CYCLE'));
   assert.ok(codes.has('LEGACY_RESULT_SECTIONS'));
   assert.deepEqual((await analyzeDependencies(root, 'cycles', [], options)).cycles, [['lem-left', 'lem-right', 'lem-left']]);
-  assert.deepEqual((await analyzeDependencies(root, 'frontier', ['@lem-left'], options)).frontier.map((item) => item.fact.id), ['lem-left', 'lem-right']);
+  assert.deepEqual(must((await analyzeDependencies(root, 'frontier', ['@lem-left'], options)).frontier).map((item) => item.fact.id), ['lem-left', 'lem-right']);
 });
 
 test('compiler validates result names, semantic kinds, and main-goal classes', async () => {
@@ -97,8 +97,8 @@ test('compiler enforces introduction dates and record-backed marker placement', 
   const compilation = await compileProject(root, options);
   const codes = new Set(compilation.diagnostics.map((item) => item.code));
   for (const code of ['RESULT_DATE_MISSING', 'RESULT_DATE_INVALID', 'DEFINITION_MARKER_POSITION', 'REJECTED_RECORD_INVALID']) assert.ok(codes.has(code), code);
-  assert.equal(compilation.manifest.results.find((item) => item.id === 'def-marker-position').status, 'candidate');
-  assert.equal(compilation.manifest.results.find((item) => item.id === 'lem-rejected-marker').status, 'candidate');
+  assert.equal(must(compilation.manifest.results.find((item) => item.id === 'def-marker-position')).status, 'candidate');
+  assert.equal(must(compilation.manifest.results.find((item) => item.id === 'lem-rejected-marker')).status, 'candidate');
 });
 
 test('main statement and name baselines are immutable', async () => {
@@ -121,7 +121,7 @@ test('complete snapshot identities change with exact mathematical content', asyn
   await writeFile(file, result('lem-snapshot-identity', 'Second statement.'));
   const second = await compileProject(root, options);
   assert.notEqual(first.graph.snapshot_id, second.graph.snapshot_id);
-  assert.equal((await readJson(path.join(root, '.qmd-prover', 'graphs', 'latest.json'))).snapshot_id, second.graph.snapshot_id);
+  assert.equal((await readJson<{ snapshot_id: string }>(path.join(root, '.qmd-prover', 'graphs', 'latest.json'))).snapshot_id, second.graph.snapshot_id);
 });
 
 test('definitions declare construction dependencies and unresolved graph edges retain failed checks', async () => {
@@ -134,10 +134,10 @@ test('definitions declare construction dependencies and unresolved graph edges r
   const compilation = await compileProject(root, options);
   const derived = compilation.manifest.results.find((item) => item.id === 'def-derived');
   const brokenEdge = compilation.graph.edges.find((edge) => edge.from === 'lem-broken');
-  assert.deepEqual(derived.dependencies, ['def-base']);
-  assert.equal(brokenEdge.to, 'lem-absent');
-  assert.equal(brokenEdge.checks.existence, 'fail');
-  assert.equal(compilation.graph.nodes.find((node) => node.id === 'lem-absent').status, 'missing');
+  assert.deepEqual(must(derived).dependencies, ['def-base']);
+  assert.equal(must(brokenEdge).to, 'lem-absent');
+  assert.equal(must(must(brokenEdge).checks).existence, 'fail');
+  assert.equal(must(compilation.graph.nodes.find((node) => node.id === 'lem-absent')).status, 'missing');
   assert.ok(compilation.diagnostics.some((item) => item.code === 'DEPENDENCY_UNKNOWN' && item.id === 'lem-broken'));
 });
 
@@ -155,19 +155,19 @@ test('inspector supports fact, path, search, and lowest-frontier queries on a na
   const factInspection = await inspectFact(root, '@thm-main-frontier', options);
   assert.deepEqual(factInspection.graph.nodes.map((node) => node.id).sort(), ['lem-frontier-base', 'lem-frontier-middle', 'thm-main-frontier']);
   const pathInspection = await inspectPath(root, 'goal.qmd', options);
-  assert.equal(pathInspection.graph.nodes.find((node) => node.id === 'lem-frontier-base').scope, 'external');
+  assert.equal(must(pathInspection.graph.nodes.find((node) => node.id === 'lem-frontier-base')).scope, 'external');
   const frontier = await analyzeDependencies(root, 'frontier', ['@thm-main-frontier'], options);
-  assert.deepEqual(frontier.frontier.map((item) => item.fact.id), ['lem-frontier-base']);
-  assert.deepEqual(frontier.frontier[0].path, ['thm-main-frontier', 'lem-frontier-middle', 'lem-frontier-base']);
+  assert.deepEqual(must(frontier.frontier).map((item) => item.fact.id), ['lem-frontier-base']);
+  assert.deepEqual(must(must(frontier.frontier)[0]).path, ['thm-main-frontier', 'lem-frontier-middle', 'lem-frontier-base']);
   const dependencies = await analyzeDependencies(root, 'dependencies', ['@thm-main-frontier'], options);
-  assert.deepEqual(dependencies.direct.map((item) => item.id), ['lem-frontier-middle']);
-  assert.deepEqual(dependencies.transitive.map((item) => item.id).sort(), ['lem-frontier-base', 'lem-frontier-middle']);
+  assert.deepEqual(must(dependencies.direct).map((item) => item.id), ['lem-frontier-middle']);
+  assert.deepEqual(must(dependencies.transitive).map((item) => item.id).sort(), ['lem-frontier-base', 'lem-frontier-middle']);
   const reverse = await analyzeDependencies(root, 'reverse-dependencies', ['@lem-frontier-base'], options);
-  assert.deepEqual(reverse.transitive.map((item) => item.id).sort(), ['lem-frontier-middle', 'thm-main-frontier']);
+  assert.deepEqual(must(reverse.transitive).map((item) => item.id).sort(), ['lem-frontier-middle', 'thm-main-frontier']);
   assert.deepEqual((await analyzeDependencies(root, 'path', ['@thm-main-frontier', '@lem-frontier-base'], options)).path, ['thm-main-frontier', 'lem-frontier-middle', 'lem-frontier-base']);
   assert.deepEqual((await analyzeDependencies(root, 'cycles', [], options)).cycles, []);
   const search = await analyzeDependencies(root, 'search', ['base frontier'], { ...options, kind: 'lemma' });
-  assert.deepEqual(search.matches.map((item) => item.id), ['lem-frontier-base']);
+  assert.deepEqual(must(search.matches).map((item) => item.id), ['lem-frontier-base']);
   assert.equal(search.snapshot_id, projectInspection.snapshot_id);
 });
 
@@ -192,7 +192,7 @@ test('dependency findings expose unused declarations, reachability, reuse, and d
     result('def-file-error', 'A candidate blocked by a file-level error.')
   ));
   await compileProject(root, options);
-  const findings = (await analyzeDependencies(root, 'findings', [], options)).findings;
+  const findings = must((await analyzeDependencies(root, 'findings', [], options)).findings);
   assert.deepEqual(findings.unused_imports.map((item) => item.id), ['lem-unused-export']);
   assert.deepEqual(findings.unused_exports.map((item) => item.id), ['lem-never-imported']);
   assert.ok(findings.isolated_facts.some((item) => item.id === 'lem-isolated'));

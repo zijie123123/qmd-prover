@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import path from 'node:path';
 import { AUX } from './constants.js';
 import { hasErrorCode } from './errors.js';
+import { asRecord } from './guards.js';
 export { AUX } from './constants.js';
 export function sha256(value) {
     return `sha256:${createHash('sha256').update(value).digest('hex')}`;
@@ -11,7 +12,8 @@ export function stable(value) {
     if (Array.isArray(value))
         return value.map(stable);
     if (value && typeof value === 'object') {
-        return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+        const record = asRecord(value);
+        return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stable(record[key])]));
     }
     return value;
 }

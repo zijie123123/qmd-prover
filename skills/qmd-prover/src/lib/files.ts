@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import path from 'node:path';
 import { AUX } from './constants.js';
 import { hasErrorCode } from './errors.js';
+import { asRecord } from './guards.js';
 import type { JsonObject } from './types.js';
 
 export { AUX } from './constants.js';
@@ -11,15 +12,16 @@ export function sha256(value: string | NodeJS.ArrayBufferView): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
-export function stable(value: any): any {
+export function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+    const record = asRecord(value);
+    return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stable(record[key])]));
   }
   return value;
 }
 
-export function stableJson(value: any, space = 2): string {
+export function stableJson(value: unknown, space = 2): string {
   return `${JSON.stringify(stable(value), null, space)}\n`;
 }
 
@@ -30,8 +32,8 @@ export async function exists(file: string | URL): Promise<boolean> {
   }
 }
 
-export async function readJson<T = any>(file: string | URL, fallback?: T): Promise<T> {
-  try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) {
+export async function readJson<T = unknown>(file: string | URL, fallback?: T): Promise<T> {
+  try { return JSON.parse(await readFile(file, 'utf8')) as T; } catch (error) {
     if (hasErrorCode(error, 'ENOENT') && fallback !== undefined) return fallback;
     throw error;
   }
@@ -44,7 +46,7 @@ export async function atomicWrite(file: string, data: string | NodeJS.ArrayBuffe
   await rename(temporary, file);
 }
 
-export async function atomicJson(file: string, value: any): Promise<void> {
+export async function atomicJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, stableJson(value));
 }
 

@@ -6,9 +6,17 @@ import { compileProject } from './compiler.js';
 import { locateDiv, readLocatedBlock, readLocatedProof, mergeProof, setFactMarker } from './source.js';
 import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, readVerifierDecision, verificationKey } from './verifier.js';
 import { hasErrorCode } from './errors.js';
-import type { Compilation, JsonObject, OperationResult, RuntimeOptions, SemanticResult, VerifierReport } from './types.js';
+import type { Compilation, ImportDeclaration, JsonObject, OperationResult, RuntimeOptions, SemanticResult, SubmissionResult, VerifierPacket, VerifierReport } from './types.js';
 
-async function verifierPacket(root: string, target: SemanticResult, candidate: JsonObject, compilation: Compilation, externalBasis: JsonObject): Promise<JsonObject> {
+type SubmissionTarget = Omit<SemanticResult, 'file'> & { file: string | null };
+interface ProofCandidate {
+  file: string;
+  result: SubmissionTarget;
+  statement: string;
+  scope?: ImportDeclaration[];
+}
+
+async function verifierPacket(root: string, target: SubmissionTarget, candidate: ProofCandidate, compilation: Compilation, externalBasis: JsonObject): Promise<VerifierPacket> {
   const canonical = target.file ? await readLocatedBlock(path.join(root, target.file), target.id) : null;
   const proposed = await readLocatedProof(candidate.file, target.id);
   const byId = new Map<string, SemanticResult>(compilation.manifest.results.map((result) => [result.id, result]));
@@ -49,7 +57,7 @@ async function verifierPacket(root: string, target: SemanticResult, candidate: J
   });
 }
 
-export async function submitProof(root: string, proposalFile: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function submitProof(root: string, proposalFile: string, options: RuntimeOptions = {}): Promise<SubmissionResult> {
   root = path.resolve(root);
   proposalFile = path.resolve(proposalFile);
   const initial = await compileProject(root, { ...options, excludeFiles: [proposalFile] });
@@ -76,7 +84,12 @@ export async function submitProof(root: string, proposalFile: string, options: R
   if (!canonicalTarget && !proposedResult) throw new Error(`Proposal target @${proposalProof.target} does not exist in canonical QMD`);
   const isNewResult = !canonicalTarget;
   if (isNewResult && !options.destination) throw new Error('A new-result proposal requires a canonical destination');
-  const target: SemanticResult = canonicalTarget ?? { ...proposedResult, file: null, status: 'open' };
+  let target: SubmissionTarget;
+  if (canonicalTarget) target = canonicalTarget;
+  else {
+    if (!proposedResult) throw new Error(`Proposal target @${proposalProof.target} does not exist in canonical QMD`);
+    target = { ...proposedResult, file: null, status: 'open' };
+  }
   const candidateResult = {
     ...target,
     proof_hash: proposalProof.proof_hash,
@@ -86,7 +99,14 @@ export async function submitProof(root: string, proposalFile: string, options: R
   };
   if (!candidateResult.proof_present) throw new Error('Proposal proof is empty');
   if (target.status === 'verified') throw new Error(`@${target.id} is already verified; revoke it with a recorded reason before replacing its proof`);
-  const destination = isNewResult ? path.resolve(root, options.destination) : path.join(root, target.file);
+  let destination: string;
+  if (isNewResult) {
+    if (!options.destination) throw new Error('A new-result proposal requires a canonical destination');
+    destination = path.resolve(root, options.destination);
+  } else {
+    if (!target.file) throw new Error(`Canonical target @${target.id} has no source file`);
+    destination = path.join(root, target.file);
+  }
   const destinationRelative = path.relative(root, destination).split(path.sep).join('/');
   if (isNewResult && (destinationRelative.startsWith('../') || destinationRelative === AUX || destinationRelative.startsWith(`${AUX}/`))) {
     throw new Error('A new result must be promoted to canonical QMD outside .qmd-prover');
@@ -116,6 +136,7 @@ export async function submitProof(root: string, proposalFile: string, options: R
   await copyFile(proposalFile, storedProposal);
   const dependencySnapshot = Object.fromEntries(candidateResult.dependencies.map((id) => {
     const item = initial.manifest.results.find((result) => result.id === id);
+    if (!item) throw new Error(`Proposal dependency @${id} disappeared`);
     return [id, sha256(`${item.statement_hash}:${item.proof_hash}:${item.status}`)];
   }));
   const metadata = {
@@ -231,6 +252,7 @@ export async function submitProof(root: string, proposalFile: string, options: R
     if (isNewResult) {
       const fullProposal = await readFile(storedProposal, 'utf8');
       const newResult = await readLocatedBlock(storedProposal, target.id);
+      if (!newResult || !proposed) throw new Error('Stored new-result proposal is incomplete');
       const payload = `${newResult.raw.trim()}\n\n${proposed.raw.trim()}\n`;
       const frontMatter = fullProposal.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)?.[0].trim() ?? '';
       merged = original == null ? `${frontMatter ? `${frontMatter}\n\n` : ''}${payload}` : `${original.replace(/\s*$/, '')}\n\n${payload}`;
@@ -251,7 +273,7 @@ export async function submitProof(root: string, proposalFile: string, options: R
       schema_version: 3,
       id: target.id,
       source: { file: destinationRelative, line: locateDiv(merged, target.id)?.startLine },
-      statement: packet.target.construction ?? packet.target.statement,
+      statement: String(packet.target.construction ?? packet.target.statement ?? ''),
       proof: packet.target.proof,
       statement_hash: target.statement_hash,
       title_hash: target.title_hash,
@@ -305,21 +327,21 @@ export async function submitProof(root: string, proposalFile: string, options: R
 
 export async function showVerification(root: string, submissionId: string): Promise<JsonObject> {
   const directory = path.join(path.resolve(root), AUX, 'verification');
-  try { return await readJson(path.join(directory, `${submissionId}.json`)); }
+  try { return await readJson<JsonObject>(path.join(directory, `${submissionId}.json`)); }
   catch (error) {
     if (!hasErrorCode(error, 'ENOENT')) throw error;
     const checks = path.join(directory, 'checks');
     let entries: string[] = [];
     try { entries = await readdir(checks); } catch (checksError) { if (!hasErrorCode(checksError, 'ENOENT')) throw checksError; }
     for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
-      const record = await readJson(path.join(checks, name));
+      const record = await readJson<JsonObject>(path.join(checks, name));
       if (record.submission_id === submissionId) return record;
     }
     throw error;
   }
 }
 
-export async function revokeVerification(root: string, requested: string, reason: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function revokeVerification(root: string, requested: string, reason: string, options: RuntimeOptions = {}): Promise<SubmissionResult> {
   if (!reason?.trim()) throw new Error('Revocation requires a nonempty --reason');
   const id = requested.replace(/^@/, '');
   return withWriteLock(path.resolve(root), async () => {

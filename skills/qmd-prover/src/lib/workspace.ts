@@ -5,11 +5,73 @@ import { externalPolicyHash, readExternalPolicy } from './external.js';
 import { atomicJson, atomicWrite, AUX, cleanId, exists, readJson, relativePosix, sha256, stableJson } from './files.js';
 import { deriveGraphFindings } from './inspector.js';
 import { readLocatedBlock, readLocatedProof } from './source.js';
+import type { LocatedBlock } from './source.js';
 import { checkStaleness } from './staleness.js';
 import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, verificationKey, verifierErrorDetails } from './verifier.js';
 import { CONTROL_MARKER_SET } from './constants.js';
 import { asErrorLike, hasErrorCode } from './errors.js';
-import type { Compilation, ImportDeclaration, JsonObject, OperationResult, RuntimeOptions, SemanticResult } from './types.js';
+import { asRecord, asStringArray, isRecord } from './guards.js';
+import type {
+  AiCheck, CheckStatus, Compilation, DependencyGraph, Diagnostic, GraphEdge, GraphNode, ImportDeclaration,
+  JsonObject, Manifest, OperationResult, ReferenceCheck, RuntimeOptions, SemanticResult, UnknownRecord,
+  VerifierPacket, VerifierReport, InitializeWorkspaceResult, WorkspaceInspectResult
+} from './types.js';
+
+interface WorkspaceMetadata {
+  schema_version: number;
+  target: string;
+  status: string;
+  created_at: string;
+  canonical: {
+    file: string;
+    statement_hash: string;
+    title_hash: string;
+    proof_hash: string;
+    status: string;
+    dependencies: Record<string, { statement_hash: string; proof_hash: string; status: string }>;
+  };
+}
+
+interface WorkspaceReferenceCheck extends ReferenceCheck { origin: 'workspace' | 'canonical' | 'unresolved' }
+interface WorkspaceProgrammaticCheck {
+  status: 'pass' | 'fail';
+  verification_mode: 'definition-construction' | 'proof';
+  references: WorkspaceReferenceCheck[];
+  diagnostics: string[];
+  reason?: string;
+}
+interface WorkspaceOutcome extends AiCheck {
+  verification_key?: string;
+  failed_target?: string;
+  failure_report?: string;
+}
+interface WorkspaceVerification {
+  eligible: number;
+  verifier_calls: number;
+  cache_hits: number;
+  cache_misses: number;
+  invalid_cache_entries: number;
+  passed: number;
+  rejected: number;
+  errors: number;
+  not_run: number;
+  stopped_after: string | null;
+  facts: Array<{ id: string } & WorkspaceOutcome>;
+}
+interface WorkspaceCacheRecord extends JsonObject {
+  workspace: string;
+  target: string;
+  verification_key: string;
+  packet_hash: string;
+  checker_contract: JsonObject;
+  report: VerifierReport;
+  accepted: boolean;
+}
+interface WorkspaceCacheLookup {
+  location: { relative: string; file: string };
+  record: WorkspaceCacheRecord | null;
+  invalid: boolean;
+}
 
 function cleanVerifierText(value: unknown, markerPosition: 'first' | 'last' | null = null): string {
   const lines = String(value ?? '').split(/\r?\n/);
@@ -51,7 +113,7 @@ function topologicalOrder(results: SemanticResult[]): SemanticResult[] {
   ]));
   const dependents = new Map<string, string[]>(results.map((result) => [result.id, []]));
   for (const result of results) {
-    for (const dependency of pending.get(result.id)) dependents.get(dependency).push(result.id);
+    for (const dependency of pending.get(result.id) ?? []) dependents.get(dependency)?.push(result.id);
   }
   for (const values of dependents.values()) values.sort();
   const ready = [...pending].filter(([, dependencies]) => dependencies.size === 0).map(([id]) => id).sort();
@@ -59,10 +121,13 @@ function topologicalOrder(results: SemanticResult[]): SemanticResult[] {
   const ordered: SemanticResult[] = [];
   while (ready.length) {
     const id = ready.shift();
-    ordered.push(byId.get(id));
+    if (!id) continue;
+    const selected = byId.get(id);
+    if (!selected) continue;
+    ordered.push(selected);
     for (const dependent of dependents.get(id) ?? []) {
-      pending.get(dependent).delete(id);
-      if (pending.get(dependent).size === 0 && !scheduled.has(dependent)) {
+      pending.get(dependent)?.delete(id);
+      if (pending.get(dependent)?.size === 0 && !scheduled.has(dependent)) {
         ready.push(dependent);
         scheduled.add(dependent);
         ready.sort();
@@ -82,20 +147,43 @@ function cacheLocation(directory: string, key: string): { relative: string; file
   };
 }
 
-async function cachedWorkspaceDecision(directory: string, workspace: string, target: string, key: string, packet: JsonObject): Promise<JsonObject> {
+function verifierReport(value: unknown): VerifierReport | null {
+  if (!isRecord(value) || (value.verdict !== 'correct' && value.verdict !== 'incorrect')) return null;
+  return {
+    verdict: value.verdict,
+    summary: typeof value.summary === 'string' ? value.summary : '',
+    critical_errors: asStringArray(value.critical_errors),
+    gaps: asStringArray(value.gaps),
+    nonblocking_comments: asStringArray(value.nonblocking_comments),
+    repair_hints: typeof value.repair_hints === 'string' ? value.repair_hints : ''
+  };
+}
+
+async function cachedWorkspaceDecision(directory: string, workspace: string, target: string, key: string, packet: VerifierPacket): Promise<WorkspaceCacheLookup> {
   const location = cacheLocation(directory, key);
-  let record;
-  try { record = await readJson(location.file); } catch (error) {
+  let record: UnknownRecord;
+  try { record = await readJson<UnknownRecord>(location.file); } catch (error) {
     return { location, record: null, invalid: !hasErrorCode(error, 'ENOENT') };
   }
-  const valid = record?.workspace === workspace
+  const report = verifierReport(record.report);
+  if (!report || typeof record.accepted !== 'boolean') return { location, record: null, invalid: true };
+  const valid = record.workspace === workspace
     && record?.target === target
     && record?.verification_key === key
     && record?.packet_hash === sha256(stableJson(packet, 0))
     && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-    && record?.report
-    && record.accepted === accepted(record.report);
-  return { location, record: valid ? record : null, invalid: !valid };
+    && record.accepted === accepted(report);
+  const cached: WorkspaceCacheRecord | null = valid && report ? {
+    ...record,
+    workspace,
+    target,
+    verification_key: key,
+    packet_hash: String(record.packet_hash),
+    checker_contract: asRecord(record.checker_contract),
+    report,
+    accepted: record.accepted
+  } : null;
+  return { location, record: cached, invalid: !valid };
 }
 
 async function workspaceSourceFingerprint(directory: string): Promise<string> {
@@ -122,17 +210,17 @@ function canonicalContextFingerprint(compilation: Compilation, target: string, a
   }, 0));
 }
 
-function verifierFailure(error: unknown, target: string, inherited = false): JsonObject {
+function verifierFailure(error: unknown, target: string, inherited = false): WorkspaceOutcome {
   const failure = asErrorLike(error);
   const details = inherited ? failure.details : verifierErrorDetails(error);
   return {
     status: 'error',
-    code: failure.code ?? 'WORKSPACE_VERIFIER_FAILED',
+    code: String(failure.code ?? 'WORKSPACE_VERIFIER_FAILED'),
     error: inherited
       ? `Independent verification stopped after the verifier command failed while checking @${target}`
       : failure.message,
     remediation: 'Repair verification.command or QMD_PROVER_VERIFIER, then rerun workspace inspect. The workspace fact remains unverified; never add VERIFIED manually.',
-    ...(details ? { details } : {}),
+    ...(isRecord(details) ? { details } : {}),
     fatal: true,
     ...(inherited ? { inherited: true, failed_target: target } : {})
   };
@@ -155,7 +243,7 @@ function workspaceDirectory(root: string, requested: string): { id: string; dire
   return { id, directory: path.join(path.resolve(root), AUX, 'workspaces', id) };
 }
 
-export async function initializeWorkspace(root: string, requested: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function initializeWorkspace(root: string, requested: string, options: RuntimeOptions = {}): Promise<InitializeWorkspaceResult> {
   root = path.resolve(root);
   const { id, directory } = workspaceDirectory(root, requested);
   const compilation = await compileProject(root, options);
@@ -168,6 +256,7 @@ export async function initializeWorkspace(root: string, requested: string, optio
     return { schema_version: 1, status: 'resumed', workspace: relativePosix(root, directory), metadata: await readJson(metadataFile) };
   }
   const located = await readLocatedBlock(path.join(root, target.file), id);
+  if (!located) throw new Error(`Canonical source block for @${id} was not found`);
   const targetFile = compilation.manifest.files.find((file) => file.path === target.file);
   const availableIds = new Set([
     ...theoremBundle(compilation, id).dependencies.map((result) => result.id),
@@ -201,7 +290,7 @@ export async function initializeWorkspace(root: string, requested: string, optio
   return { schema_version: 1, status: 'created', workspace: relativePosix(root, directory), metadata };
 }
 
-export async function inspectWorkspace(root: string, requested: string, options: RuntimeOptions = {}): Promise<OperationResult> {
+export async function inspectWorkspace(root: string, requested: string, options: RuntimeOptions = {}): Promise<WorkspaceInspectResult> {
   root = path.resolve(root);
   const { id, directory } = workspaceDirectory(root, requested);
   let staleness;
@@ -220,7 +309,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
   }
   if (!await exists(path.join(directory, 'workspace.json'))) await initializeWorkspace(root, id, options);
   const [metadata, canonical, files] = await Promise.all([
-    readJson<JsonObject>(path.join(directory, 'workspace.json')),
+    readJson<WorkspaceMetadata>(path.join(directory, 'workspace.json')),
     compileProject(root, options),
     discoverActive(directory)
   ]);
@@ -265,14 +354,14 @@ export async function inspectWorkspace(root: string, requested: string, options:
   });
   if (stalenessFailure) diagnostics.push({
     severity: 'error', code: 'STALENESS_CHECK_FAILED',
-    message: stalenessFailure.message,
+    message: stalenessFailure.message ?? 'Staleness check failed',
     file: relativePosix(root, path.join(directory, 'workspace.json')), id,
     remediation: 'Repair canonical parsing or protected verification state, then rerun workspace inspect before using any VERIFIED fact.'
   });
 
   const sourceRootById = new Map<string, string>();
   const localResultById = new Map<string, SemanticResult>();
-  const sourceMarkerById = new Map<string, string | null>();
+  const sourceMarkerById = new Map<string, string | null | undefined>();
   const workspaceResults: SemanticResult[] = provisional.manifest.results.map((result) => {
     sourceRootById.set(result.id, result.file);
     localResultById.set(result.id, result);
@@ -350,7 +439,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
   }
 
   const fileByRootPath = new Map(provisional.manifest.files.map((file) => [file.path, file]));
-  const provisionalEdges = new Map<string, any>(provisional.graph.edges.map((edge) => [`${edge.from}\0${edge.to}`, edge]));
+  const provisionalEdges = new Map<string, GraphEdge>(provisional.graph.edges.map((edge) => [`${edge.from}\0${edge.to}`, edge]));
   const workspaceById = new Map<string, SemanticResult>(workspaceResults.map((result) => [result.id, result]));
   const dependencyAdjacency = new Map<string, string[]>(workspaceResults.map((result) => [
     result.id,
@@ -362,7 +451,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
     for (let index = 0; index < cycle.length - 1; index += 1) cycleEdges.add(`${cycle[index]}\0${cycle[index + 1]}`);
   }
 
-  function localScopeCheck(result: SemanticResult, dependency: string): string {
+  function localScopeCheck(result: SemanticResult, dependency: string): CheckStatus {
     if (dependency === id && !localResultById.has(id)) return 'fail';
     const compiledEdge = provisionalEdges.get(`${result.id}\0${dependency}`);
     if (compiledEdge) return compiledEdge.checks?.scope ?? 'fail';
@@ -374,8 +463,8 @@ export async function inspectWorkspace(root: string, requested: string, options:
     return imports.some((declaration) => declaration.use.includes(dependency)) ? 'pass' : 'fail';
   }
 
-  function referenceChecks(result: SemanticResult): JsonObject[] {
-    return result.dependencies.map((dependency) => {
+  function referenceChecks(result: SemanticResult): WorkspaceReferenceCheck[] {
+    return result.dependencies.map((dependency): WorkspaceReferenceCheck => {
       const workspaceDependency = workspaceById.get(dependency);
       if (workspaceDependency) return {
         dependency,
@@ -424,7 +513,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
   }
 
   const mechanicalDiagnostics = diagnostics.slice();
-  function relevantErrors(result: SemanticResult): JsonObject[] {
+  function relevantErrors(result: SemanticResult): Diagnostic[] {
     const sourceRoot = sourceRootById.get(result.id);
     return mechanicalDiagnostics.filter((item) => item.severity === 'error' && (
       item.id
@@ -433,10 +522,10 @@ export async function inspectWorkspace(root: string, requested: string, options:
     ));
   }
 
-  function programmaticCheck(result: SemanticResult): JsonObject {
+  function programmaticCheck(result: SemanticResult): WorkspaceProgrammaticCheck {
     const references = referenceChecks(result);
     const errors = relevantErrors(result);
-    let reason = null;
+    let reason: string | null = null;
     const marker = sourceMarkerById.get(result.id);
     if (stalenessFailure) reason = 'staleness-check-failed';
     else if (stale) reason = 'workspace-snapshot-stale';
@@ -446,7 +535,9 @@ export async function inspectWorkspace(root: string, requested: string, options:
     else if (marker === 'VERIFIED' || marker === 'REVOKED') reason = 'protected-marker-forbidden';
     else if (result.kind !== 'definition' && !result.proof_present) reason = 'proof-missing';
     else if (errors.length) reason = 'programmatic-check-failed';
-    else if (references.some((check) => ['existence', 'scope', 'status', 'cycle'].some((field) => check[field] !== 'pass'))) reason = 'reference-check-failed';
+    else if (references.some((check) => (
+      check.existence !== 'pass' || check.scope !== 'pass' || check.status !== 'pass' || check.cycle !== 'pass'
+    ))) reason = 'reference-check-failed';
     return {
       status: reason ? 'fail' : 'pass',
       verification_mode: result.kind === 'definition' ? 'definition-construction' : 'proof',
@@ -456,13 +547,14 @@ export async function inspectWorkspace(root: string, requested: string, options:
     };
   }
 
-  const locatedBlocks = new Map<string, any>();
-  async function located(result: SemanticResult, origin: 'canonical' | 'workspace'): Promise<any> {
+  const locatedBlocks = new Map<string, LocatedBlock>();
+  async function located(result: SemanticResult, origin: 'canonical' | 'workspace'): Promise<LocatedBlock> {
     const key = `${origin}:${result.id}:${result.file}`;
-    if (locatedBlocks.has(key)) return locatedBlocks.get(key);
+    const cached = locatedBlocks.get(key);
+    if (cached) return cached;
     const file = origin === 'canonical'
       ? path.join(root, result.file)
-      : path.join(root, sourceRootById.get(result.id));
+      : path.join(root, sourceRootById.get(result.id) ?? result.file);
     const value = await readLocatedBlock(file, result.id);
     if (!value) throw Object.assign(new Error(`Source block for @${result.id} disappeared during workspace inspection`), { code: 'WORKSPACE_SOURCE_STALE' });
     locatedBlocks.set(key, value);
@@ -479,7 +571,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
     } : { id: dependency, status: 'missing', identity: null };
   });
 
-  async function packetFor(result: SemanticResult, outcomes: Map<string, JsonObject>): Promise<JsonObject> {
+  async function packetFor(result: SemanticResult, outcomes: Map<string, WorkspaceOutcome>): Promise<VerifierPacket> {
     const local = localResultById.get(result.id);
     let statement;
     let proof = '';
@@ -488,6 +580,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
       statement = cleanVerifierText(block.statement?.text, result.kind === 'definition' ? 'last' : null);
       proof = cleanVerifierText(block.proof?.text, 'first');
     } else {
+      if (!currentTarget) throw Object.assign(new Error(`Canonical target @${id} disappeared`), { code: 'WORKSPACE_SOURCE_STALE' });
       const block = await located(currentTarget, 'canonical');
       statement = cleanVerifierText(block.statement?.text, currentTarget.kind === 'definition' ? 'last' : null);
       const proofFile = sourceRootById.get(result.id);
@@ -502,7 +595,9 @@ export async function inspectWorkspace(root: string, requested: string, options:
     for (const dependency of [...new Set(result.dependencies)].sort()) {
       const workspaceDependency = workspaceById.get(dependency);
       if (workspaceDependency) {
-        const dependencyBlock = await located(localResultById.get(dependency), 'workspace');
+        const localDependency = localResultById.get(dependency);
+        if (!localDependency) throw Object.assign(new Error(`Workspace dependency @${dependency} disappeared`), { code: 'WORKSPACE_SOURCE_STALE' });
+        const dependencyBlock = await located(localDependency, 'workspace');
         const outcome = outcomes.get(dependency);
         dependencies.push({
           id: dependency,
@@ -536,7 +631,8 @@ export async function inspectWorkspace(root: string, requested: string, options:
         source: { file: canonicalDependency.file }
       });
     }
-    const sourceFile = fileByRootPath.get(sourceRootById.get(result.id));
+    const sourceRoot = sourceRootById.get(result.id);
+    const sourceFile = sourceRoot ? fileByRootPath.get(sourceRoot) : undefined;
     const scope = {
       type: 'selected-workspace',
       workspace: id,
@@ -564,8 +660,8 @@ export async function inspectWorkspace(root: string, requested: string, options:
     });
   }
 
-  const outcomes = new Map<string, JsonObject>();
-  const verification: JsonObject = {
+  const outcomes = new Map<string, WorkspaceOutcome>();
+  const verification: WorkspaceVerification = {
     eligible: 0,
     verifier_calls: 0,
     cache_hits: 0,
@@ -578,7 +674,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
     stopped_after: null,
     facts: []
   };
-  let fatal: JsonObject | null = stalenessFailure ? verifierFailure({ code: 'STALENESS_CHECK_FAILED', message: stalenessFailure.message }, id) : null;
+  let fatal: WorkspaceOutcome | null = stalenessFailure ? verifierFailure({ code: 'STALENESS_CHECK_FAILED', message: stalenessFailure.message }, id) : null;
   if (stale && !fatal) fatal = {
     status: 'error', code: 'WORKSPACE_STALE',
     error: `The protected canonical snapshot for @${id} is stale`,
@@ -615,7 +711,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
     try { packet = await packetFor(result, outcomes); }
     catch (error) {
       fatal = verifierFailure(error, result.id);
-      fatal.code = error.code ?? 'WORKSPACE_SOURCE_STALE';
+      fatal.code = String(asErrorLike(error).code ?? 'WORKSPACE_SOURCE_STALE');
       fatal.failed_target = result.id;
       outcomes.set(result.id, fatal);
       verification.stopped_after = result.id;
@@ -624,8 +720,8 @@ export async function inspectWorkspace(root: string, requested: string, options:
     const key = verificationKey(packet);
     const cached = await cachedWorkspaceDecision(directory, id, result.id, key, packet);
     if (cached.invalid) verification.invalid_cache_entries += 1;
-    let report;
-    let source;
+    let report: VerifierReport;
+    let source: string;
     let cachedResult = false;
     if (cached.record) {
       report = cached.record.report;
@@ -690,7 +786,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
         report,
         statement_hash: result.statement_hash,
         proof_hash: result.proof_hash,
-        dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [dependency.id, {
+        dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [String(dependency.id), {
           origin: dependency.origin,
           status: dependency.status,
           identity: dependency.identity
@@ -714,7 +810,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
     }
 
     const pass = accepted(report);
-    const outcome = {
+    const outcome: WorkspaceOutcome = {
       status: pass ? 'pass' : 'fail',
       source,
       cached: cachedResult,
@@ -731,6 +827,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
       reason: 'Independent verification did not run because the workspace fact was not eligible.'
     });
     const outcome = outcomes.get(result.id);
+    if (!outcome) throw new Error(`Workspace outcome for @${result.id} was not recorded`);
     if (outcome.status === 'fail') diagnostics.push({
       severity: 'error', code: 'WORKSPACE_AI_CHECK_REJECTED',
       message: `Independent verification rejected @${result.id}: ${outcome.report?.summary || 'critical errors or gaps remain'}`,
@@ -747,18 +844,18 @@ export async function inspectWorkspace(root: string, requested: string, options:
 
   const citedCanonicalIds = new Set(workspaceResults.flatMap((result) => result.dependencies)
     .filter((dependency) => canonicalById.has(dependency) && !workspaceIds.has(dependency)));
-  const canonicalNodes = [...citedCanonicalIds].sort().map((dependency) => {
+  const canonicalNodes: GraphNode[] = [...citedCanonicalIds].sort().flatMap((dependency) => {
     const result = canonicalById.get(dependency);
-    return {
+    return result ? [{
       id: result.id, title: result.title, kind: result.kind, status: result.status,
       file: result.file, line: result.line, origin: 'canonical',
       identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash }
-    };
+    }] : [];
   });
   const knownIds = new Set([...workspaceResults.map((result) => result.id), ...canonicalNodes.map((result) => result.id)]);
   const unresolvedNodes = [...new Set(workspaceResults.flatMap((result) => result.dependencies).filter((dependency) => !knownIds.has(dependency)))].sort()
     .map((dependency) => ({ id: dependency, title: '', kind: 'unknown', status: 'missing', origin: 'unresolved' }));
-  const graph: JsonObject = {
+  const graph: DependencyGraph = {
     schema_version: 2,
     nodes: [
       ...workspaceResults.map(({ id: resultId, title, kind, status, file, line, statement_hash, proof_hash }) => ({
@@ -767,9 +864,9 @@ export async function inspectWorkspace(root: string, requested: string, options:
         ai: { status: outcomes.get(resultId)?.status ?? 'not-run' }
       })),
       ...canonicalNodes,
-      ...unresolvedNodes
+      ...unresolvedNodes.map((node) => ({ ...node, kind: 'unknown' as const }))
     ],
-    edges: workspaceResults.flatMap((result) => result.dependencies.map((dependency) => {
+    edges: workspaceResults.flatMap((result) => result.dependencies.map((dependency): GraphEdge => {
       const check = referenceChecks(result).find((item) => item.dependency === dependency);
       return {
         from: result.id,
@@ -793,14 +890,14 @@ export async function inspectWorkspace(root: string, requested: string, options:
     file: result.file,
     line: result.line,
     programmatic: programmaticCheck(result),
-    ai: outcomes.get(result.id)
+    ai: outcomes.get(result.id) ?? { status: 'not-run' as const, reason: 'No outcome was recorded.' }
   }));
   verification.passed = facts.filter((fact) => fact.ai.status === 'pass').length;
   verification.rejected = facts.filter((fact) => fact.ai.status === 'fail').length;
   verification.errors = facts.filter((fact) => fact.ai.status === 'error').length;
   verification.not_run = facts.filter((fact) => fact.ai.status === 'not-run').length;
   verification.facts = facts.map(({ id: factId, ai }) => ({ id: factId, ...ai }));
-  const manifest = {
+  const manifest: Manifest = {
     schema_version: 2,
     snapshot_id: graph.snapshot_id,
     target: id,
@@ -810,6 +907,7 @@ export async function inspectWorkspace(root: string, requested: string, options:
       path: relativePosix(directory, path.resolve(root, file.path))
     })),
     results: workspaceResults.map((result) => ({ ...result, ai: outcomes.get(result.id) })),
+    proofs: provisional.manifest.proofs,
     canonical_results: canonicalNodes
   };
   diagnostics.sort((left, right) => `${left.file ?? ''}:${left.line ?? 0}:${left.code}:${left.id ?? ''}`.localeCompare(`${right.file ?? ''}:${right.line ?? 0}:${right.code}:${right.id ?? ''}`));

@@ -3,7 +3,7 @@ import { CONTROL_MARKER_SET } from './constants.js';
 import type { ControlMarker } from './constants.js';
 
 interface ParsedAttributes { id: string; classes: string[]; values: Record<string, string> }
-interface LocatedDiv {
+export interface LocatedDiv {
   attrs: ParsedAttributes;
   rawAttrs: string;
   start: number;
@@ -12,7 +12,22 @@ interface LocatedDiv {
   end: number;
   endLine: number;
 }
-interface LocatedBody { bodyStart: number; bodyEnd: number; text: string; marker?: string | null }
+export interface LocatedBody { bodyStart: number; bodyEnd: number; text: string; marker?: string | null }
+export interface LocatedBlock {
+  source: string;
+  div: LocatedDiv;
+  raw: string;
+  statement: LocatedBody | null;
+  marker: string | null;
+  proof: LocatedBody | null;
+  proofDiv: LocatedDiv | null;
+}
+export interface LocatedProof {
+  source: string;
+  proofDiv: LocatedDiv;
+  proof: LocatedBody | null;
+  raw: string;
+}
 
 function parseFence(line: string): { indent: number; length: number; attrs: string } | null {
   const match = line.match(/^(\s*)(:{3,})\s*(?:\{([^}]*)\})?\s*$/);
@@ -87,7 +102,7 @@ function definitionMarkerBody(source: string, div: LocatedDiv): LocatedBody | nu
   return { ...located, text: construction, marker };
 }
 
-export async function readLocatedBlock(file: string, id: string): Promise<any> {
+export async function readLocatedBlock(file: string, id: string): Promise<LocatedBlock | null> {
   const source = await readFile(file, 'utf8');
   const div = locateDiv(source, id);
   if (!div) return null;
@@ -104,13 +119,13 @@ export async function readLocatedBlock(file: string, id: string): Promise<any> {
   };
 }
 
-export async function readLocatedProof(file: string, id: string): Promise<any> {
+export async function readLocatedProof(file: string, id: string): Promise<LocatedProof | null> {
   const source = await readFile(file, 'utf8');
   const proofDiv = locateProof(source, id);
   return proofDiv ? { source, proofDiv, proof: body(source, proofDiv), raw: source.slice(proofDiv.start, proofDiv.end) } : null;
 }
 
-export function mergeProof(canonical: any, candidate: any): string {
+export function mergeProof(canonical: LocatedBlock | null, candidate: LocatedProof | null): string {
   if (!canonical?.div || !candidate?.proofDiv) throw new Error('Canonical result and linked proposal proof are required');
   const proofText = candidate.source.slice(candidate.proofDiv.start, candidate.proofDiv.end).trim();
   if (canonical.proofDiv) {
@@ -126,6 +141,7 @@ export function setProofMarker(source: string, target: string, marker: ControlMa
   const proofDiv = locateProof(source, target);
   if (!proofDiv) throw new Error(`Linked proof of @${target.replace(/^@/, '')} was not found`);
   const proofBody = body(source, proofDiv);
+  if (!proofBody) throw new Error(`Linked proof of @${target.replace(/^@/, '')} has no readable body`);
   const newline = source.includes('\r\n') ? '\r\n' : '\n';
   const lines = source.slice(proofBody.bodyStart, proofBody.bodyEnd).split(/\r?\n/);
   const firstContent = lines.findIndex((line) => line.trim() !== '');
@@ -143,6 +159,7 @@ export function setDefinitionMarker(source: string, target: string, marker: Cont
   const div = locateDiv(source, id);
   if (!div || !div.attrs.classes.includes('definition')) throw new Error(`Definition @${id} was not found`);
   const definitionBody = body(source, div);
+  if (!definitionBody) throw new Error(`Definition @${id} has no readable body`);
   const raw = source.slice(definitionBody.bodyStart, definitionBody.bodyEnd);
   const normalized = raw.replace(/\r\n/g, '\n');
   const paragraphs = normalized.split(/\n[ \t]*\n/);

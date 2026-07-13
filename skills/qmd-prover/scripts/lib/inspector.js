@@ -5,6 +5,7 @@ import { AUX, cleanId, readJson, relativePosix } from './files.js';
 import { inspectCanonicalScope } from './inspection-verification.js';
 import { readLocatedBlock } from './source.js';
 import { indexBy } from './collections.js';
+import { asRecord } from './guards.js';
 const unusableStatuses = new Set([
     'open', 'candidate', 'rejected', 'revoked', 'stale', 'missing',
     'workspace-open', 'workspace-candidate', 'workspace-rejected', 'workspace-revoked', 'workspace-stale'
@@ -19,7 +20,7 @@ function adjacency(graph, reverse = false) {
         const to = reverse ? edge.from : edge.to;
         if (!output.has(from))
             output.set(from, []);
-        output.get(from).push(to);
+        output.get(from)?.push(to);
     }
     for (const values of output.values())
         values.sort();
@@ -31,6 +32,8 @@ function traverse(graph, start, reverse = false) {
     const queue = [...(links.get(start) ?? [])];
     while (queue.length) {
         const current = queue.shift();
+        if (!current)
+            continue;
         if (seen.has(current))
             continue;
         seen.add(current);
@@ -60,10 +63,12 @@ function allSimplePaths(graph, start, goal, options = {}) {
     let generationCapped = false;
     while (queue.length && paths.length < maxPaths && explored < maxExplored) {
         const current = queue.shift();
+        if (!current)
+            continue;
         explored += 1;
         if (current.length - 1 >= maxDepth)
             continue;
-        for (const next of links.get(current.at(-1)) ?? []) {
+        for (const next of links.get(current[current.length - 1] ?? '') ?? []) {
             if (current.includes(next))
                 continue;
             const candidate = [...current, next];
@@ -94,7 +99,9 @@ function shortestPath(graph, start, goal, reverse = false) {
     const seen = new Set([start]);
     while (queue.length) {
         const current = queue.shift();
-        for (const next of links.get(current.at(-1)) ?? []) {
+        if (!current)
+            continue;
+        for (const next of links.get(current[current.length - 1] ?? '') ?? []) {
             if (seen.has(next))
                 continue;
             const candidate = [...current, next];
@@ -127,7 +134,7 @@ function aiCheck(result, inspected = null) {
 }
 function factCheck(result, diagnostics, inspected = null) {
     const relevant = diagnostics.filter((item) => item.id ? item.id === result.id : item.file === result.file);
-    const referenceFailure = (result.reference_checks ?? []).some((check) => ['existence', 'scope', 'status', 'cycle'].some((name) => check[name] === 'fail'));
+    const referenceFailure = (result.reference_checks ?? []).some((check) => (check.existence === 'fail' || check.scope === 'fail' || check.status === 'fail' || check.cycle === 'fail'));
     const programmatic = referenceFailure || relevant.some((item) => item.severity === 'error') ? 'fail' : 'pass';
     return {
         id: result.id,
@@ -210,7 +217,7 @@ export function deriveGraphFindings(snapshot, options = {}) {
     const unusedExports = (manifest.results ?? []).filter((result) => result.export && !importedExports.has(result.id) && selection.result(result))
         .sort((left, right) => left.id.localeCompare(right.id))
         .map((result) => ({ id: result.id, export: result.export, file: result.file, line: result.line }));
-    const mathematicalNodes = graph.nodes.filter((node) => ['canonical', 'workspace'].includes(node.origin));
+    const mathematicalNodes = graph.nodes.filter((node) => node.origin !== undefined && ['canonical', 'workspace'].includes(node.origin));
     const isolatedFacts = mathematicalNodes.filter((node) => selection.node(node) && (outgoing.get(node.id)?.length ?? 0) === 0 && (incoming.get(node.id)?.length ?? 0) === 0)
         .sort((left, right) => left.id.localeCompare(right.id));
     const goalRoots = new Set();
@@ -233,9 +240,10 @@ export function deriveGraphFindings(snapshot, options = {}) {
     const errorFiles = new Set(diagnostics.filter((item) => item.severity === 'error' && !item.id && item.file).map((item) => item.file));
     const candidateStatuses = new Set(['candidate', 'workspace-candidate']);
     const candidateReadyForAi = mathematicalNodes.filter((node) => {
-        if (!selection.node(node) || !candidateStatuses.has(node.status) || errorIds.has(node.id) || errorFiles.has(node.file))
+        if (!selection.node(node) || !candidateStatuses.has(node.status) || errorIds.has(node.id) || (node.file !== undefined && errorFiles.has(node.file)))
             return false;
-        return (graph.edges.filter((edge) => edge.from === node.id)).every((edge) => ['existence', 'scope', 'status', 'cycle'].every((check) => edge.checks?.[check] === 'pass'));
+        return graph.edges.filter((edge) => edge.from === node.id).every((edge) => (edge.checks?.existence === 'pass' && edge.checks.scope === 'pass'
+            && edge.checks.status === 'pass' && edge.checks.cycle === 'pass'));
     }).sort((left, right) => left.id.localeCompare(right.id));
     const invalidRoots = staleFactIds({ manifest, diagnostics });
     const invalidEvidenceDependents = mathematicalNodes.filter((node) => selection.node(node) && [...invalidRoots].some((root) => traverse(graph, root, true).has(node.id)))
@@ -372,7 +380,7 @@ export async function inspectPath(root, requestedPath, options = {}) {
         for (const dependency of traverse(compilation.graph, id))
             contextIds.add(dependency);
     const diagnostics = [
-        ...compilation.diagnostics.filter((item) => selectedIds.has(item.id) || (item.file && isWithinPath(item.file, relative, info.isDirectory()))),
+        ...compilation.diagnostics.filter((item) => (item.id !== undefined && selectedIds.has(item.id)) || (item.file !== undefined && isWithinPath(item.file, relative, info.isDirectory()))),
         ...inspected.diagnostics
     ];
     const graph = subgraph(compilation.graph, contextIds);
@@ -403,6 +411,8 @@ async function latestSnapshot(root, options = {}) {
             throw new Error('No complete dependency snapshot is available; repair parse failures and inspect again');
         pointer = await readJson(path.join(root, AUX, 'graphs', 'latest.json'));
     }
+    if (!pointer)
+        throw new Error('The latest dependency snapshot pointer is missing');
     const graphsRoot = path.join(root, AUX, 'graphs');
     const snapshotFile = typeof pointer.file === 'string' ? path.resolve(root, pointer.file) : '';
     if (!snapshotFile.startsWith(`${graphsRoot}${path.sep}`))
@@ -440,7 +450,11 @@ export async function analyzeDependencies(root, operation, args = [], options = 
         const directIds = adjacency(graph, reverse).get(node.id) ?? [];
         const transitiveIds = [...traverse(graph, node.id, reverse)].sort();
         const nodes = byId(graph.nodes);
-        result = { target: node, direct: directIds.map((id) => nodes.get(id)), transitive: transitiveIds.map((id) => nodes.get(id)) };
+        result = {
+            target: node,
+            direct: directIds.map((id) => nodes.get(id)).filter((item) => item !== undefined),
+            transitive: transitiveIds.map((id) => nodes.get(id)).filter((item) => item !== undefined)
+        };
     }
     else if (operation === 'path') {
         requireNode(graph, requested);
@@ -463,7 +477,7 @@ export async function analyzeDependencies(root, operation, args = [], options = 
         const nodes = byId(graph.nodes);
         result = {
             target: node,
-            affected: [...traverse(graph, node.id, true)].sort().map((id) => nodes.get(id)).filter((item) => item.status === 'verified')
+            affected: [...traverse(graph, node.id, true)].sort().map((id) => nodes.get(id)).filter((item) => item?.status === 'verified')
         };
     }
     else if (operation === 'frontier') {
@@ -579,51 +593,54 @@ function inspectedNodes(result) {
         ids = result.manifest.results.map((item) => item.id);
     else
         ids = result.graph.nodes.filter((node) => node.scope !== 'external' && node.origin !== 'unresolved').map((node) => node.id);
-    return [...new Set(ids)].map((id) => nodes.get(id)).filter(Boolean).sort((left, right) => left.id.localeCompare(right.id));
+    return [...new Set(ids)].map((id) => nodes.get(id))
+        .filter((node) => node !== undefined)
+        .sort((left, right) => left.id.localeCompare(right.id));
 }
 function reportFindings(lines, findings) {
     if (!findings)
         return;
     lines.push('graph findings:');
-    if (Object.hasOwn(findings, 'unused_imports')) {
+    if (findings.unused_imports !== undefined) {
         lines.push(`  unused imports: ${findings.unused_imports.length}`);
         for (const item of findings.unused_imports)
             lines.push(`    ${item.file}: @${item.id} from ${item.from}`);
     }
-    if (Object.hasOwn(findings, 'unused_exports')) {
+    if (findings.unused_exports !== undefined) {
         lines.push(`  unused exports: ${findings.unused_exports.length}`);
         for (const item of findings.unused_exports)
             lines.push(`    @${item.id} (${item.export}) ${item.file}:${item.line ?? '?'}`);
     }
-    if (Object.hasOwn(findings, 'isolated_facts')) {
+    if (findings.isolated_facts !== undefined) {
         lines.push(`  isolated facts: ${findings.isolated_facts.length}`);
         for (const item of findings.isolated_facts)
             lines.push(`    @${item.id} [${item.status}] ${item.file ?? ''}`.trimEnd());
     }
-    if (Object.hasOwn(findings, 'unreachable')) {
+    if (findings.unreachable !== undefined) {
         const unreachable = findings.unreachable;
         lines.push(`  unreachable facts: ${unreachable.applicable === false ? 'not applicable (no goal root)' : unreachable.facts.length}`);
         for (const item of unreachable.facts)
             lines.push(`    @${item.id} [${item.status}] ${item.file ?? ''}`.trimEnd());
     }
-    if (Object.hasOwn(findings, 'candidate_ready_for_ai')) {
+    if (findings.candidate_ready_for_ai !== undefined) {
         lines.push(`  candidates ready for AI: ${findings.candidate_ready_for_ai.length}`);
         for (const item of findings.candidate_ready_for_ai)
             lines.push(`    @${item.id} [${item.kind}] ${item.file ?? ''}`.trimEnd());
     }
-    if (Object.hasOwn(findings, 'invalid_evidence_dependents')) {
+    if (findings.invalid_evidence_dependents !== undefined) {
         lines.push(`  invalid-evidence dependents: ${findings.invalid_evidence_dependents.length}`);
         for (const item of findings.invalid_evidence_dependents)
             lines.push(`    @${item.fact.id} via ${item.invalid_sources.map((id) => `@${id}`).join(', ')}`);
     }
-    if (Object.hasOwn(findings, 'heavily_reused')) {
+    if (findings.heavily_reused !== undefined) {
         lines.push(`  heavily reused facts: ${findings.heavily_reused.length}`);
         for (const item of findings.heavily_reused.slice(0, 20)) {
             lines.push(`    @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
         }
     }
 }
-export function printReport(result) {
+export function printReport(input) {
+    const result = input;
     const lines = [`qmd-prover ${result.operation}`, `snapshot: ${result.snapshot_id ?? 'none'}`];
     if (typeof result.ok === 'boolean')
         lines.push(`status: ${result.ok ? 'ok' : 'failed'}`);
@@ -665,7 +682,8 @@ export function printReport(result) {
             const kinds = {};
             const statuses = {};
             for (const node of nodes) {
-                kinds[node.kind] = (kinds[node.kind] ?? 0) + 1;
+                const kind = node.kind ?? 'unknown';
+                kinds[kind] = (kinds[kind] ?? 0) + 1;
                 statuses[node.status] = (statuses[node.status] ?? 0) + 1;
             }
             lines.push(`facts: ${nodes.length}`, `kinds: ${formatCounts(kinds)}`, `statuses: ${formatCounts(statuses)}`);
@@ -674,7 +692,7 @@ export function printReport(result) {
         for (const node of nodes) {
             if (!byFile.has(node.file ?? '(unknown)'))
                 byFile.set(node.file ?? '(unknown)', []);
-            byFile.get(node.file ?? '(unknown)').push(node);
+            byFile.get(node.file ?? '(unknown)')?.push(node);
         }
         lines.push('facts by file:');
         for (const [file, facts] of [...byFile].sort(([left], [right]) => left.localeCompare(right))) {
@@ -687,7 +705,7 @@ export function printReport(result) {
             lines.push(`  @${item.id} [${item.kind}, ${item.status}] ${item.file}:${item.line ?? '?'}`);
         }
     }
-    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.programmatic);
+    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.programmatic !== undefined && item.ai !== undefined);
     if (checks.length) {
         lines.push('checks:');
         for (const check of [...checks].sort((left, right) => left.id.localeCompare(right.id))) {
@@ -782,7 +800,7 @@ export function printReport(result) {
             lines.push(`  @${item.id} [${item.kind}, ${item.status}] ${item.file ?? ''}:${item.line ?? '?'}`);
     }
     const reportDerivedFindings = result.findings ?? (result.operation === 'workspace-inspect' && result.graph && result.manifest
-        ? deriveGraphFindings({ graph: result.graph, manifest: result.manifest, diagnostics: result.diagnostics })
+        ? deriveGraphFindings({ graph: result.graph, manifest: result.manifest, diagnostics: result.diagnostics ?? [] })
         : null);
     reportFindings(lines, reportDerivedFindings);
     if (result.unused_imports)
@@ -802,14 +820,15 @@ export function printReport(result) {
     if (result.operation === 'dependency-reused') {
         lines.push(`heavily reused facts (${result.total} total):`);
         for (const item of result.facts ?? [])
-            lines.push(`  @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
+            if (item.fact)
+                lines.push(`  @${item.fact.id}: direct=${item.direct_dependents}, transitive=${item.transitive_dependents}, verified=${item.verified_dependents}`);
     }
     if (result.graph?.edges?.length) {
         const graphNodes = byId(result.graph.nodes);
         lines.push('dependencies:');
         for (const edge of result.graph.edges) {
-            const checks = edge.checks ?? {};
-            lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks.existence}, scope=${checks.scope}, status=${checks.status}, cycle=${checks.cycle}, ai=${checks.ai_sufficiency}]`);
+            const checks = edge.checks;
+            lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks?.existence}, scope=${checks?.scope}, status=${checks?.status}, cycle=${checks?.cycle}, ai=${checks?.ai_sufficiency}]`);
         }
         const crossFile = result.graph.edges.filter((edge) => {
             const from = graphNodes.get(edge.from)?.file;
@@ -819,7 +838,7 @@ export function printReport(result) {
         if (crossFile.length) {
             lines.push('cross-file dependencies:');
             for (const edge of crossFile)
-                lines.push(`  ${graphNodes.get(edge.from).file} @${edge.from} -> ${graphNodes.get(edge.to).file} @${edge.to}`);
+                lines.push(`  ${graphNodes.get(edge.from)?.file} @${edge.from} -> ${graphNodes.get(edge.to)?.file} @${edge.to}`);
         }
     }
     if (result.diagnostics?.length) {

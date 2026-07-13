@@ -6,16 +6,24 @@ import test from 'node:test';
 import { HELP_COMMANDS } from '../skills/qmd-prover/src/lib/cli-help.js';
 import { readExternalPolicy } from '../skills/qmd-prover/src/lib/external.js';
 import { initializeProject } from '../skills/qmd-prover/src/lib/project.js';
-import { bareProject, fakePandoc, here, options, proof, result, verifier } from './support.js';
+import { bareProject, fakePandoc, here, must, options, proof, result, verifier } from './support.js';
+
+interface CliError extends Error { code?: string | number | null }
+interface CliProcessResult { error: CliError | null; stdout: string; stderr: string }
+interface CliJsonResult {
+  fact: { id: string };
+  scope: { type: string; path: string };
+  operation: string;
+}
 
 test('project initialization inventories external policy, adopts, preserves, appends, and synchronizes safely', async () => {
   const canonicalSource = await readFile(path.join(here, '..', 'skills', 'qmd-prover', 'references', 'AGENTS.md'), 'utf8');
-  const canonicalBlock = canonicalSource.match(/<!-- qmd-prover-contract:start version=12 -->[\s\S]*?<!-- qmd-prover-contract:end -->/)[0];
+  const canonicalBlock = must(canonicalSource.match(/<!-- qmd-prover-contract:start version=12 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0];
 
   const fresh = await bareProject();
   const created = await initializeProject(fresh);
   assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 12 });
-  assert.equal(created.existing.external_policy.mode, 'unrestricted');
+  assert.equal(must(created.existing).external_policy.mode, 'unrestricted');
   assert.equal(created.workspace_root, '.qmd-prover/workspaces');
   assert.equal((await stat(path.join(fresh, '.qmd-prover', 'workspaces'))).isDirectory(), true);
   assert.match(await readFile(path.join(fresh, 'AGENTS.md'), 'utf8'), /## Project-specific additions/);
@@ -28,7 +36,7 @@ test('project initialization inventories external policy, adopts, preserves, app
   const external = await bareProject();
   await mkdir(path.join(external, '.qmd-prover'));
   await writeFile(path.join(external, '.qmd-prover', '.external.qmd'), '  \n');
-  assert.equal((await initializeProject(external)).existing.external_policy.mode, 'none');
+  assert.equal(must((await initializeProject(external)).existing).external_policy.mode, 'none');
   await writeFile(path.join(external, '.qmd-prover', '.external.qmd'), 'Standard ZFC may be used.\n');
   assert.deepEqual(await readExternalPolicy(external), {
     path: '.qmd-prover/.external.qmd', mode: 'declared', content: 'Standard ZFC may be used.\n'
@@ -48,8 +56,8 @@ test('project initialization inventories external policy, adopts, preserves, app
   await writeFile(path.join(partial, 'theory', 'existing.qmd'), '# Existing mathematics\n');
   const intentRequired = await initializeProject(partial);
   assert.deepEqual({ ok: intentRequired.ok, status: intentRequired.status }, { ok: false, status: 'intent-required' });
-  assert.deepEqual(intentRequired.existing.quarto_configs, ['_quarto.yml']);
-  assert.deepEqual(intentRequired.existing.qmd_files, ['theory/existing.qmd']);
+  assert.deepEqual(must(intentRequired.existing).quarto_configs, ['_quarto.yml']);
+  assert.deepEqual(must(intentRequired.existing).qmd_files, ['theory/existing.qmd']);
   await assert.rejects(readFile(path.join(partial, 'AGENTS.md')), { code: 'ENOENT' });
   await assert.rejects(stat(path.join(partial, '.qmd-prover')), { code: 'ENOENT' });
   assert.equal((await initializeProject(partial, { adoptExisting: true })).status, 'adopted');
@@ -95,7 +103,7 @@ test('project initialization inventories external policy, adopts, preserves, app
 test('dispatcher preserves JSON commands and adds workspace operations', async () => {
   const root = await bareProject();
   const cli = path.join(here, '..', 'skills', 'qmd-prover', 'scripts', 'qmd-prover.js');
-  const initialized = await new Promise<any>((resolve, reject) => execFile(process.execPath, [cli, 'init'], {
+  const initialized = await new Promise<{ status: string; contract_version: number; workspace_root: string }>((resolve, reject) => execFile(process.execPath, [cli, 'init'], {
     cwd: root
   }, (error, stdout, stderr) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(initialized.status, 'created');
@@ -103,20 +111,20 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
   assert.equal(initialized.workspace_root, '.qmd-prover/workspaces');
   const policyRoot = await bareProject();
   await writeFile(path.join(policyRoot, 'AGENTS.md'), '# Existing policy\n');
-  const guarded = await new Promise<any>((resolve) => execFile(process.execPath, [cli, 'init'], {
+  const guarded = await new Promise<{ error: CliError | null; output: { ok: boolean; status: string } }>((resolve) => execFile(process.execPath, [cli, 'init'], {
     cwd: policyRoot
   }, (error, stdout) => resolve({ error, output: JSON.parse(stdout) })));
-  assert.equal(guarded.error.code, 2);
+  assert.equal(must(guarded.error).code, 2);
   assert.deepEqual({ ok: guarded.output.ok, status: guarded.output.status }, { ok: false, status: 'append-required' });
   await chmod(fakePandoc, 0o755);
   await writeFile(path.join(root, 'goal.qmd'), result('thm-main-cli', 'CLI statement.', { proofText: 'The statement follows directly.' }));
-  const run = await new Promise<any>((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project'], {
+  const run = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project'], {
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
   const jsonInspection = JSON.parse(run.stdout);
   assert.equal(jsonInspection.summary.goals[0].id, 'thm-main-cli');
   const cliEnv = { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier };
-  const runJson = (args) => new Promise<any>((resolve, reject) => execFile(process.execPath, [cli, ...args], {
+  const runJson = (args: string[]) => new Promise<CliJsonResult>((resolve, reject) => execFile(process.execPath, [cli, ...args], {
     cwd: root, env: cliEnv
   }, (error, stdout) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal((await runJson(['inspect', 'fact', '@thm-main-cli'])).fact.id, 'thm-main-cli');
@@ -128,25 +136,25 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
   assert.equal((await runJson(['dependency', 'unused', 'exports'])).operation, 'dependency-unused-exports');
   assert.equal((await runJson(['dependency', 'ready', 'for', 'ai'])).operation, 'dependency-ready-for-ai');
   assert.equal((await runJson(['check', 'staleness'])).operation, 'check-staleness');
-  const printed = await new Promise<any>((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project', '--print'], {
+  const printed = await new Promise<string>((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project', '--print'], {
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => error ? reject(error) : resolve(stdout)));
   assert.match(printed, new RegExp(`snapshot: ${jsonInspection.snapshot_id}`));
-  const workspace = await new Promise<any>((resolve, reject) => execFile(process.execPath, [cli, 'workspace', 'init', '@thm-main-cli'], {
+  const workspace = await new Promise<{ status: string }>((resolve, reject) => execFile(process.execPath, [cli, 'workspace', 'init', '@thm-main-cli'], {
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(workspace.status, 'created');
   await writeFile(path.join(root, 'duplicate.qmd'), result('thm-main-cli', 'Duplicate.'));
-  const failed = await new Promise<any>((resolve) => execFile(process.execPath, [cli, 'inspect', 'project'], {
+  const failed = await new Promise<{ error: CliError | null; stdout: string }>((resolve) => execFile(process.execPath, [cli, 'inspect', 'project'], {
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => resolve({ error, stdout })));
-  assert.equal(failed.error.code, 2);
+  assert.equal(must(failed.error).code, 2);
   assert.equal(JSON.parse(failed.stdout).ok, false);
 });
 
 test('dispatcher provides help for every command group and leaf', async () => {
   const cli = path.join(here, '..', 'skills', 'qmd-prover', 'scripts', 'qmd-prover.js');
-  const run = (args) => new Promise<any>((resolve) => execFile(process.execPath, [cli, ...args], (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+  const run = (args: string[]) => new Promise<CliProcessResult>((resolve) => execFile(process.execPath, [cli, ...args], (error, stdout, stderr) => resolve({ error, stdout, stderr })));
   const commands = [
     'init',
     'inspect', 'inspect project', 'inspect fact', 'inspect theorem', 'inspect path',
@@ -165,7 +173,7 @@ test('dispatcher provides help for every command group and leaf', async () => {
   assert.equal(rootHelp.error, null);
   assert.match(rootHelp.stdout, /^Usage:\n/);
   assert.match(rootHelp.stdout, /Commands:\n  init\n    Initialize or safely adopt a qmd-prover project\.\n  inspect\n  dependency/);
-  assert.ok(HELP_COMMANDS.every((item) => ['description', 'arguments', 'options', 'examples', 'notes'].every((section) => Array.isArray(item.sections[section]))));
+  assert.ok(HELP_COMMANDS.every((item) => (['description', 'arguments', 'options', 'examples', 'notes'] as const).every((section) => Array.isArray(item.sections[section]))));
   for (const command of commands) {
     const result = await run([...command.split(' '), 'help']);
     assert.equal(result.error, null, `${command} help failed: ${result.stderr}`);
@@ -183,17 +191,17 @@ test('dispatcher provides help for every command group and leaf', async () => {
   assert.equal((await run(['inspect', 'fact', '--help'])).error, null);
   assert.equal((await run(['inspect', 'fact', '-h'])).error, null);
   const removed = await run(['inspect-project', '--help']);
-  assert.equal(removed.error.code, 1);
+  assert.equal(must(removed.error).code, 1);
   assert.match(removed.stderr, /Unknown command: inspect-project/);
   const removedDependency = await run(['dependency', 'alternative-paths', '--help']);
-  assert.equal(removedDependency.error.code, 1);
+  assert.equal(must(removedDependency.error).code, 1);
   assert.match(removedDependency.stderr, /Unknown command: dependency alternative-paths/);
   const removedInit = await run(['init', 'project', '--help']);
-  assert.equal(removedInit.error.code, 1);
+  assert.equal(must(removedInit.error).code, 1);
   assert.match(removedInit.stderr, /Unknown command: init project/);
 
   const compatibilityCli = path.join(here, '..', 'skills', 'qmd-prover', 'scripts', 'qmd-prover.mjs');
-  const compatibilityHelp = await new Promise<any>((resolve) => execFile(
+  const compatibilityHelp = await new Promise<CliProcessResult>((resolve) => execFile(
     process.execPath,
     [compatibilityCli, 'help'],
     (error, stdout, stderr) => resolve({ error, stdout, stderr })

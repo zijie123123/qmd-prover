@@ -3,7 +3,8 @@ import path from 'node:path';
 import { atomicJson, atomicWrite, AUX } from './files.js';
 import { compileProject } from './compiler.js';
 function escapeXml(value = '') {
-    return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[character]);
+    const entities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' };
+    return String(value).replace(/[&<>"']/g, (character) => entities[character] ?? character);
 }
 function graphSvg(graph) {
     const width = 900;
@@ -19,6 +20,8 @@ function graphSvg(graph) {
     }).join('');
     const nodes = graph.nodes.map((node) => {
         const position = positions.get(node.id);
+        if (!position)
+            return '';
         const href = `../../${node.file}#${node.id}`;
         const title = `${node.id}: ${node.title} (${node.status})`;
         return `<a href="${escapeXml(href)}"><g><title>${escapeXml(title)}</title><rect x="${position.x}" y="${position.y}" width="360" height="48" rx="8" fill="#fff" stroke="#64748b"/><text x="${position.x + 12}" y="${position.y + 20}" font-family="sans-serif" font-size="13">${escapeXml(node.id)}</text><text x="${position.x + 12}" y="${position.y + 38}" font-family="sans-serif" font-size="11" fill="#586174">${escapeXml(node.status)}</text></g></a>`;

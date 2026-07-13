@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hasErrorCode } from './errors.js';
+import { asRecord, asStringArray } from './guards.js';
 const defaults = {
     project: { name: '', root: '..', 'discover-qmd-recursively': true, exclude: ['.qmd-prover'] },
     goals: { 'id-prefix': 'thm-main-', 'protect-statements': true },
@@ -29,17 +30,19 @@ export function parseSimpleYaml(source) {
     for (const raw of source.split(/\r?\n/)) {
         if (!raw.trim() || raw.trimStart().startsWith('#'))
             continue;
-        const indent = raw.match(/^\s*/)[0].length;
+        const indent = raw.match(/^\s*/)?.[0].length ?? 0;
         const match = raw.trim().match(/^([^:]+):(?:\s*(.*))?$/);
         if (!match)
             continue;
-        while (stack.at(-1).indent >= indent)
+        while ((stack.at(-1)?.indent ?? -1) >= indent)
             stack.pop();
-        const parent = stack.at(-1).value;
-        const key = match[1].trim();
+        const parent = stack.at(-1)?.value;
+        if (!parent)
+            continue;
+        const key = match[1]?.trim() ?? '';
         if (!match[2]) {
             parent[key] = {};
-            stack.push({ indent, value: parent[key] });
+            stack.push({ indent, value: asRecord(parent[key]) });
         }
         else
             parent[key] = scalar(match[2]);
@@ -47,17 +50,54 @@ export function parseSimpleYaml(source) {
     return root;
 }
 function merge(left, right) {
-    const result = structuredClone(left);
+    const result = asRecord(structuredClone(left));
     for (const [key, value] of Object.entries(right ?? {})) {
         result[key] = value && typeof value === 'object' && !Array.isArray(value)
-            ? merge(result[key] ?? {}, value) : value;
+            ? merge(asRecord(result[key]), asRecord(value)) : value;
     }
     return result;
+}
+function booleanSetting(value, fallback) {
+    return typeof value === 'boolean' ? value : fallback;
+}
+function normalizedConfig(value) {
+    const project = asRecord(value.project);
+    const goals = asRecord(value.goals);
+    const semantic = asRecord(value.semantic);
+    const verification = asRecord(value.verification);
+    const render = asRecord(value.render);
+    return {
+        project: {
+            name: typeof project.name === 'string' ? project.name : defaults.project.name,
+            root: typeof project.root === 'string' ? project.root : defaults.project.root,
+            'discover-qmd-recursively': booleanSetting(project['discover-qmd-recursively'], defaults.project['discover-qmd-recursively']),
+            exclude: Array.isArray(project.exclude) ? asStringArray(project.exclude) : defaults.project.exclude
+        },
+        goals: {
+            'id-prefix': typeof goals['id-prefix'] === 'string' ? goals['id-prefix'] : defaults.goals['id-prefix'],
+            'protect-statements': booleanSetting(goals['protect-statements'], defaults.goals['protect-statements'])
+        },
+        semantic: {
+            'wildcard-imports': booleanSetting(semantic['wildcard-imports'], defaults.semantic['wildcard-imports'])
+        },
+        verification: {
+            ...verification,
+            backend: typeof verification.backend === 'string' ? verification.backend : defaults.verification.backend,
+            model: typeof verification.model === 'string' ? verification.model : defaults.verification.model,
+            effort: typeof verification.effort === 'string' ? verification.effort : defaults.verification.effort,
+            'fresh-context': booleanSetting(verification['fresh-context'], defaults.verification['fresh-context']),
+            'require-zero-gaps': booleanSetting(verification['require-zero-gaps'], defaults.verification['require-zero-gaps'])
+        },
+        render: {
+            'graph-engine': typeof render['graph-engine'] === 'string' ? render['graph-engine'] : defaults.render['graph-engine'],
+            'output-dir': typeof render['output-dir'] === 'string' ? render['output-dir'] : defaults.render['output-dir']
+        }
+    };
 }
 export async function loadConfig(root) {
     try {
         const source = await readFile(path.join(root, '.qmd-prover', 'config.yml'), 'utf8');
-        return merge(defaults, parseSimpleYaml(source));
+        return normalizedConfig(merge(defaults, parseSimpleYaml(source)));
     }
     catch (error) {
         if (hasErrorCode(error, 'ENOENT'))

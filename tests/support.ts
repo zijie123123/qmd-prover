@@ -9,6 +9,11 @@ export const staleVerifier = path.join(here, '.generated-fixtures', 'stale-verif
 export const malformedVerifier = path.join(here, '.generated-fixtures', 'malformed-verifier.js');
 export const options = { pandoc: fakePandoc };
 
+export function must<T>(value: T | null | undefined, message = 'Expected value to be present'): T {
+  if (value == null) throw new Error(message);
+  return value;
+}
+
 process.env.PATH = `${path.dirname(process.execPath)}:${process.env.PATH}`;
 
 export async function project() {
