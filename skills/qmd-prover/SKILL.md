@@ -10,7 +10,7 @@ description: Initialize and inspect semantic-QMD mathematical projects; formulat
 When the user asks to initialize qmd-prover in the current project, run this from the project root:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" init
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" init
 ```
 
 Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, `.qmd-prover` state, and external-policy mode, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init --adopt-existing` only after the user chooses adoption.
@@ -31,7 +31,7 @@ Every independent worker must perform this preflight for itself because workers 
 Run the dispatcher from the project root:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.mjs" <subcommand> [arguments]
+node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" <subcommand> [arguments]
 ```
 
 ## Proof-development boundary
