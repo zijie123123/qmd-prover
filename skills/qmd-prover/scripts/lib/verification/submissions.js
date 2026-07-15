@@ -7,7 +7,7 @@ export async function submitProof(root, proposalFile, options = {}) {
     void proposalFile;
     void options;
     return {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'submit-proof',
         ok: false,
         status: 'retired',
@@ -45,7 +45,7 @@ export async function revokeVerification(root, requested, reason, options = {}) 
     void reason;
     void options;
     return {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'verification-revoke',
         ok: false,
         status: 'retired',

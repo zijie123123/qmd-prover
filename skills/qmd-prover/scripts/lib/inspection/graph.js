@@ -1,9 +1,5 @@
 import { cleanId } from '../infrastructure/files.js';
 import { indexBy } from '../shared/core.js';
-const unusableStatuses = new Set([
-    'open', 'candidate', 'rejected', 'revoked', 'stale', 'missing',
-    'workspace-open', 'workspace-candidate', 'workspace-rejected', 'workspace-revoked', 'workspace-stale'
-]);
 function byId(items) {
     return indexBy(items, (item) => item.id);
 }
@@ -144,7 +140,7 @@ export function frontier(graph, requested) {
     const target = requireNode(graph, requested);
     const closure = new Set([target.id, ...traverse(graph, target.id)]);
     const nodes = byId(graph.nodes);
-    const unresolved = [...closure].filter((id) => unusableStatuses.has(nodes.get(id)?.status ?? 'missing'));
+    const unresolved = [...closure].filter((id) => nodes.get(id)?.global_verification?.status !== 'verified');
     const cycleSets = (graph.cycles ?? []).map((cycle) => new Set(cycle.slice(0, -1)));
     const sameCycle = (left, right) => cycleSets.some((cycle) => cycle.has(left) && cycle.has(right));
     const lowest = unresolved.filter((id) => ![...traverse(graph, id)].some((dependency) => dependency !== id && unresolved.includes(dependency) && !sameCycle(id, dependency)));

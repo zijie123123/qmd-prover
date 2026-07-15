@@ -50,7 +50,8 @@ QMD outside `.qmd-prover/` contains material the user chose to keep in notes:
 - bibliographic citations; and
 - ordinary Quarto cross-references.
 
-qmd-prover does not copy a verified proof or a status marker into these files.
+qmd-prover does not copy a verified proof, confirmed refutation, or status
+marker into these files.
 A protected main goal therefore renders as the user's statement even when its
 current proof overlay and intermediate development live in a workspace.
 
@@ -82,7 +83,8 @@ workspace semantic contract or list them as project facts.
 The inspector knows information that need not appear in mathematical prose:
 
 - initialized, missing, stale, uninitialized, and orphan workspaces;
-- open, candidate, workspace-verified, and workspace-rejected facts;
+- mechanical validity, local AI state, and globally composed state for open,
+  candidate, verified, disproved, blocked, rejected, and invalid facts;
 - dependency and reverse-dependency paths;
 - proof frontiers and cycles;
 - source-located diagnostics;
@@ -110,10 +112,11 @@ A generated page can show both protected goals and workspace evidence:
 title: "Proof status"
 ---
 
-| Main goal | Workspace | Status | Source |
-|---|---|---|---|
-| @thm-main-even-square | initialized | workspace-verified | .qmd-prover/workspaces/thm-main-even-square/ |
-| @thm-main-prime-bound | missing | open | primes.qmd |
+| Result | Local AI | Global | Refutation evidence | Source |
+|---|---|---|---|---|
+| @thm-main-even-square | verified | verified | — | `.qmd-prover/workspaces/thm-main-even-square/main-proof.qmd:6` |
+| @lem-false-parity | disproved | disproved | The integer 1 is a counterexample. | `.qmd-prover/workspaces/thm-main-even-square/parity.qmd:18` |
+| @thm-main-prime-bound | not-run | unverified | — | `primes.qmd:12` |
 
 The first goal currently depends on @def-even-integer and
 @lem-square-of-double inside its own workspace.
@@ -142,6 +145,7 @@ title: "Workspace: uniform index theorem"
 - @lem-finite-stratification: workspace-verified
 - @lem-local-exponent-bound: candidate
 - @lem-completion-preserves-index: open
+- @lem-universal-parity: workspace-disproved
 
 ## Active route
 
@@ -190,6 +194,13 @@ must remain visibly non-authoritative. A generated view may link to the
 `REJECTED` proof and its verifier repair hints. It must not use a rejected fact
 as a premise or count it as proof progress.
 
+Confirmed refutations are different from rejected proof attempts. A generated
+view may show the `workspace-disproved` statement together with its verified
+refutation evidence and source. It must still present the statement as false,
+never count it as a proved dependency, and visibly distinguish an independently
+confirmed disproof from a source-only `DISPROVED` candidate or a rejected
+refutation.
+
 Legacy `VERIFIED` or `REVOKED` markers in old user files may be shown as legacy
 warnings, not as current workspace status.
 
@@ -202,9 +213,11 @@ notes.
 
 The aggregate graph is an optional view, not an alternative semantic source.
 Each node should identify ID, kind, status, workspace or main-goal origin,
-source location, and selected/context scope when relevant. Edges must reflect
-actual local proof dependencies. Forbidden cross-workspace edges are
-diagnostics, not published graph edges.
+source location, and selected/context scope when relevant. A confirmed
+disproof node also carries the verifier summary, refutation, evidence source,
+and verification identity; the generated SVG exposes the refutation in its
+accessible title. Edges must reflect actual local proof dependencies.
+Forbidden cross-workspace edges are diagnostics, not published graph edges.
 
 ### Example graph inclusion
 
@@ -215,7 +228,7 @@ If render preparation produces
 ![Proof dependency graph](.qmd-prover/generated/dependencies.svg){fig-alt="A directed graph from protected goals to local workspace lemmas and definitions."}
 ```
 
-The SVG is derived from a named schema-v3 snapshot. Quarto decides how it is
+The SVG is derived from a named schema-v4 snapshot. Quarto decides how it is
 embedded or converted.
 
 ## Separation of concerns
@@ -230,13 +243,16 @@ workspace QMD -> inspector -> generated QMD/data +-> quarto render
 future paper selection --------------------------+
 ```
 
-The compiler and inspector compute facts. Workspace verification changes only
-cache and snapshot state. Optional integration prepares views. Quarto chooses
+The compiler computes the machine graph, optional local AI changes only local
+cache state, and the inspector composes global state. Optional integration
+prepares views. Quarto chooses
 themes, layout, formats, navigation, and final files.
 
-Future paper tooling may select workspace-verified declarations and proofs,
-arrange them for exposition, and generate a separate paper artifact. That is a
-new publication workflow, not permission for inspection to rewrite user notes.
+Future paper tooling may select workspace-verified declarations and proofs and
+may annotate excluded or false routes with retained disproof evidence. It can
+arrange selected mathematics for exposition and generate a separate paper
+artifact. That is a new publication workflow, not permission for inspection
+to rewrite user notes.
 
 ## Generated material
 

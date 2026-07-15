@@ -12,7 +12,7 @@ import type { WorkspaceMetadata } from '../workspace/support.js';
 export type IndexedWorkspaceStatus = 'initialized' | 'uninitialized' | 'orphan' | 'invalid';
 
 export interface IndexedWorkspaceSnapshot {
-  schema_version: 3;
+  schema_version: 4;
   snapshot_id: string;
   source_signature: string;
   manifest: Manifest;
@@ -53,8 +53,8 @@ function emptyCompilation(template: Compilation): Compilation {
   return {
     root: template.root,
     config: template.config,
-    manifest: { schema_version: 3, files: [], results: [], proofs: [] },
-    graph: { schema_version: 3, nodes: [], edges: [], cycles: [] },
+    manifest: { schema_version: 4, files: [], results: [], proofs: [] },
+    graph: { schema_version: 4, nodes: [], edges: [], cycles: [] },
     diagnostics: [],
     summary: { files: 0, results: 0, errors: 0, warnings: 0 },
     ok: true,
@@ -99,7 +99,7 @@ async function currentWorkspaceSnapshot(
     const snapshotFile = path.resolve(directory, pointer.file);
     if (!snapshotFile.startsWith(`${snapshotsRoot}${path.sep}`)) return null;
     const snapshot = await readJson<IndexedWorkspaceSnapshot>(snapshotFile);
-    if (pointer.schema_version !== 3 || snapshot.schema_version !== 3
+    if (pointer.schema_version !== 4 || snapshot.schema_version !== 4
       || snapshot.snapshot_id !== pointer.snapshot_id
       || snapshot.source_signature !== sourceSignature
       || !Array.isArray(snapshot.manifest?.results)
@@ -149,12 +149,7 @@ export async function buildProjectInspectionIndex(root = process.cwd(), options:
           protectStatements: false,
           write: false
         });
-        const localIds = new Set(compilation.manifest.results.map((result) => result.id));
-        const compilationDiagnostics = compilation.diagnostics.filter((item) => {
-          if (item.code !== 'DEPENDENCY_STATUS_INSUFFICIENT') return true;
-          const dependency = item.message.match(/@((?:def|lem|thm|prp|cor)-[^\s,]+)/)?.[1];
-          return !dependency || !localIds.has(dependency);
-        });
+        const compilationDiagnostics = compilation.diagnostics;
         workspaces.push({
           id: name, directory, path: relativePosix(root, directory), status: 'uninitialized', metadata: null,
           files, compilation, snapshot: null, stale: true,
@@ -187,12 +182,7 @@ export async function buildProjectInspectionIndex(root = process.cwd(), options:
       protectStatements: false,
       write: false
     });
-    const localIds = new Set(compilation.manifest.results.map((result) => result.id));
-    entryDiagnostics.push(...compilation.diagnostics.filter((item) => {
-      if (item.code !== 'DEPENDENCY_STATUS_INSUFFICIENT') return true;
-      const dependency = item.message.match(/@((?:def|lem|thm|prp|cor)-[^\s,]+)/)?.[1];
-      return !dependency || !localIds.has(dependency);
-    }));
+    entryDiagnostics.push(...compilation.diagnostics);
     let status: IndexedWorkspaceStatus = metadata ? 'initialized' : 'invalid';
     if (metadata && (id !== name || !goalById.has(id))) {
       status = 'orphan';

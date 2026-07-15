@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { externalPolicyHash } from '../infrastructure/external.js';
 import { AUX, cleanId, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
-import { accepted, checkerContract, verifierErrorDetails } from '../verification/protocol.js';
+import { checkerContract, verificationOutcome, verifierErrorDetails } from '../verification/protocol.js';
 import { asErrorLike, asRecord, asStringArray, CONTROL_MARKER_SET, hasErrorCode, isRecord } from '../shared/core.js';
 export function cleanVerifierText(value, markerPosition = null) {
     const lines = String(value ?? '').split(/\r?\n/);
@@ -27,6 +27,8 @@ export function workspaceStatus(result, marker = result.marker) {
         return 'workspace-open';
     if (marker === 'REJECTED')
         return 'workspace-rejected';
+    if (marker === 'DISPROVED')
+        return 'workspace-disproof-candidate';
     if (marker === 'REVOKED')
         return 'workspace-revoked';
     return result.kind === 'definition' || result.proof_present
@@ -85,7 +87,10 @@ function cacheLocation(directory, key) {
     };
 }
 function verifierReport(value) {
-    if (!isRecord(value) || (value.verdict !== 'correct' && value.verdict !== 'incorrect'))
+    if (!isRecord(value) || !['correct', 'incorrect', 'disproved'].includes(String(value.verdict)))
+        return null;
+    const refutation = typeof value.refutation === 'string' ? value.refutation : '';
+    if (value.verdict === 'disproved' && !refutation.trim())
         return null;
     return {
         verdict: value.verdict,
@@ -93,7 +98,8 @@ function verifierReport(value) {
         critical_errors: asStringArray(value.critical_errors),
         gaps: asStringArray(value.gaps),
         nonblocking_comments: asStringArray(value.nonblocking_comments),
-        repair_hints: typeof value.repair_hints === 'string' ? value.repair_hints : ''
+        repair_hints: typeof value.repair_hints === 'string' ? value.repair_hints : '',
+        refutation
     };
 }
 export async function cachedWorkspaceDecision(directory, workspace, target, key, packet) {
@@ -108,12 +114,14 @@ export async function cachedWorkspaceDecision(directory, workspace, target, key,
     const report = verifierReport(record.report);
     if (!report || typeof record.accepted !== 'boolean')
         return { location, record: null, invalid: true };
+    const outcome = verificationOutcome(report, packet);
     const valid = record.workspace === workspace
         && record?.target === target
         && record?.verification_key === key
         && record?.packet_hash === sha256(stableJson(packet, 0))
         && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-        && record.accepted === accepted(report);
+        && record.accepted === (outcome !== 'rejected')
+        && record.outcome === outcome;
     const cached = valid && report ? {
         ...record,
         workspace,
@@ -122,7 +130,8 @@ export async function cachedWorkspaceDecision(directory, workspace, target, key,
         packet_hash: String(record.packet_hash),
         checker_contract: asRecord(record.checker_contract),
         report,
-        accepted: record.accepted
+        accepted: record.accepted,
+        outcome
     } : null;
     return { location, record: cached, invalid: !valid };
 }
@@ -168,9 +177,9 @@ export function verifierFailure(error, target, inherited = false) {
         status: 'error',
         code: String(failure.code ?? 'WORKSPACE_VERIFIER_FAILED'),
         error: inherited
-            ? `Independent verification stopped after the verifier command failed while checking @${target}`
+            ? `Local conditional verification stopped after the verifier command failed while checking @${target}`
             : failure.message,
-        remediation: 'Repair verification.command or QMD_PROVER_VERIFIER, then rerun workspace inspect. The workspace fact remains unverified; never add VERIFIED manually.',
+        remediation: 'Repair verification.command or QMD_PROVER_VERIFIER, then rerun workspace inspection. The local result remains unverified.',
         ...(isRecord(details) ? { details } : {}),
         fatal: true,
         ...(inherited ? { inherited: true, failed_target: target } : {})

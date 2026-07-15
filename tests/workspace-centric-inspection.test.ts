@@ -68,20 +68,25 @@ test('workspace and user paths are scoped, while missing and uninitialized works
   assert.ok(entries.some((entry) => entry.id === 'thm-main-uninitialized' && entry.status === 'uninitialized'), JSON.stringify(entries));
 });
 
-test('project inspection returns healthy workspace results when another workspace is malformed', async () => {
+test('project inspection separates a healthy workspace from another workspace with an unproved local fact', async () => {
   const root = await project();
   await createWorkspace(root, 'thm-main-healthy', `${result('lem-healthy', 'Healthy lemma.', { proofText: 'Argument.' })}\n${proof('thm-main-healthy', 'Use @lem-healthy.')}`);
   await createWorkspace(root, 'thm-main-malformed', `${result('lem-malformed', 'Missing proof.')}\n${proof('thm-main-malformed', 'Use @lem-malformed.')}`);
   process.env.QMD_PROVER_VERIFIER = verifier;
   try {
     const inspected = await inspectProject(root, options);
-    assert.equal(inspected.ok, false);
-    const workspaces = inspected.workspaces as Array<{ target: { id: string }; ok: boolean; facts?: Array<{ id: string; status: string }> }>;
+    assert.equal(inspected.ok, true);
+    const workspaces = inspected.workspaces as Array<{
+      target: { id: string }; ok: boolean;
+      facts?: Array<{ id: string; status: string; global_verification: { status: string } }>;
+    }>;
     const healthy = must(workspaces.find((workspace) => workspace.target.id === 'thm-main-healthy'));
     const malformed = must(workspaces.find((workspace) => workspace.target.id === 'thm-main-malformed'));
     assert.equal(healthy.ok, true);
     assert.ok(healthy.facts?.every((fact) => fact.status === 'workspace-verified'));
-    assert.equal(malformed.ok, false);
+    assert.equal(malformed.ok, true);
+    assert.equal(malformed.facts?.find((fact) => fact.id === 'lem-malformed')?.global_verification.status, 'unverified');
+    assert.equal(malformed.facts?.find((fact) => fact.id === 'thm-main-malformed')?.global_verification.status, 'blocked');
   } finally { delete process.env.QMD_PROVER_VERIFIER; }
 });
 
@@ -161,7 +166,13 @@ test('workspace facts cannot use another protected main goal as an implicit fact
     const inspected = await inspectWorkspace(root, '@thm-main-no-main-goal-basis', options);
     assert.equal(inspected.ok, false);
     assert.ok(inspected.diagnostics.some((item) => item.code === 'WORKSPACE_EXTERNAL_FACT_DEPENDENCY'));
-    await assert.rejects(readFile(countFile), { code: 'ENOENT' });
+    assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['thm-main-no-main-goal-basis']);
+    const lemma = must(inspected.facts.find((fact) => fact.id === 'lem-no-main-goal-basis'));
+    const targetFact = must(inspected.facts.find((fact) => fact.id === 'thm-main-no-main-goal-basis'));
+    assert.equal(lemma.mechanical?.status, 'fail');
+    assert.equal(lemma.local_verification.status, 'not-run');
+    assert.equal(targetFact.local_verification.outcome, 'verified');
+    assert.equal(targetFact.global_verification.status, 'blocked');
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
     delete process.env.QMD_PROVER_VERIFIER_COUNT;

@@ -11,7 +11,7 @@ import { buildProjectInspectionIndex } from './index.js';
 import type { ProjectInspectionIndex } from './index.js';
 import { inspectWorkspace } from '../workspace/inspect.js';
 import type {
-  AiCheck, DependencyGraph, Diagnostic, GraphNode, RuntimeOptions, SemanticResult, WorkspaceInspectResult,
+  AiCheck, DependencyGraph, Diagnostic, GlobalVerification, GraphNode, RuntimeOptions, SemanticResult, WorkspaceInspectResult,
   InspectProjectResult, InspectFactResult, InspectPathResult, DependencyAnalysisResult, InspectionVerificationSummary
 } from '../shared/types.js';
 
@@ -25,31 +25,35 @@ function byId<T extends { id: string }>(items: T[]): Map<string, T> {
 interface FactCheck {
   id: string;
   status: string;
-  programmatic: { status: 'pass' | 'fail'; references: NonNullable<SemanticResult['reference_checks']> };
-  ai: AiCheck;
+  mechanical: { status: 'pass' | 'fail'; references: NonNullable<SemanticResult['reference_checks']> };
+  local_verification: AiCheck;
+  global_verification: GlobalVerification;
   diagnostics: Diagnostic[];
 }
 
 
 
-function aiCheck(result: SemanticResult, inspected: AiCheck | null = null): AiCheck {
+function localCheck(result: SemanticResult, inspected: AiCheck | null = null): AiCheck {
   if (inspected) return inspected;
-  if (result.status === 'verified') return { status: 'pass', source: 'verification-record' };
-  if (result.status === 'rejected') return { status: 'fail', source: 'verification-record' };
-  return { status: 'not-run', reason: 'The fact was not eligible for independent verification.' };
+  if (result.local_verification) return result.local_verification;
+  return { status: 'not-run', reason: 'No local conditional verification is available.' };
 }
 
 function factCheck(result: SemanticResult, diagnostics: Diagnostic[], inspected: AiCheck | null = null): FactCheck {
   const relevant = diagnostics.filter((item) => item.id ? item.id === result.id : item.file === result.file);
   const referenceFailure = (result.reference_checks ?? []).some((check) => (
-    check.existence === 'fail' || check.scope === 'fail' || check.status === 'fail' || check.cycle === 'fail'
+    check.existence === 'fail' || check.scope === 'fail' || check.cycle === 'fail'
   ));
-  const programmatic = referenceFailure || relevant.some((item) => item.severity === 'error') ? 'fail' : 'pass';
+  const mechanical = referenceFailure || relevant.some((item) => item.severity === 'error') ? 'fail' : 'pass';
+  const local = localCheck(result, inspected);
   return {
     id: result.id,
     status: result.status,
-    programmatic: { status: programmatic, references: result.reference_checks ?? [] },
-    ai: aiCheck(result, inspected),
+    mechanical: { status: mechanical, references: result.reference_checks ?? [] },
+    local_verification: local,
+    global_verification: result.global_verification ?? {
+      status: mechanical === 'pass' ? 'unverified' : 'invalid', blockers: [], reason: 'workspace-not-inspected'
+    },
     diagnostics: relevant
   };
 }
@@ -68,10 +72,15 @@ function resultSummary(results: SemanticResult[]): { facts: number; kinds: Recor
 
 
 
-function emptyGraph(): DependencyGraph { return { schema_version: 3, nodes: [], edges: [], cycles: [] }; }
+function emptyGraph(): DependencyGraph { return { schema_version: 4, nodes: [], edges: [], cycles: [] }; }
 
 function emptyVerification(): InspectionVerificationSummary {
-  return { eligible: 0, verifier_calls: 0, cache_hits: 0, passed: 0, rejected: 0, errors: 0, not_run: 0 };
+  return {
+    available: false, eligible: 0, verifier_calls: 0, cache_hits: 0,
+    local_verified: 0, local_disproved: 0, local_rejected: 0, local_errors: 0, local_not_run: 0,
+    global_verified: 0, global_disproved: 0, global_blocked: 0, global_unverified: 0,
+    global_rejected: 0, global_invalid: 0
+  };
 }
 
 function unknownFact(id: string): SemanticResult {
@@ -84,13 +93,21 @@ function unknownFact(id: string): SemanticResult {
 
 function workspaceVerification(result: WorkspaceInspectResult): InspectionVerificationSummary {
   return {
+    available: result.verification.available,
     eligible: result.verification.eligible,
     verifier_calls: result.verification.verifier_calls,
     cache_hits: result.verification.cache_hits,
-    passed: result.verification.passed,
-    rejected: result.verification.rejected,
-    errors: result.verification.errors,
-    not_run: result.verification.not_run
+    local_verified: result.verification.local_verified,
+    local_disproved: result.verification.local_disproved,
+    local_rejected: result.verification.local_rejected,
+    local_errors: result.verification.local_errors,
+    local_not_run: result.verification.local_not_run,
+    global_verified: result.verification.global_verified,
+    global_disproved: result.verification.global_disproved,
+    global_blocked: result.verification.global_blocked,
+    global_unverified: result.verification.global_unverified,
+    global_rejected: result.verification.global_rejected,
+    global_invalid: result.verification.global_invalid
   };
 }
 
@@ -101,23 +118,32 @@ function inspectedFactCheck(result: WorkspaceInspectResult, id: string): FactChe
   return {
     id,
     status: fact.status,
-    programmatic: { status: outcome?.programmatic?.status ?? 'fail', references: fact.reference_checks ?? [] },
-    ai: outcome?.ai ?? { status: 'not-run', reason: 'No workspace outcome was recorded.' },
+    mechanical: {
+      status: outcome?.mechanical?.status ?? 'fail',
+      references: outcome?.mechanical?.references ?? fact.reference_checks ?? []
+    },
+    local_verification: outcome?.local_verification ?? { status: 'not-run', reason: 'No workspace outcome was recorded.' },
+    global_verification: outcome?.global_verification ?? fact.global_verification ?? { status: 'unverified', blockers: [] },
     diagnostics
   };
 }
 
 function addVerification(total: InspectionVerificationSummary, value: InspectionVerificationSummary): void {
-  for (const key of ['eligible', 'verifier_calls', 'cache_hits', 'passed', 'rejected', 'errors', 'not_run'] as const) total[key] += value[key];
+  total.available ||= value.available;
+  for (const key of [
+    'eligible', 'verifier_calls', 'cache_hits', 'local_verified', 'local_disproved', 'local_rejected',
+    'local_errors', 'local_not_run', 'global_verified', 'global_disproved', 'global_blocked',
+    'global_unverified', 'global_rejected', 'global_invalid'
+  ] as const) total[key] += value[key];
 }
 
 function projectFailure(operation: string, diagnostics: Diagnostic[]): InspectProjectResult {
   const graph = emptyGraph();
   return {
-    schema_version: 3, operation, ok: false, snapshot_published: false,
+    schema_version: 4, operation, ok: false, snapshot_published: false,
     graph, facts: [], verification: emptyVerification(),
-    staleness: { schema_version: 3, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
-    diagnostics, findings: deriveGraphFindings({ graph, manifest: { schema_version: 3, files: [], results: [], proofs: [] }, diagnostics })
+    staleness: { schema_version: 4, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
+    diagnostics, findings: deriveGraphFindings({ graph, manifest: { schema_version: 4, files: [], results: [], proofs: [] }, diagnostics })
   };
 }
 
@@ -161,23 +187,29 @@ export async function inspectProject(root = process.cwd(), options: RuntimeOptio
     && [...inspected.values()].every((result) => result.ok === true)
     && diagnostics.every((item) => item.severity !== 'error');
   return {
-    schema_version: 3,
+    schema_version: 4,
     operation: 'inspect-project',
     ok,
     snapshot_id: snapshot.snapshot_id,
     snapshot_published: snapshotPublished,
     scope: { type: 'project', path: '.' },
-    summary: { ...snapshot.summary, initialized_workspaces: inspected.size, errors: diagnostics.filter((item) => item.severity === 'error').length },
+    summary: {
+      ...snapshot.summary,
+      initialized_workspaces: inspected.size,
+      globally_verified_goals: facts.filter((fact) => fact.id.startsWith('thm-main-') && fact.global_verification.status === 'verified').length,
+      globally_disproved_goals: facts.filter((fact) => fact.id.startsWith('thm-main-') && fact.global_verification.status === 'disproved').length,
+      errors: diagnostics.filter((item) => item.severity === 'error').length
+    },
     goals: index.goals.map(({ id, file, line, status }) => ({ id, file, line, status, workspace: workspaceByGoal.get(id)?.status ?? 'missing' })),
     notes: index.notes,
     workspaces: index.workspaces.map((workspace) => inspected.get(workspace.id) ?? {
-      schema_version: 3, operation: 'workspace-inspect', ok: false, workspace: workspace.path,
+      schema_version: 4, operation: 'workspace-inspect', ok: false, workspace: workspace.path,
       id: workspace.id, status: workspace.status, target: { id: workspace.id, status: 'missing' }, stale: workspace.stale, diagnostics: workspace.diagnostics
     }),
     facts,
     graph: snapshot.graph,
     staleness: {
-      schema_version: 3, operation: 'check-staleness', ok: index.workspaces.every((workspace) => !workspace.stale),
+      schema_version: 4, operation: 'check-staleness', ok: index.workspaces.every((workspace) => !workspace.stale),
       changed: index.workspaces.filter((workspace) => workspace.stale).map((workspace) => ({ id: workspace.id, reasons: ['workspace-snapshot-stale'] })),
       invalidated: []
     },
@@ -191,9 +223,9 @@ export async function inspectProject(root = process.cwd(), options: RuntimeOptio
 function factFailure(id: string, diagnostics: Diagnostic[]): InspectFactResult {
   const fact = unknownFact(id);
   return {
-    schema_version: 3, operation: 'inspect-fact', ok: false, snapshot_published: false,
+    schema_version: 4, operation: 'inspect-fact', ok: false, snapshot_published: false,
     scope: { type: 'fact', id }, fact, check: factCheck(fact, diagnostics), graph: emptyGraph(), verification: emptyVerification(),
-    staleness: { schema_version: 3, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
+    staleness: { schema_version: 4, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
     diagnostics
   };
 }
@@ -234,25 +266,19 @@ async function inspectIndexedFact(index: ProjectInspectionIndex, id: string, opt
   const graph = subgraph(inspected.graph, selected);
   const graphNodes = byId(graph.nodes);
   const directDependencies = adjacency(graph).get(id) ?? [];
-  const workspaceFact = inspected.facts.find((item) => item.id === id);
   const selectedFiles = new Set(inspected.manifest.results.filter((result) => selected.has(result.id)).flatMap((result) => [result.file, result.proof_file].filter((file): file is string => Boolean(file))));
   const diagnostics = inspected.diagnostics.filter((item) => item.id ? selected.has(item.id) : !item.file || selectedFiles.has(item.file) || item.code === 'WORKSPACE_STALE');
-  const check = {
-    id,
-    status: fact.status,
-    programmatic: {
-      status: workspaceFact?.programmatic?.status ?? 'fail',
-      references: fact.reference_checks ?? []
-    },
-    ai: workspaceFact?.ai ?? { status: 'not-run' as const, reason: 'No workspace outcome was recorded.' },
-    diagnostics: diagnostics.filter((item) => item.id === id || item.file === fact.file)
-  };
+  const check = inspectedFactCheck(inspected, id);
+  check.diagnostics = diagnostics.filter((item) => item.id === id || item.file === fact.file);
   const aggregate = buildAggregateSnapshot(index, new Map([[workspace.id, inspected]]));
   const snapshotPublished = await publishAggregateSnapshot(index, aggregate, options);
   return {
-    schema_version: 3,
+    schema_version: 4,
     operation: 'inspect-fact',
-    ok: check.programmatic.status === 'pass' && check.ai.status === 'pass',
+    ok: check.mechanical.status === 'pass' && check.local_verification.status !== 'error',
+    verified: check.global_verification.status === 'verified',
+    disproved: check.global_verification.status === 'disproved',
+    global_status: check.global_verification.status,
     snapshot_id: aggregate.snapshot_id,
     snapshot_published: snapshotPublished,
     scope: { type: 'fact', id, workspace: workspace.id },
@@ -284,11 +310,11 @@ export async function inspectPath(root: string, requestedPath: string, options: 
   const absolute = path.resolve(root, requestedPath);
   const relative = relativePosix(root, absolute);
   const failure = (diagnostics: Diagnostic[]): InspectPathResult => ({
-    schema_version: 3, operation: 'inspect-path', ok: false, snapshot_published: false,
+    schema_version: 4, operation: 'inspect-path', ok: false, snapshot_published: false,
     scope: { type: 'path', path: relative }, summary: { files: 0, facts: 0, errors: diagnostics.length },
     facts: [], graph: emptyGraph(), verification: emptyVerification(),
-    staleness: { schema_version: 3, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
-    findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 3, files: [], results: [], proofs: [] }, diagnostics }), diagnostics
+    staleness: { schema_version: 4, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
+    findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 4, files: [], results: [], proofs: [] }, diagnostics }), diagnostics
   });
   if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return failure([{ severity: 'error', code: 'PATH_OUTSIDE_PROJECT', message: 'Inspection path must stay inside the project' }]);
   let info;
@@ -311,11 +337,11 @@ export async function inspectPath(root: string, requestedPath: string, options: 
       const aggregate = buildAggregateSnapshot(index);
       const published = await publishAggregateSnapshot(index, aggregate, options);
       return {
-        schema_version: 3, operation: 'inspect-path', ok: true, snapshot_id: aggregate.snapshot_id, snapshot_published: published,
+        schema_version: 4, operation: 'inspect-path', ok: true, snapshot_id: aggregate.snapshot_id, snapshot_published: published,
         scope: { type: info.isDirectory() ? 'folder' : 'file', path: relative, workspace: containing.id },
         summary: { files: selectedFiles.size, facts: 0, errors: 0 }, facts: [], graph: emptyGraph(), verification: emptyVerification(),
-        staleness: { schema_version: 3, operation: 'check-staleness', ok: true, changed: [], invalidated: [] },
-        findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 3, files: [], results: [], proofs: [] }, diagnostics: [] }), diagnostics: []
+        staleness: { schema_version: 4, operation: 'check-staleness', ok: true, changed: [], invalidated: [] },
+        findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 4, files: [], results: [], proofs: [] }, diagnostics: [] }), diagnostics: []
       };
     }
     const inspected = await inspectWorkspace(root, containing.id, { ...options, selectedIds, skipProjectPreflight: true });
@@ -329,11 +355,17 @@ export async function inspectPath(root: string, requestedPath: string, options: 
     const aggregate = buildAggregateSnapshot(index, new Map([[containing.id, inspected]]));
     const published = await publishAggregateSnapshot(index, aggregate, options);
     return {
-      schema_version: 3, operation: 'inspect-path',
-      ok: facts.every((fact) => fact.programmatic.status === 'pass' && fact.ai.status === 'pass') && diagnostics.every((item) => item.severity !== 'error'),
+      schema_version: 4, operation: 'inspect-path',
+      ok: facts.every((fact) => fact.mechanical.status === 'pass' && fact.local_verification.status !== 'error')
+        && diagnostics.every((item) => item.severity !== 'error'),
       snapshot_id: aggregate.snapshot_id, snapshot_published: published,
       scope: { type: info.isDirectory() ? 'folder' : 'file', path: relative, workspace: containing.id },
-      summary: { files: selectedFiles.size, facts: facts.length, errors: diagnostics.filter((item) => item.severity === 'error').length },
+      summary: {
+        files: selectedFiles.size, facts: facts.length,
+        globally_verified: facts.filter((fact) => fact.global_verification.status === 'verified').length,
+        globally_disproved: facts.filter((fact) => fact.global_verification.status === 'disproved').length,
+        errors: diagnostics.filter((item) => item.severity === 'error').length
+      },
       facts, graph, blockers: blockerPaths(graph, [...selectedIds]),
       findings: deriveGraphFindings({ graph, manifest: inspected.manifest, diagnostics }, { selectedIds, selectedFiles }),
       staleness: inspected.staleness, verification: workspaceVerification(inspected), diagnostics
@@ -346,10 +378,10 @@ export async function inspectPath(root: string, requestedPath: string, options: 
     const aggregate = buildAggregateSnapshot(index);
     const published = await publishAggregateSnapshot(index, aggregate, options);
     return {
-      schema_version: 3, operation: 'inspect-path', ok: true, snapshot_id: aggregate.snapshot_id, snapshot_published: published,
+      schema_version: 4, operation: 'inspect-path', ok: true, snapshot_id: aggregate.snapshot_id, snapshot_published: published,
       scope: { type: info.isDirectory() ? 'folder' : 'file', path: relative }, summary: { files: info.isDirectory() ? index.notes.filter((note) => isWithinPath(note.path, relative, true)).length : 1, facts: 0, errors: 0 },
-      facts: [], graph: emptyGraph(), verification: emptyVerification(), staleness: { schema_version: 3, operation: 'check-staleness', ok: true, changed: [], invalidated: [] }, diagnostics: []
-      , findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 3, files: [], results: [], proofs: [] }, diagnostics: [] })
+      facts: [], graph: emptyGraph(), verification: emptyVerification(), staleness: { schema_version: 4, operation: 'check-staleness', ok: true, changed: [], invalidated: [] }, diagnostics: []
+      , findings: deriveGraphFindings({ graph: emptyGraph(), manifest: { schema_version: 4, files: [], results: [], proofs: [] }, diagnostics: [] })
     };
   }
   const factResults = [];
@@ -361,10 +393,10 @@ export async function inspectPath(root: string, requestedPath: string, options: 
   const ids = new Set(factResults.flatMap((result) => result.graph.nodes.map((node) => node.id)));
   const aggregate = buildAggregateSnapshot(index);
   return {
-    schema_version: 3, operation: 'inspect-path', ok: factResults.every((result) => result.ok === true), snapshot_id: aggregate.snapshot_id,
+    schema_version: 4, operation: 'inspect-path', ok: factResults.every((result) => result.ok === true), snapshot_id: aggregate.snapshot_id,
     scope: { type: info.isDirectory() ? 'folder' : 'file', path: relative }, summary: { files: info.isDirectory() ? index.notes.filter((note) => isWithinPath(note.path, relative, true)).length : 1, facts: facts.length, errors: diagnostics.filter((item) => item.severity === 'error').length },
     facts, graph: subgraph(aggregate.graph, ids), verification,
-    staleness: { schema_version: 3, operation: 'check-staleness', ok: factResults.every((result) => result.staleness.ok === true), changed: [], invalidated: [] },
+    staleness: { schema_version: 4, operation: 'check-staleness', ok: factResults.every((result) => result.staleness.ok === true), changed: [], invalidated: [] },
     findings: deriveGraphFindings(aggregate, { selectedIds: goals.map((goal) => goal.id) }), diagnostics
   };
 }
@@ -379,7 +411,7 @@ async function latestSnapshot(root: string, options: RuntimeOptions = {}): Promi
     const graphsRoot = path.join(index.root, AUX, 'graphs');
     if (!snapshotFile.startsWith(`${graphsRoot}${path.sep}`)) throw new Error('Aggregate snapshot pointer escapes the graph directory');
     const saved = await readJson<AggregateSnapshot>(snapshotFile);
-    if (saved.schema_version === 3
+    if (saved.schema_version === 4
       && saved.snapshot_id === pointer.snapshot_id
       && aggregateSourceSignature(saved) === aggregateSourceSignature(current)) return saved;
   } catch { /* Missing, legacy, corrupt, or stale snapshots are rebuilt below. */ }
@@ -394,7 +426,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
   catch (error) {
     const failure = error as { code?: string; message?: string; diagnostics?: Diagnostic[] };
     return {
-      schema_version: 3, operation: `dependency-${operation}`, ok: false,
+      schema_version: 4, operation: `dependency-${operation}`, ok: false,
       diagnostics: failure.diagnostics ?? [{ severity: 'error', code: failure.code ?? 'DEPENDENCY_SNAPSHOT_FAILED', message: failure.message ?? String(error) }]
     };
   }
@@ -407,7 +439,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
   ].filter((value): value is string => typeof value === 'string' && value.length > 0);
   const missing = requiredIds.map(cleanId).filter((id) => !graph.nodes.some((node) => node.id === id));
   if (missing.length) return {
-    schema_version: 3, operation: `dependency-${operation}`, ok: false, snapshot_id: snapshot.snapshot_id,
+    schema_version: 4, operation: `dependency-${operation}`, ok: false, snapshot_id: snapshot.snapshot_id,
     diagnostics: missing.map((id) => ({ severity: 'error', code: 'FACT_UNKNOWN', id, message: `Unknown fact in aggregate workspace graph: @${id}` }))
   };
   let result;
@@ -440,7 +472,9 @@ export async function analyzeDependencies(root: string, operation: string, args:
     const nodes = byId(graph.nodes);
     result = {
       target: node,
-      affected: [...traverse(graph, node.id, true)].sort().map((id) => nodes.get(id)).filter((item): item is GraphNode => item?.status === 'workspace-verified')
+      affected: [...traverse(graph, node.id, true)].sort()
+        .map((id) => nodes.get(id))
+        .filter((item): item is GraphNode => item !== undefined)
     };
   } else if (operation === 'frontier') {
     result = { target: requireNode(graph, requested), frontier: frontier(graph, requested) };
@@ -526,7 +560,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
   }
   const diagnostics = snapshot.diagnostics ?? [];
   return {
-    schema_version: 3,
+    schema_version: 4,
     operation: `dependency-${operation}`,
     ok: diagnostics.every((item) => item.severity !== 'error'),
     snapshot_id: snapshot.snapshot_id,

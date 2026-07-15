@@ -55,26 +55,29 @@ export const HELP_COMMANDS = [
     }),
     command('inspect', ['qmd-prover inspect <command> [arguments]']),
     command('inspect project', ['qmd-prover inspect project [--print]'], {
-        summary: 'Inspect every initialized workspace and return the aggregate schema-v3 graph.'
+        summary: 'Run machine analysis, optional local conditional verification, and global composition for every initialized workspace; return the aggregate schema-v4 graph.'
     }),
     command('inspect fact', ['qmd-prover inspect fact @ID [--print]'], {
         acceptsPositionals: true,
-        summary: 'Locate any main-goal or workspace fact and verify only its dependency closure.'
+        summary: 'Locate a fact, locally check its dependency closure when a verifier is configured, and compute its global status.'
     }),
     command('inspect path', ['qmd-prover inspect path FILE_OR_FOLDER [--print]'], {
         acceptsPositionals: true,
-        summary: 'Inspect workspace QMD, or recognize only main goals in user notes.'
+        summary: 'Run machine analysis and optional local/global verification for workspace QMD, or recognize only main goals in user notes.'
     }),
     command('inspect workspace', ['qmd-prover inspect workspace @thm-main-ID [--print]'], {
         acceptsPositionals: true,
-        summary: 'Inspect one complete initialized goal workspace without creating it.'
+        summary: 'Analyze one initialized workspace without creating it; an absent verifier leaves local/global states incomplete rather than failing machine analysis.'
     }),
     command('dependency', ['qmd-prover dependency <command> [arguments]']),
     command('dependency dependencies', ['qmd-prover dependency dependencies @ID [--print]'], { acceptsPositionals: true }),
     command('dependency reverse', ['qmd-prover dependency reverse <command> [arguments]']),
     command('dependency reverse dependencies', ['qmd-prover dependency reverse dependencies @ID [--print]'], { acceptsPositionals: true }),
     command('dependency impact', ['qmd-prover dependency impact @ID [--print]'], { acceptsPositionals: true }),
-    command('dependency frontier', ['qmd-prover dependency frontier @ID [--print]'], { acceptsPositionals: true }),
+    command('dependency frontier', ['qmd-prover dependency frontier @ID [--print]'], {
+        acceptsPositionals: true,
+        summary: 'Show the lowest open, rejected, disproved, stale, or otherwise unusable dependencies.'
+    }),
     command('dependency path', ['qmd-prover dependency path @FROM @TO [--print]'], { acceptsPositionals: true }),
     command('dependency alternative', ['qmd-prover dependency alternative <command> [arguments]']),
     command('dependency alternative paths', ['qmd-prover dependency alternative paths @FROM @TO [--limit N] [--max-depth N] [--print]'], { acceptsPositionals: true }),

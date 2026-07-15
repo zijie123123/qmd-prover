@@ -7,7 +7,7 @@ import type { JsonObject, RuntimeOptions, SubmissionResult } from '../shared/typ
 export async function submitProof(root: string, proposalFile: string, options: RuntimeOptions = {}): Promise<SubmissionResult> {
   void root; void proposalFile; void options;
   return {
-    schema_version: 3,
+    schema_version: 4,
     operation: 'submit-proof',
     ok: false,
     status: 'retired',
@@ -35,7 +35,7 @@ export async function showVerification(root: string, submissionId: string): Prom
 export async function revokeVerification(root: string, requested: string, reason: string, options: RuntimeOptions = {}): Promise<SubmissionResult> {
   void root; void reason; void options;
   return {
-    schema_version: 3,
+    schema_version: 4,
     operation: 'verification-revoke',
     ok: false,
     status: 'retired',

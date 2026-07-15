@@ -4,15 +4,16 @@
 
 The proving utilities help Codex or Claude Code turn mathematical reasoning
 into explicit workspace definitions, intermediate results, and proof
-candidates, then submit each mechanically ready candidate to an independent
-verifier. Accepted mathematics remains in its goal workspace as
-`workspace-verified` state.
+candidates, then submit each materializable candidate to an optional local AI
+verifier. Globally composed mathematics remains in its goal workspace as
+`workspace-verified` state; independently confirmed counterexamples and
+refutations remain there as `workspace-disproved` evidence.
 
 They do not form a proving agent. The host decides how to reason, which lemmas
 to introduce, when to explore examples, and how to repair a proof. The runtime
-provides protected goal context, semantic compilation, dependency ordering,
-bounded verifier packets, exact decision caches, rejection feedback, and
-atomic workspace/project snapshots.
+provides protected goal context, machine-only semantic compilation, bounded
+direct-dependency verifier packets, exact local decision caches, deterministic
+global composition, feedback, and atomic workspace/project snapshots.
 
 Earlier releases treated acceptance as promotion into user QMD. That path is
 retired. User QMD now remains notes and protected main-goal storage; verifier
@@ -29,11 +30,12 @@ Only the safety gates are ordered:
 
 1. establish current project and external-basis policy;
 2. compile and pass project/global preflight;
-3. pass the selected fact's mechanical checks;
-4. verify dependencies before dependents;
-5. run the independent verifier for exact cache misses;
-6. recheck source and context freshness after the verifier returns; and
-7. publish cache and snapshot state atomically.
+3. build the selected machine dependency closure without consulting AI state;
+4. materialize each selected fact and its direct dependency statements;
+5. run the optional local verifier for exact cache misses;
+6. recheck source and context freshness after each verifier return;
+7. deterministically compose global status over the graph; and
+8. publish cache and snapshot state atomically.
 
 These gates do not choose the next mathematical idea.
 
@@ -102,7 +104,11 @@ may have a linked proof for existence, uniqueness, or well-definedness. The
 protected main-goal candidate contains only the linked proof.
 
 A partial theorem-like proof begins with `OPEN`. A failed attempt retained for
-history begins with `REJECTED`. An unmarked complete proof is a candidate.
+history begins with `REJECTED`. A proposed counterexample or refutation begins
+with `DISPROVED`; it is still a candidate until independently checked. An
+unmarked complete proof is a proof candidate. Definitions cannot use
+`DISPROVED`.
+
 Current workspace verification does not write `VERIFIED` or `REVOKED` markers.
 Those strings are recognized only as legacy state and are forbidden in new
 workspace mathematics.
@@ -147,14 +153,20 @@ Before independent verification, the inspector confirms that:
 - an intermediate result has exactly one appropriate linked proof;
 - the protected target is supplied only through a proof overlay and was not
   redeclared;
-- the proof is not `OPEN`, `REJECTED`, `VERIFIED`, or `REVOKED`;
+- the proof is either an unmarked proof candidate or a theorem-like
+  `DISPROVED` refutation candidate, and is not `OPEN`, `REJECTED`, `VERIFIED`,
+  or `REVOKED`;
 - every local dependency exists, is unique, and is in scope;
 - every cross-file dependency has an exact producer export and consumer import;
 - no dependency crosses a workspace or main-goal boundary;
-- the selected dependency closure is cycle-free; and
-- every dependency needed by the candidate has current usable workspace state.
+- cycle membership is recorded as a machine finding; and
+- every direct dependency statement needed for a local AI packet can be
+  materialized exactly.
 
-Preflight establishes eligibility for mathematical review, not correctness.
+Preflight establishes machine validity and packet availability, not
+mathematical correctness. A scope error or cycle can make global state invalid
+while a separately materializable local conditional check still runs; the two
+outcomes remain visibly separate.
 
 ### Example preflight failure
 
@@ -173,29 +185,35 @@ Similarly, a proof that cites `@lem-square-of-double` from another workspace is
 not repaired by adding an import. The claim must be established locally or
 represented as a permitted external premise without a cross-workspace ID edge.
 
-## Independent verification
+## Local conditional verification
 
-The verifier is a bounded external facility. It may be an LLM command, a fresh
+The verifier is an optional bounded external facility. It may be an LLM command, a fresh
 review context, or a formal-checker adapter that implements the protocol.
 
 An informal verifier packet contains:
 
-- exact target ID, kind, title, statement or construction, and proof;
-- identities and current states of cited local dependencies;
-- their exact semantic text;
+- exact target ID, kind, title, statement or construction, proof or proposed
+  refutation, and verification mode;
+- the IDs and exact statements of cited direct local dependencies;
 - normalized workspace imports and source association;
 - protected-goal context for an overlay;
 - exact external-basis mode and content;
 - checker contract and verifier protocol; and
 - an instruction to report errors and gaps independently.
 
-It does not contain the author's confidence, hidden chain of thought,
-persuasive commentary, or unrelated project narrative.
+It does not contain dependency proofs, dependency verification states, the
+transitive proof closure, the author's confidence, hidden chain of thought,
+persuasive commentary, or unrelated project narrative. The verifier assumes
+the supplied direct statements and checks the exact submitted proof. It does
+not decide whether those direct premises have themselves been established.
 
 The verifier returns a verdict, summary, critical errors, gaps, nonblocking
-comments, and repair hints. Informal acceptance requires `correct` and empty
-critical-error and gap lists. The cache record preserves the full packet and
-report so a later run can validate exact reuse.
+comments, repair hints, and a refutation field. An ordinary proof is verified
+only by `correct` with empty critical-error and gap lists. A false theorem-like
+statement is recorded as disproved only with a nonempty, independently
+checkable refutation and empty critical-error and gap lists. The cache record
+preserves the full packet, outcome, and report so a later run can validate
+exact reuse.
 
 ### Example verifier packet
 
@@ -207,6 +225,7 @@ An abbreviated packet can look like:
     "id": "thm-main-even-square",
     "statement": "For every even integer n, 4 divides n^2.",
     "proof": "Let n be even. By @def-even-integer ...",
+    "verification_mode": "proof",
     "cited_dependencies": ["def-even-integer"],
     "workspace": "thm-main-even-square"
   },
@@ -214,8 +233,7 @@ An abbreviated packet can look like:
     {
       "id": "def-even-integer",
       "statement": "n is even iff n=2k for some integer k.",
-      "status": "workspace-verified",
-      "origin": "workspace"
+      "identity": { "statement_hash": "sha256:..." }
     }
   ],
   "external_basis": {
@@ -228,6 +246,35 @@ An abbreviated packet can look like:
   }
 }
 ```
+
+### Refutation candidates and discovered counterexamples
+
+If the host has a counterexample, it preserves the statement and makes the
+linked proof explicit:
+
+```markdown
+::: {.proof of="thm-main-primes-odd"}
+DISPROVED
+
+The number \(2\) is prime, because its only positive divisors are \(1\) and
+\(2\), but \(2\) is not odd. Hence it falsifies the universal statement.
+:::
+```
+
+The marker selects `refutation` mode; it is not a verifier decision. A
+successful independent check records `workspace-disproved` and structured
+evidence containing the summary, exact refutation, source, and verification
+identity. A failed proposed refutation records
+`workspace-disproof-rejected` and repair information. The verifier may instead
+discover a counterexample while checking an unmarked proof and return the same
+conclusive disproved outcome.
+Neither route edits the source marker.
+
+A globally disproved fact is terminal evidence about a false statement, not a
+premise. Its machine dependency edges remain intact, while global composition
+blocks dependent facts and frontier analysis exposes it as the lowest relevant
+obstruction. A merely local disproof is conditional until all of its direct
+dependencies are globally verified.
 
 ## Rejection and repair
 
@@ -244,8 +291,8 @@ The runtime does not erase an earlier rejection because a later candidate
 passes. Exact decisions remain evidence keyed to their exact packet.
 
 If the protected statement appears false, the host preserves it and develops a
-counterexample or precise refutation for the user. It must not weaken the
-statement to manufacture acceptance.
+counterexample or precise `DISPROVED` refutation for independent checking. It
+must not weaken the statement to manufacture acceptance.
 
 ### Example rejection and repair
 
@@ -258,6 +305,7 @@ only “This is obvious.” The verifier may return:
   "summary": "The ordered-field step is not justified.",
   "critical_errors": [],
   "gaps": ["Justify why a>0 and b>0 imply ab>0."],
+  "refutation": "",
   "repair_hints": "Cite or prove positivity under multiplication."
 }
 ```
@@ -276,36 +324,42 @@ Before invoking the verifier, inspection records:
 - active workspace source fingerprint;
 - protected main-goal identity;
 - target statement or construction and proof identity;
-- local dependency identities and verification keys;
-- import scope;
+- exact direct dependency statement identities;
+- semantic source context and import declarations;
 - external-basis hash and content; and
 - checker contract.
 
-After a successful verifier result, inspection recomputes workspace sources,
+After a conclusive local verifier result, inspection recomputes workspace sources,
 protected goal context, and external basis. If anything changed, it reports
 stale workspace source context and does not cache the result as accepted.
 
 For current context, inspection:
 
 1. writes the exact decision record atomically;
-2. updates the selected fact to `workspace-verified` in the in-memory result;
-3. constructs a complete schema-v3 workspace manifest and graph;
-4. merges current outcomes for unchanged facts outside a narrow selection;
-5. atomically publishes the workspace snapshot; and
-6. refreshes the aggregate project snapshot when publication is safe.
+2. records the result under `local_verification` without changing any machine
+   edge or upstream state;
+3. computes `global_verification` deterministically over the workspace graph;
+4. constructs a complete schema-v4 workspace manifest and graph;
+5. merges current local outcomes for unchanged facts outside a narrow
+   selection;
+6. atomically publishes the workspace snapshot; and
+7. refreshes the aggregate project snapshot when publication is safe.
 
 The host cannot bypass this path merely because it authored the proof. No step
 writes proof text or a status marker into the user's note.
 
 ### Example stale acceptance
 
-Assume the verifier accepted a proof using `@lem-bound` under verification key
-`sha256:A`. Before the cache write, the lemma proof changes, producing key
-`sha256:B`.
+Assume the verifier accepted a proof using the exact statement of `@lem-bound`
+under verification key `sha256:A`. Before the cache write, that statement
+changes, producing key `sha256:B`. Inspection reports stale source context and
+does not cache the local result because the assumed direct conclusion changed.
 
-Even if the new lemma is true, the verifier did not review the original
-candidate against that exact dependency state. Inspection reports stale source
-context and leaves the result unverified. The host reruns the affected closure.
+If only the proof of `@lem-bound` changes while its statement remains byte-for-
+byte semantically identical, the dependent local decision remains reusable.
+The lemma's own local decision is rechecked and the dependent's global status
+is recomputed. This separation prevents upstream review mechanics from leaking
+into the meaning of a local implication check.
 
 An unrelated edit to user-note prose outside a protected main goal does not
 change workspace mathematical identity. A change to the external basis or
@@ -317,7 +371,7 @@ qmd-prover may retain under `.qmd-prover/`:
 
 - protected workspace metadata and target snapshots;
 - persistent mathematical workspace QMD;
-- exact accepted and rejected verifier records;
+- exact verified, disproved, and rejected verifier records;
 - verifier infrastructure failure reports;
 - workspace manifests, graphs, and immutable snapshots;
 - the aggregate project manifest, graph, diagnostics, and snapshots;

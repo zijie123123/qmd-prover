@@ -10,15 +10,16 @@ contract in `skills/qmd-prover/references/AGENTS.md`.
 
 The contract alone cannot establish compliance. The compiler parses Pandoc
 JSON, the project index checks project-wide ownership and identity invariants,
-the inspector builds scoped and aggregate graphs, and the configured external
-verifier judges mathematical sufficiency.
+the inspector builds scoped and aggregate graphs, the optional external
+verifier judges one local conditional step, and deterministic graph
+composition establishes whether the full upstream closure is accepted.
 
 A matching project contract is a prerequisite for proof work. Before changing
 mathematics or qmd-prover state, the host agent compares the managed block in
 the project's root `AGENTS.md` with the canonical block byte-for-byte. If the
 preflight fails, the host stops before mutation and asks whether the user wants
 to create, append, or synchronize policy. This is an agent preflight, not a
-replacement for compiler and verifier checks.
+replacement for machine, local-verifier, and global-composition checks.
 
 Normally the user installs the skill and asks an agent in natural language to
 initialize a project. `init` may create policy only when intent is sufficiently
@@ -76,8 +77,8 @@ Local policy can answer questions that qmd-prover deliberately leaves open:
 
 Local policy must not redefine semantic block classes, weaken global ID
 uniqueness, permit cross-workspace dependencies, treat user-note theorems as
-workspace premises, bypass independent verification, or authorize proof writes
-into user notes.
+workspace premises, confuse a local AI pass with global verification, or
+authorize proof writes into user notes.
 
 ## External mathematical basis
 
@@ -90,10 +91,10 @@ may be taken from outside the project. Its three states are intentional:
 - nonempty content permits only the stated results or classes of results.
 
 Initialization reports this state but does not create the file. The host reads
-it before proof work. The independent verifier receives its exact mode and
+it before proof work. The optional local verifier receives its exact mode and
 content with every candidate.
 
-The v14 model permits the agent to revise the external basis when the user's
+The v16 model permits the agent to revise the external basis when the user's
 request or the proof context genuinely requires a different basis, but the
 change must be explicit. It changes the verifier context and therefore makes
 affected exact-cache keys miss. A current workspace snapshot includes the
@@ -106,20 +107,23 @@ inside the same workspace.
 
 ## Rule categories
 
-The discipline assigns rules to three enforcement mechanisms. Passing one
-mechanism never implies that the other two passed.
+The discipline assigns rules to four layers. Passing one layer never implies
+that the others passed.
 
 | Rule category | Enforced by | What it establishes |
 |---|---|---|
 | Mechanically enforceable | Compiler, project index, and inspector | Source shape, identity, scope, graph, selection, and snapshot invariants are decidably satisfied. |
-| Mathematically judged | Independent external verifier | The exact construction or proof is mathematically sufficient. |
+| Locally mathematically judged | Optional external verifier | Assuming the exact direct dependency conclusions, the submitted construction, proof, or refutation is sufficient. |
+| Globally composed | Inspector graph fold | Machine validity, local acceptance, and the entire upstream closure jointly support the result. |
 | Agent conduct | Skill and project instructions | The host respects ownership, workspace placement, external basis, and verifier findings. |
 
-The programmatic layer is deliberately conservative. When it cannot establish
-a required invariant from Pandoc JSON and protected state, it emits a
-diagnostic rather than guessing. The verifier runs only after the selected
-fact's mechanical checks pass. Host conduct remains necessary because not all
-bad actions are recoverable from the final files.
+The mechanical layer is deliberately conservative. When it cannot establish a
+required invariant from Pandoc JSON and protected state, it emits a diagnostic
+rather than guessing. The local verifier is separately eligible when the exact
+target and direct dependency statements can be materialized; an upstream AI
+rejection does not suppress it. Machine errors still make global composition
+invalid even if a local conditional judgment is available. Host conduct
+remains necessary because not all bad actions are recoverable from final files.
 
 ### Mechanically enforceable rules
 
@@ -137,6 +141,8 @@ Mechanically enforceable rules include:
   proof premises;
 - exact selection of a fact or path and its transitive local dependency
   closure;
+- placement of `DISPROVED` only as the first paragraph of a theorem-like
+  linked proof, never as a definition marker;
 - current workspace source, protected goal, external basis, checker contract,
   and cache signatures; and
 - safe atomic publication of workspace and aggregate snapshots.
@@ -179,9 +185,10 @@ import can repair it. The result must be adopted and proved locally, or the
 allowed outside premise must be described in `.external.qmd` without turning
 it into a cross-workspace graph node.
 
-### Mathematically judged rules
+### Locally mathematically judged rules
 
-The independent verifier judges whether:
+Assuming the supplied direct dependency conclusions, the optional verifier
+judges whether:
 
 - each inference is valid under the stated hypotheses;
 - every cited result actually applies;
@@ -189,13 +196,16 @@ The independent verifier judges whether:
 - a reduction covers all cases and preserves all hypotheses;
 - an induction covers its base and inductive steps;
 - a limit, compactness, choice, finiteness, or maximality argument is justified;
-- examples or computations have been mistaken for a universal proof; and
+- examples or computations have been mistaken for a universal proof;
+- a proposed or independently discovered counterexample satisfies every
+  hypothesis and really falsifies the exact quantified statement; and
 - the proof establishes the exact protected statement rather than a weakened
   or nearby variant.
 
-The verifier's judgment never relaxes programmatic scope checks. A proof cannot
-be accepted merely because the verifier recognizes an unstated theorem that
-the workspace was not allowed to use.
+The verifier receives no dependency proof text, dependency verdict, or
+transitive proof bundle. Its judgment never relaxes mechanical scope checks. A
+local conditional pass cannot make an undeclared premise legal or turn a cycle
+into a globally valid proof.
 
 #### Example: a mathematically detectable gap
 
@@ -228,7 +238,8 @@ The skill instructs the host agent to:
 - keep search notes, confidence claims, and verifier metadata out of proofs;
 - retain useful failed routes as `REJECTED` rather than presenting them as
   premises;
-- report a precise refutation when a protected goal appears false; and
+- mark and submit a precise `DISPROVED` refutation when a protected goal
+  appears false, while treating it as a candidate until independent checking;
 - leave verified mathematics in the workspace rather than copying it to user
   notes.
 
@@ -245,8 +256,11 @@ Every prime number is odd.
 ```
 
 The agent must not silently change the statement to “Every prime greater than
-\(2\) is odd.” It preserves the goal, reports the counterexample \(2\), and may
-offer the corrected statement as a suggestion requiring explicit approval.
+\(2\) is odd.” It preserves the goal and puts the counterexample \(2\) in the
+workspace proof overlay after a first-paragraph `DISPROVED` marker. It reports
+the goal as established false only when inspection records
+`workspace-disproved`, and may offer the corrected statement as a suggestion
+requiring explicit approval.
 
 ## Semantic scope
 
@@ -369,10 +383,20 @@ By @def-even-integer, write \(a=2k\). Then \(ab=2(kb)\), so
 ```
 
 The first nonempty proof paragraph may be `OPEN` for an incomplete active
-attempt or `REJECTED` for an inactive failed attempt. No marker means a
-candidate. `VERIFIED` and `REVOKED` are recognized only as legacy canonical
-markers; agents and current inspection never write them. A source marker alone
-does not establish workspace verification.
+attempt, `REJECTED` for an inactive failed attempt, or `DISPROVED` for a
+proposed counterexample or refutation of the exact theorem-like statement. No
+marker means a proof candidate. A definition may use `OPEN` or `REJECTED` at
+the end of its declaration, but it may not use `DISPROVED`; any challenge to
+existence, uniqueness, or well-definedness belongs in a theorem-like claim.
+`VERIFIED` and `REVOKED` are recognized only as legacy canonical markers;
+agents and current inspection never write them. A source marker alone does not
+establish verification or disproof.
+
+When `DISPROVED` is present, the remaining proof body is the proposed
+refutation. Inspection verifies it independently and records either a
+confirmed `workspace-disproved` outcome or a rejected-refutation outcome. The
+verifier may also discover a counterexample while reviewing an unmarked proof;
+that decision is retained in derived state without modifying QMD.
 
 ### Example: semantic and nonsemantic references
 

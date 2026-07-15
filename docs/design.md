@@ -14,9 +14,10 @@ skill. The host follows project policy, writes mathematical workspace QMD, reads
 diagnostics and verifier reports, and explains results in natural language.
 
 `AGENTS.md` supplies the agent-facing contract; it does not establish
-compliance by itself. The compiler and inspector turn Pandoc JSON into facts,
-graphs, diagnostics, frontiers, and current verification state. The external
-verifier supplies an independent mathematical judgment.
+compliance by itself. The compiler turns Pandoc JSON into facts, dependency
+edges, and machine diagnostics. An optional external verifier supplies a local
+conditional mathematical judgment. The inspector composes those independent
+products into global verification state.
 
 The design is workspace-centric. User QMD remains notes and protected
 main-goal storage. All complete agent-created definitions, intermediate
@@ -35,11 +36,11 @@ The project has four components:
    and for agents working on it, including the user-note/main-goal boundary,
    workspace semantic QMD, global identity, external basis, and agent conduct.
 2. [Inspector](design-inspector.md) builds the project index, checks facts,
-   paths, workspaces, and the project, invokes independent verification, and
-   exposes aggregate dependency analysis and read-only staleness.
-3. [Proving utilities](design-proving.md) protect the goal context, order local
-   dependencies, create bounded verifier packets, retain exact accepted and
-   rejected decisions, and publish workspace evidence safely.
+   paths, workspaces, and the project, runs optional local AI checks, composes
+   global status, and exposes dependency analysis and read-only staleness.
+3. [Proving utilities](design-proving.md) protect the goal context, create
+   bounded direct-dependency verifier packets, retain exact local decisions,
+   and publish local and globally composed evidence safely.
 4. [Rendering](design-rendering.md) uses Quarto to present the QMD project and
    any generated observability material.
 
@@ -62,13 +63,13 @@ Codex / Claude Code                                (outside qmd-prover)
 | qmd-prover skill                                      |
 |                                                       |
 | discipline                                            |
-|  + inspector (contract checker + independent verifier)|
+|  + inspector (machine graph + local AI + composition) |
 |  + agent workspaces                                   |
 |                  |                                    |
 |                  +------> proving utilities           |
-|                                 | accepted work only  |
+|                                 | retained evidence   |
 |                                 v                     |
-|                         canonical QMD project         |
+|                         goal workspaces               |
 +-------------------------------------------------------+
                                   |
                                   v
@@ -83,9 +84,12 @@ Quarto is also outside qmd-prover. It renders user notes, optional workspace
 previews, and generated observability inputs. A successful render does not
 establish proof correctness.
 
-The independent verifier is an external boundary process. qmd-prover owns the
+The optional verifier is an external boundary process. qmd-prover owns the
 packet contract, cache identity, freshness checks, and interpretation of the
-structured result, not the verifier's implementation.
+structured result, not the verifier's implementation. Its verdict answers one
+conditional question only: assuming the supplied direct dependency
+conclusions, does the submitted proof establish this fact? It does not certify
+those dependencies. qmd-prover computes whole-proof status separately.
 
 ## Mathematical project model
 
@@ -107,16 +111,17 @@ User-note text can be written by a person or an agent at the user's request,
 but qmd-prover treats it as notes unless it is a protected main goal.
 Workspace QMD receives the complete machine-enforced contract.
 
-Verified workspace mathematics is persistent project state. It remains
-available for later inspection, dependency analysis, resuming proof work, and
-future paper tooling. It is not copied into user notes and does not acquire a
-`VERIFIED` source marker.
+Verified workspace mathematics and independently confirmed refutations are
+persistent project state. They remain available for later inspection,
+dependency analysis, resuming proof work, and future paper tooling. They are
+not copied into user notes and do not acquire a verifier-authored source
+marker.
 
 Derived state under `.qmd-prover/` includes:
 
 - statement locks for protected main goals;
 - workspace metadata and target snapshots;
-- exact accepted and rejected verifier records;
+- exact verified, disproved, and rejected verifier records;
 - workspace manifests, graphs, and immutable snapshots;
 - aggregate project manifest, graph, diagnostics, and snapshots; and
 - generated Quarto observability inputs.
@@ -140,7 +145,7 @@ uniform-index-project/
 └── .qmd-prover/
     ├── .external.qmd                      # optional external-basis policy
     ├── statement-locks.json
-    ├── manifest.json                      # aggregate schema-v3 manifest
+    ├── manifest.json                      # aggregate schema-v4 manifest
     ├── graph.json                         # aggregate all-workspace graph
     ├── diagnostics.json
     ├── graphs/
@@ -190,8 +195,10 @@ second declaration; the latter is strategic prose maintained by the agent or
 user and is never overwritten by inspection.
 
 The subject files contain ordinary semantic QMD. A declaration normally stays
-beside its linked proof. Attempts and counterexamples need no special file type.
-`OPEN` and `REJECTED` distinguish incomplete and inactive proof blocks.
+beside its linked proof. Attempts and counterexamples need no special file
+type. `OPEN` and `REJECTED` distinguish incomplete and inactive proof blocks.
+`DISPROVED` begins a proposed counterexample or refutation in a theorem-like
+linked proof; it remains a candidate until independently checked.
 
 ### Workspace dependency model
 
@@ -199,6 +206,8 @@ The inspector treats each goal workspace as an isolated mathematical project.
 Its graph may contain:
 
 - current workspace-verified definitions and results;
+- independently confirmed workspace-disproved statements with their
+  refutation evidence;
 - candidates that are mechanically ready but await verification;
 - open dependencies with incomplete proofs;
 - retained rejected attempts;
@@ -236,23 +245,26 @@ QMD project. That model caused user notes to serve simultaneously as notes,
 proof database, and machine status store. It also made inspection depend on
 marker writes and canonical destination selection.
 
-The v14 model removes that boundary crossing:
+The v16 model removes that boundary crossing, separates machine and AI state,
+and adds explicit retained disproof evidence:
 
 1. The user statement remains in its note.
 2. The agent creates complete mathematics in the goal workspace.
-3. The inspector verifies a selected dependency closure or complete workspace.
-4. Exact accepted and rejected decisions are cached.
-5. Current accepted facts remain `workspace-verified` in workspace snapshots.
-6. The aggregate project graph exposes those facts for search, dependency
+3. The compiler builds the dependency graph without consulting AI state.
+4. The optional verifier checks each selected fact against only its direct
+   dependency statements, and exact local decisions are cached.
+5. The inspector deterministically composes global status over the graph;
+   confirmed false statements carry conditional or global evidence explicitly.
+6. The aggregate project graph exposes all three layers for search, dependency
    analysis, progress reporting, and future paper selection.
 
 `submit proof` and `verification revoke` remain parseable only for compatibility
 and return structured `retired` results without modifying any file.
 
-This does not make verification weaker. Statement locks, dependency state,
-external basis, checker contract, source freshness, rejection safety, and
-atomic writes are still checked. The safest canonical write is now no proof
-write at all.
+Statement locks, exact dependency edges, external basis, checker contract,
+source freshness, rejection safety, and atomic writes are still checked. The
+machine graph does not become more or less valid when an AI verdict changes.
+The safest canonical write is now no proof write at all.
 
 The files therefore have distinct ownership:
 
@@ -279,9 +291,10 @@ declaration.
 
 Within workspace semantic QMD, an `@id` citation in a definition construction
 or linked proof is a dependency. The inspector first checks existence, global
-uniqueness, local ownership, import scope, dependency status, and cycles. It
-then sends the exact candidate and current local dependency evidence to the
-independent verifier.
+uniqueness, local ownership, import scope, and cycles without consulting AI.
+For a selected fact, it can then send the exact candidate and the exact
+statements of its direct dependencies to the optional verifier. Dependency
+proofs, dependency verdicts, and transitive proof text are deliberately absent.
 
 ### Complete workspace QMD example
 
@@ -357,6 +370,13 @@ main-goal snapshot. The proof block is an overlay, not a second theorem
 declaration. Neither inspection nor successful verification copies this proof
 into the user-owned QMD file.
 
+If the exact theorem-like statement is false, its linked proof instead begins
+with `DISPROVED` and supplies the counterexample or refutation after that
+marker. This changes the independent review mode; it does not itself establish
+falsity. Definitions cannot use the marker. A verifier may also discover a
+counterexample while checking an unmarked proof, and derived state records that
+outcome without editing the workspace source.
+
 ### Inspection scopes
 
 The public scopes are:
@@ -369,7 +389,7 @@ The public scopes are:
 - `inspect project` for all notes, goals, workspaces, full workspace results,
   and aggregate graph; and
 - `dependency ...` for analysis and search over the current aggregate
-  schema-v3 snapshot.
+  schema-v4 snapshot.
 
 `workspace inspect` is a compatibility alias. No inspect command initializes a
 workspace. An ordinary user-note path returns no facts rather than being
@@ -380,22 +400,56 @@ inspection. The top-level project result is still unsuccessful until every
 main goal has a current initialized workspace and all full workspace checks
 pass.
 
-### Verification status
+### Three inspection layers
 
-Workspace status is evidence associated with an exact snapshot:
+Every current result exposes separate `mechanical`, `local_verification`, and
+`global_verification` fields. The `workspace-*` status string is a compact
+presentation of the composed state, not an input to dependency analysis.
+
+Mechanical state covers parsing, declaration and proof shape, ID ownership,
+exact imports and exports, reference existence and scope, cycles, protected
+goal freshness, and source freshness. It is computed without an AI verifier.
+
+Local verification checks the exact submitted proof or refutation while
+assuming the exact conclusions of only its direct dependencies. A rejected,
+unverified, or cyclic upstream proof does not prevent this local check when
+the dependency statements can be materialized. Without a configured verifier,
+local state is `not-run` rather than a machine failure.
+
+Global verification is deterministic. A result is globally `verified` only if
+its machine state passes, its local proof is accepted, and every direct
+dependency is globally `verified`. Otherwise it is `blocked`, `unverified`,
+`rejected`, `invalid`, or `disproved` as appropriate. Operational `ok` says
+whether inspection and configured verifier execution completed; it is not the
+mathematical answer.
+
+The composed workspace presentation includes:
 
 - `workspace-open`: a required proof is absent or begins with `OPEN`;
 - `workspace-candidate`: complete unmarked mathematics awaits checking;
+- `workspace-disproof-candidate`: a `DISPROVED` proof proposes a counterexample
+  or refutation and awaits checking;
 - `workspace-rejected`: an exact verifier decision rejected the candidate, or
   the active proof begins with `REJECTED`;
-- `workspace-verified`: the exact current candidate has an accepted verifier
-  record in its workspace context; and
+- `workspace-disproof-rejected`: the independent verifier rejected a proposed
+  refutation;
+- `workspace-verified`: the exact current candidate has an accepted local
+  verifier record and every direct dependency is globally verified;
+- `workspace-disproved`: local verification established a refutation and every
+  direct dependency is globally verified, so the exact theorem-like statement
+  is globally false with retained structured evidence;
+  and
 - unavailable or stale state: mechanical, source, protected-context, or cache
   checks prevent use.
 
-`workspace-verified` is informal verifier evidence, not formal proof and not
-human review. It is never inferred from the agent's confidence and never
-written as a source marker.
+`workspace-verified` is informal globally composed AI evidence, not formal
+proof and not human review. It is never inferred from the agent's confidence
+and never written as a source marker.
+
+`workspace-disproved` has the same freshness requirement. It is conclusive
+evidence about a false statement, not an available premise. Global composition
+blocks any dependent fact that cites it, and frontier queries expose it as an
+obstruction. The machine edge remains present and independent of the verdict.
 
 `VERIFIED` and `REVOKED` remain recognized only so old projects can be reported
 without destructive migration.
@@ -427,16 +481,18 @@ blocks that workspace without suppressing healthy workspace results.
 
 ### Staleness and transitive invalidation
 
-Exact workspace decisions include statement or construction, proof, dependency
-identities and states, import scope, external basis, checker contract, and
-protocol. Workspace snapshots add a source signature covering active workspace
-QMD, protected goal identity, external basis, and checker contract.
+Exact local decisions include the target statement or construction, proof or
+refutation, verification mode, exact direct dependency statements, semantic
+context, external basis, checker contract, and protocol. They exclude upstream
+proof text, upstream verdicts, and the transitive proof closure. Workspace
+snapshots add a source signature covering active workspace QMD, protected goal
+identity, external basis, and checker contract.
 
-When a local dependency changes, its exact key changes. Dependents receive new
-keys through their dependency snapshots, so a subsequent inspection rechecks
-the affected reverse closure while reusing unaffected decisions. Narrow
-inspection merges current previous outcomes for unchanged facts so unrelated
-verified nodes are not downgraded.
+Changing an upstream proof without changing its statement invalidates that
+upstream local decision but preserves downstream local cache hits; global state
+is recomputed over the changed graph. Changing a direct dependency statement
+invalidates the dependent local decision. Narrow inspection merges current
+previous outcomes for unchanged facts so unrelated nodes are not downgraded.
 
 `check staleness` is now read-only. It scans protected goal snapshots,
 workspace sources, external basis, checker contract, caches, and legacy state,
@@ -456,7 +512,8 @@ The infrastructure is available to:
 - inspect facts, paths, workspaces, or the whole project;
 - discover missing imports, cycles, and proof frontiers;
 - search retained workspace mathematics;
-- independently verify exact candidates;
+- locally verify exact candidates against direct dependency conclusions;
+- retain and expose independently checked counterexamples and refutations;
 - retain rejection reports and repair hints;
 - audit current source and cache freshness;
 - query the aggregate all-workspace graph; and
@@ -479,8 +536,8 @@ The environment provides:
 
 - Node.js 20 or later;
 - Pandoc on `PATH`, or `QMD_PROVER_PANDOC`;
-- an external verifier command through `QMD_PROVER_VERIFIER` or project
-  configuration; and
+- optionally, an external verifier command through `QMD_PROVER_VERIFIER` or
+  project configuration; and
 - Quarto only when rendered output is wanted.
 
 From a source checkout:

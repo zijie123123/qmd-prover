@@ -6,9 +6,9 @@ import { deriveGraphFindings } from '../inspection/findings.js';
 import { buildAggregateSnapshot, publishAggregateSnapshot } from '../inspection/aggregate.js';
 import { buildProjectInspectionIndex } from '../inspection/index.js';
 import { readLocatedBlock, readLocatedProof } from '../semantic/source.js';
-import { accepted, buildVerifierPacket, checkerContract, invokeVerifier, verificationKey } from '../verification/protocol.js';
+import { buildVerifierPacket, checkerContract, configured, invokeVerifier, verificationKey, verificationOutcome } from '../verification/protocol.js';
 import { asErrorLike } from '../shared/core.js';
-import { cachedWorkspaceDecision, cleanVerifierText, discoverActive, protectedGoalContextFingerprint, normalizeImports, topologicalOrder, verifierFailure, workspaceDirectory, workspaceSourceFingerprint, workspaceSnapshotSourceSignature, workspaceStatus } from './support.js';
+import { cachedWorkspaceDecision, cleanVerifierText, discoverActive, protectedGoalContextFingerprint, topologicalOrder, verifierFailure, workspaceDirectory, workspaceSourceFingerprint, workspaceSnapshotSourceSignature, workspaceStatus } from './support.js';
 async function readCurrentSnapshot(directory, sourceSignature) {
     try {
         const pointer = await readJson(path.join(directory, 'latest.json'));
@@ -17,7 +17,7 @@ async function readCurrentSnapshot(directory, sourceSignature) {
         if (!snapshotFile.startsWith(`${snapshotsRoot}${path.sep}`))
             return null;
         const snapshot = await readJson(snapshotFile);
-        if (pointer.schema_version !== 3 || snapshot.schema_version !== 3
+        if (pointer.schema_version !== 4 || snapshot.schema_version !== 4
             || snapshot.snapshot_id !== pointer.snapshot_id
             || snapshot.source_signature !== sourceSignature
             || !Array.isArray(snapshot.manifest?.results))
@@ -29,10 +29,10 @@ async function readCurrentSnapshot(directory, sourceSignature) {
     }
 }
 function unavailableWorkspace(root, id, directory, diagnostics) {
-    const graph = { schema_version: 3, nodes: [], edges: [], cycles: [] };
-    const manifest = { schema_version: 3, target: id, files: [], results: [], proofs: [] };
+    const graph = { schema_version: 4, nodes: [], edges: [], cycles: [] };
+    const manifest = { schema_version: 4, target: id, files: [], results: [], proofs: [] };
     return {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'workspace-inspect',
         ok: false,
         complete: false,
@@ -40,11 +40,13 @@ function unavailableWorkspace(root, id, directory, diagnostics) {
         workspace: relativePosix(root, directory),
         target: { id, status: 'missing' },
         stale: true,
-        staleness: { schema_version: 3, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
-        summary: { files: 0, facts: 0, errors: diagnostics.filter((item) => item.severity === 'error').length, mechanical_ok: false, ai_ok: false },
+        staleness: { schema_version: 4, operation: 'check-staleness', ok: false, changed: [], invalidated: [] },
+        summary: { files: 0, facts: 0, errors: diagnostics.filter((item) => item.severity === 'error').length, mechanical_ok: false, globally_verified: false },
         verification: {
-            eligible: 0, verifier_calls: 0, cache_hits: 0, cache_misses: 0, invalid_cache_entries: 0,
-            passed: 0, rejected: 0, errors: 0, not_run: 0, stopped_after: null, facts: []
+            available: false, eligible: 0, verifier_calls: 0, cache_hits: 0, cache_misses: 0, invalid_cache_entries: 0,
+            local_verified: 0, local_disproved: 0, local_rejected: 0, local_errors: 0, local_not_run: 0,
+            global_verified: 0, global_disproved: 0, global_blocked: 0, global_unverified: 0,
+            global_rejected: 0, global_invalid: 0, stopped_after: null, facts: []
         },
         facts: [],
         findings: deriveGraphFindings({ graph, manifest, diagnostics }),
@@ -96,7 +98,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
     const dependencyStale = false;
     const stale = targetStale;
     const staleness = {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'check-staleness',
         ok: !stale,
         changed: stale ? [{ id, reasons: [
@@ -110,20 +112,14 @@ export async function inspectWorkspace(root, requested, options = {}) {
         : {
             root,
             config: projectGoals.config,
-            manifest: { schema_version: 3, files: [], results: [], proofs: [] },
-            graph: { schema_version: 3, nodes: [], edges: [], cycles: [] },
+            manifest: { schema_version: 4, files: [], results: [], proofs: [] },
+            graph: { schema_version: 4, nodes: [], edges: [], cycles: [] },
             diagnostics: [],
             summary: { files: 0, results: 0, errors: 0, warnings: 0 },
             ok: true,
             complete: true
         };
-    const provisionalIds = new Set(provisional.manifest.results.map((result) => result.id));
     const diagnostics = provisional.diagnostics.filter((item) => {
-        if (item.code === 'DEPENDENCY_STATUS_INSUFFICIENT') {
-            const referenced = item.message.match(/@((?:def|lem|thm|prp|cor)-[^\s,]+)/)?.[1];
-            if (referenced && provisionalIds.has(referenced))
-                return false;
-        }
         if (!['DEPENDENCY_UNKNOWN', 'IMPORT_FILE_MISSING', 'IMPORT_ID_MISSING'].includes(item.code))
             return true;
         const referenced = item.message.match(/@((?:def|lem|thm|prp|cor)-[^\s,]+)/)?.[1];
@@ -203,8 +199,12 @@ export async function inspectWorkspace(root, requested, options = {}) {
         if (!previous || previous.statement_hash !== result.statement_hash || previous.proof_hash !== result.proof_hash
             || stableJson(previous.dependencies, 0) !== stableJson(result.dependencies, 0))
             continue;
-        if (previous.status === 'workspace-verified' || previous.status === 'workspace-rejected')
+        if (previous.global_verification) {
             result.status = previous.status;
+            result.global_verification = previous.global_verification;
+            if (previous.disproof)
+                result.disproof = previous.disproof;
+        }
     }
     for (const result of workspaceResults) {
         if (localResultById.has(result.id) && projectGoalById.has(result.id))
@@ -287,11 +287,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
                     origin: 'workspace',
                     existence: 'pass',
                     scope: localScopeCheck(result, dependency),
-                    status: workspaceDependency.status === 'workspace-verified' ? 'pass' : 'fail',
-                    cycle: cycleEdges.has(`${result.id}\0${dependency}`) ? 'fail' : 'pass',
-                    ai_sufficiency: result.status === 'workspace-verified'
-                        ? 'pass'
-                        : result.status === 'workspace-rejected' ? 'fail' : 'not-run'
+                    cycle: cycleEdges.has(`${result.id}\0${dependency}`) ? 'fail' : 'pass'
                 };
             if (projectGoalById.has(dependency))
                 return {
@@ -299,14 +295,12 @@ export async function inspectWorkspace(root, requested, options = {}) {
                     origin: 'main-goal',
                     existence: 'pass',
                     scope: 'fail',
-                    status: 'fail',
-                    cycle: 'pass',
-                    ai_sufficiency: 'not-run'
+                    cycle: 'pass'
                 };
             return {
                 dependency,
                 origin: 'unresolved',
-                existence: 'fail', scope: 'fail', status: 'fail', cycle: 'pass', ai_sufficiency: 'not-run'
+                existence: 'fail', scope: 'fail', cycle: 'pass'
             };
         }).sort((left, right) => left.dependency.localeCompare(right.dependency));
     }
@@ -333,34 +327,52 @@ export async function inspectWorkspace(root, requested, options = {}) {
             ? item.id === result.id
             : item.file === result.file || (sourceRoot && item.file === sourceRoot)));
     }
-    function programmaticCheck(result) {
+    function mechanicalCheck(result) {
         const references = referenceChecks(result);
         const errors = relevantErrors(result);
-        let reason = null;
         const marker = sourceMarkerById.get(result.id);
+        let reason = null;
         if (stale)
             reason = 'workspace-snapshot-stale';
         else if (!projectGoals.complete || provisional.complete === false)
             reason = 'semantic-parse-incomplete';
-        else if (marker === 'OPEN')
-            reason = 'explicitly-open';
-        else if (marker === 'REJECTED')
-            reason = 'explicitly-rejected';
-        else if (marker === 'VERIFIED' || marker === 'REVOKED')
-            reason = 'protected-marker-forbidden';
-        else if (result.kind !== 'definition' && !result.proof_present)
-            reason = 'proof-missing';
         else if (errors.length)
-            reason = 'programmatic-check-failed';
-        else if (references.some((check) => (check.existence !== 'pass' || check.scope !== 'pass' || check.status !== 'pass' || check.cycle !== 'pass')))
+            reason = 'mechanical-check-failed';
+        else if (references.some((check) => (check.existence !== 'pass' || check.scope !== 'pass' || check.cycle !== 'pass')))
             reason = 'reference-check-failed';
         return {
             status: reason ? 'fail' : 'pass',
-            verification_mode: result.kind === 'definition' ? 'definition-construction' : 'proof',
+            verification_mode: result.kind === 'definition'
+                ? 'definition-construction'
+                : marker === 'DISPROVED' ? 'refutation' : 'proof',
             references,
             diagnostics: errors.map((item) => item.code).sort(),
             ...(reason ? { reason } : {})
         };
+    }
+    function localEligibility(result) {
+        const marker = sourceMarkerById.get(result.id);
+        if (stale)
+            return { ready: false, reason: 'workspace-snapshot-stale' };
+        if (!projectGoals.complete || provisional.complete === false)
+            return { ready: false, reason: 'semantic-parse-incomplete' };
+        if (marker === 'OPEN')
+            return { ready: false, reason: 'explicitly-open' };
+        if (marker === 'REJECTED')
+            return { ready: false, reason: 'explicitly-rejected' };
+        if (marker === 'VERIFIED' || marker === 'REVOKED')
+            return { ready: false, reason: 'protected-marker-forbidden' };
+        if (result.kind !== 'definition' && !result.proof_present)
+            return { ready: false, reason: 'proof-missing' };
+        if (referenceChecks(result).some((check) => check.existence !== 'pass' || check.origin !== 'workspace')) {
+            return { ready: false, reason: 'dependency-context-unavailable' };
+        }
+        const blockingErrors = relevantErrors(result).filter((item) => ![
+            'DEPENDENCY_UNAVAILABLE', 'WORKSPACE_DEPENDENCY_UNAVAILABLE', 'DEPENDENCY_CYCLE', 'IMPORT_CYCLE'
+        ].includes(item.code));
+        if (blockingErrors.length)
+            return { ready: false, reason: 'local-context-invalid' };
+        return { ready: true };
     }
     const locatedBlocks = new Map();
     async function located(result, origin) {
@@ -379,10 +391,9 @@ export async function inspectWorkspace(root, requested, options = {}) {
     }
     const protectedScope = currentTarget ? {
         id: currentTarget.id,
-        status: currentTarget.status,
-        identity: { statement_hash: currentTarget.statement_hash, proof_hash: currentTarget.proof_hash }
-    } : { id, status: 'missing', identity: null };
-    async function packetFor(result, outcomes) {
+        identity: { statement_hash: currentTarget.statement_hash }
+    } : { id, identity: null };
+    async function packetFor(result) {
         const local = localResultById.get(result.id);
         let statement;
         let proof = '';
@@ -412,19 +423,15 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 if (!localDependency)
                     throw Object.assign(new Error(`Workspace dependency @${dependency} disappeared`), { code: 'WORKSPACE_SOURCE_STALE' });
                 const dependencyBlock = await located(localDependency, 'workspace');
-                const outcome = outcomes.get(dependency);
                 dependencies.push({
                     id: dependency,
                     kind: workspaceDependency.kind,
                     title: workspaceDependency.title,
                     semantic_text: cleanVerifierText(dependencyBlock.statement?.text, workspaceDependency.kind === 'definition' ? 'last' : null),
                     statement: cleanVerifierText(dependencyBlock.statement?.text, workspaceDependency.kind === 'definition' ? 'last' : null),
-                    status: workspaceDependency.status,
                     origin: 'workspace',
                     identity: {
-                        statement_hash: workspaceDependency.statement_hash,
-                        proof_hash: workspaceDependency.proof_hash,
-                        verification_key: outcome?.verification_key ?? null
+                        statement_hash: workspaceDependency.statement_hash
                     },
                     source: { file: workspaceDependency.file }
                 });
@@ -433,14 +440,19 @@ export async function inspectWorkspace(root, requested, options = {}) {
             // Non-workspace @IDs are rejected mechanically. Permitted outside mathematics
             // is supplied only through externalBasis, never as an implicit graph fact.
         }
-        const sourceRoot = sourceRootById.get(result.id);
-        const sourceFile = sourceRoot ? fileByRootPath.get(sourceRoot) : undefined;
         const scope = {
-            type: 'selected-workspace',
+            type: 'local-conditional-check',
             workspace: id,
             source_file: result.file,
-            workspace_imports: normalizeImports(sourceFile?.imports ?? []),
-            protected_goal: protectedScope
+            direct_dependency_ids: dependencies.map((dependency) => dependency.id),
+            semantic_context: {
+                definitions: dependencies.filter((dependency) => dependency.kind === 'definition').map((dependency) => ({
+                    id: dependency.id,
+                    construction: dependency.statement,
+                    identity: dependency.identity
+                }))
+            },
+            protected_goal: { id: protectedScope.id, identity: protectedScope.identity }
         };
         return buildVerifierPacket({
             target: {
@@ -453,7 +465,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 cited_dependencies: [...new Set(result.dependencies)].sort(),
                 identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash },
                 source: { file: result.file },
-                workspace: id
+                workspace: id,
+                verification_mode: sourceMarkerById.get(result.id) === 'DISPROVED' ? 'refutation' : result.kind === 'definition' ? 'definition-construction' : 'proof'
             },
             dependencies,
             externalBasis,
@@ -462,73 +475,75 @@ export async function inspectWorkspace(root, requested, options = {}) {
         });
     }
     const outcomes = new Map();
+    const verifierAvailable = configured(projectGoals.config);
     const verification = {
+        available: verifierAvailable,
         eligible: 0,
         verifier_calls: 0,
         cache_hits: 0,
         cache_misses: 0,
         invalid_cache_entries: 0,
-        passed: 0,
-        rejected: 0,
-        errors: 0,
-        not_run: 0,
+        local_verified: 0,
+        local_disproved: 0,
+        local_rejected: 0,
+        local_errors: 0,
+        local_not_run: 0,
+        global_verified: 0,
+        global_disproved: 0,
+        global_blocked: 0,
+        global_unverified: 0,
+        global_rejected: 0,
+        global_invalid: 0,
         stopped_after: null,
         facts: []
     };
     let fatal = null;
-    if (stale && !fatal)
-        fatal = {
-            status: 'error', code: 'WORKSPACE_STALE',
-            error: `The protected main-goal snapshot for @${id} is stale`,
-            remediation: 'Refresh or recreate this goal workspace from the current protected main goal before rerunning inspection.',
-            fatal: true
-        };
     const initialProtectedGoalFingerprint = protectedGoalContextFingerprint(projectGoals, id, externalBasis);
     for (const result of topologicalOrder(workspaceResults)) {
         if (!verificationIds.has(result.id)) {
             const previous = previousById.get(result.id);
-            if ((previous?.status === 'workspace-verified' || previous?.status === 'workspace-rejected') && previous.ai) {
-                outcomes.set(result.id, previous.ai);
+            if (previous?.local_verification) {
+                outcomes.set(result.id, previous.local_verification);
             }
             else {
                 outcomes.set(result.id, {
                     status: 'not-run',
-                    reason: 'Independent verification was outside the selected fact/path dependency closure.'
+                    reason: 'Local verification was outside the selected fact/path dependency closure.'
                 });
             }
             continue;
         }
-        const programmatic = programmaticCheck(result);
-        if (programmatic.status !== 'pass') {
+        const eligibility = localEligibility(result);
+        if (!eligibility.ready) {
             outcomes.set(result.id, {
                 status: 'not-run',
-                reason: programmatic.reason === 'proof-missing'
+                reason: eligibility.reason === 'proof-missing'
                     ? 'No complete proof is present.'
-                    : programmatic.reason === 'explicitly-open'
+                    : eligibility.reason === 'explicitly-open'
                         ? 'The active workspace attempt is explicitly OPEN.'
-                        : programmatic.reason === 'explicitly-rejected'
+                        : eligibility.reason === 'explicitly-rejected'
                             ? 'The active workspace attempt is explicitly REJECTED.'
-                            : `Independent verification did not run because ${programmatic.reason}.`
+                            : `Local conditional verification did not run because ${eligibility.reason}.`
             });
             continue;
         }
         verification.eligible += 1;
-        if (fatal) {
-            outcomes.set(result.id, fatal.failed_target
-                ? verifierFailure(fatal, fatal.failed_target, true)
-                : { ...fatal, inherited: true });
+        if (!verifierAvailable) {
+            outcomes.set(result.id, {
+                status: 'not-run',
+                reason: 'No verifier is configured; the machine dependency analysis remains available and this local result is unverified.'
+            });
             continue;
         }
         let packet;
         try {
-            packet = await packetFor(result, outcomes);
+            packet = await packetFor(result);
         }
         catch (error) {
-            fatal = verifierFailure(error, result.id);
-            fatal.code = String(asErrorLike(error).code ?? 'WORKSPACE_SOURCE_STALE');
-            fatal.failed_target = result.id;
-            outcomes.set(result.id, fatal);
-            verification.stopped_after = result.id;
+            const failure = verifierFailure(error, result.id);
+            failure.code = String(asErrorLike(error).code ?? 'WORKSPACE_SOURCE_STALE');
+            failure.failed_target = result.id;
+            outcomes.set(result.id, failure);
             continue;
         }
         const key = verificationKey(packet);
@@ -543,6 +558,12 @@ export async function inspectWorkspace(root, requested, options = {}) {
             source = 'workspace-verification-cache';
             cachedResult = true;
             verification.cache_hits += 1;
+        }
+        else if (fatal) {
+            outcomes.set(result.id, fatal.failed_target
+                ? verifierFailure(fatal, fatal.failed_target, true)
+                : { ...fatal, inherited: true });
+            continue;
         }
         else {
             verification.cache_misses += 1;
@@ -559,7 +580,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 try {
                     await atomicJson(failureFile, {
                         schema_version: 1,
-                        operation: 'workspace-independent-verification-failed',
+                        operation: 'workspace-local-conditional-verification-failed',
                         workspace: id,
                         target: result.id,
                         failed_at: now,
@@ -597,18 +618,18 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 continue;
             }
             const record = {
-                schema_version: 2,
-                operation: 'workspace-independent-verification',
+                schema_version: 4,
+                operation: 'workspace-local-conditional-verification',
                 workspace: id,
                 target: result.id,
                 verified_at: new Date().toISOString(),
-                accepted: accepted(report),
+                outcome: verificationOutcome(report, packet),
+                accepted: verificationOutcome(report, packet) !== 'rejected',
                 report,
                 statement_hash: result.statement_hash,
                 proof_hash: result.proof_hash,
                 dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [String(dependency.id), {
                         origin: dependency.origin,
-                        status: dependency.status,
                         identity: dependency.identity
                     }])),
                 scope: packet.scope,
@@ -630,40 +651,94 @@ export async function inspectWorkspace(root, requested, options = {}) {
             }
             source = 'independent-verifier';
         }
-        const pass = accepted(report);
+        const decision = verificationOutcome(report, packet);
+        const pass = decision !== 'rejected';
         const outcome = {
             status: pass ? 'pass' : 'fail',
+            outcome: decision,
             source,
             cached: cachedResult,
             verification_key: key,
             report
         };
         outcomes.set(result.id, outcome);
-        result.status = pass ? 'workspace-verified' : 'workspace-rejected';
+        if (decision === 'disproved') {
+            result.disproof = {
+                status: 'conditional',
+                summary: report.summary,
+                refutation: report.refutation,
+                source: 'local-verifier-evidence',
+                verification_key: key
+            };
+        }
+        else
+            delete result.disproof;
     }
     for (const result of workspaceResults) {
         if (!outcomes.has(result.id))
             outcomes.set(result.id, {
                 status: 'not-run',
-                reason: 'Independent verification did not run because the workspace fact was not eligible.'
+                reason: 'Local conditional verification did not run because the workspace fact was not eligible.'
             });
         const outcome = outcomes.get(result.id);
         if (!outcome)
             throw new Error(`Workspace outcome for @${result.id} was not recorded`);
         if (outcome.status === 'fail')
             diagnostics.push({
-                severity: 'error', code: 'WORKSPACE_AI_CHECK_REJECTED',
-                message: `Independent verification rejected @${result.id}: ${outcome.report?.summary || 'critical errors or gaps remain'}`,
+                severity: 'warning', code: sourceMarkerById.get(result.id) === 'DISPROVED' ? 'WORKSPACE_AI_DISPROOF_REJECTED' : 'WORKSPACE_AI_CHECK_REJECTED',
+                message: sourceMarkerById.get(result.id) === 'DISPROVED'
+                    ? `Local conditional verification did not confirm the proposed refutation of @${result.id}: ${outcome.report?.summary || 'critical errors or gaps remain'}`
+                    : `Local conditional verification rejected the submitted proof of @${result.id}: ${outcome.report?.summary || 'critical errors or gaps remain'}`,
                 file: result.file, line: result.proof_line ?? result.line, id: result.id,
                 repair_hints: outcome.report?.repair_hints ?? ''
             });
         if (outcome.status === 'error')
             diagnostics.push({
                 severity: 'error', code: outcome.code ?? 'WORKSPACE_AI_CHECK_FAILED',
-                message: `Independent verification could not check @${result.id}: ${outcome.error}`,
+                message: `Local conditional verification could not check @${result.id}: ${outcome.error}`,
                 file: result.file, line: result.proof_line ?? result.line, id: result.id,
                 remediation: outcome.remediation
             });
+    }
+    const globalById = new Map();
+    for (const result of topologicalOrder(workspaceResults)) {
+        const mechanical = mechanicalCheck(result);
+        const local = outcomes.get(result.id) ?? { status: 'not-run' };
+        let global;
+        if (mechanical.status !== 'pass') {
+            const blockers = referenceChecks(result)
+                .filter((check) => check.existence !== 'pass' || check.scope !== 'pass' || check.cycle !== 'pass')
+                .map((check) => check.dependency).sort();
+            global = { status: 'invalid', blockers, reason: mechanical.reason ?? 'mechanical-check-failed' };
+        }
+        else if (local.status === 'fail') {
+            global = { status: 'rejected', blockers: [], reason: 'local-verification-rejected' };
+        }
+        else if (local.status !== 'pass' || !local.outcome || local.outcome === 'rejected') {
+            global = { status: 'unverified', blockers: [], reason: local.reason ?? local.error ?? 'local-verification-unavailable' };
+        }
+        else {
+            const blockers = result.dependencies.filter((dependency) => (workspaceById.has(dependency) && globalById.get(dependency)?.status !== 'verified')).sort();
+            global = blockers.length
+                ? { status: 'blocked', blockers, reason: 'dependency-closure-not-verified' }
+                : { status: local.outcome === 'disproved' ? 'disproved' : 'verified', blockers: [] };
+        }
+        globalById.set(result.id, global);
+        result.global_verification = global;
+        result.local_verification = local.status === 'pass' || local.status === 'fail'
+            ? {
+                status: local.status,
+                outcome: local.outcome,
+                source: 'local-verifier-evidence',
+                verification_key: local.verification_key,
+                report: local.report
+            }
+            : local;
+        result.status = `workspace-${global.status}`;
+        if (verificationIds.has(result.id) && !(local.status === 'pass' && local.outcome === 'disproved'))
+            delete result.disproof;
+        if (result.disproof)
+            result.disproof.status = global.status === 'disproved' ? 'global' : 'conditional';
     }
     const citedMainGoalIds = new Set(workspaceResults.flatMap((result) => result.dependencies)
         .filter((dependency) => projectGoalById.has(dependency) && !workspaceIds.has(dependency)));
@@ -679,12 +754,14 @@ export async function inspectWorkspace(root, requested, options = {}) {
     const unresolvedNodes = [...new Set(workspaceResults.flatMap((result) => result.dependencies).filter((dependency) => !knownIds.has(dependency)))].sort()
         .map((dependency) => ({ id: dependency, title: '', kind: 'unknown', status: 'missing', origin: 'unresolved' }));
     const graph = {
-        schema_version: 3,
+        schema_version: 4,
         nodes: [
-            ...workspaceResults.map(({ id: resultId, title, kind, status, file, line, statement_hash, proof_hash }) => ({
+            ...workspaceResults.map(({ id: resultId, title, kind, status, file, line, statement_hash, proof_hash, disproof, global_verification }) => ({
                 id: resultId, title, kind, status, file, line, origin: 'workspace',
                 identity: { statement_hash, proof_hash },
-                ai: { status: outcomes.get(resultId)?.status ?? 'not-run' }
+                local_verification: workspaceById.get(resultId)?.local_verification ?? { status: 'not-run' },
+                global_verification: global_verification ?? { status: 'unverified', blockers: [] },
+                ...(disproof ? { disproof } : {})
             })),
             ...mainGoalNodes,
             ...unresolvedNodes.map((node) => ({ ...node, kind: 'unknown' }))
@@ -697,10 +774,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
                 checks: check ? {
                     existence: check.existence,
                     scope: check.scope,
-                    status: check.status,
-                    cycle: check.cycle,
-                    ai_sufficiency: check.ai_sufficiency
-                } : { existence: 'fail', scope: 'fail', status: 'fail', cycle: 'pass', ai_sufficiency: 'not-run' }
+                    cycle: check.cycle
+                } : { existence: 'fail', scope: 'fail', cycle: 'pass' }
             };
         })).sort((left, right) => `${left.from}:${left.to}`.localeCompare(`${right.from}:${right.to}`)),
         cycles: workspaceCycles
@@ -712,17 +787,27 @@ export async function inspectWorkspace(root, requested, options = {}) {
         status: result.status,
         file: result.file,
         line: result.line,
-        programmatic: programmaticCheck(result),
-        ai: outcomes.get(result.id) ?? { status: 'not-run', reason: 'No outcome was recorded.' }
+        mechanical: mechanicalCheck(result),
+        local_verification: outcomes.get(result.id) ?? { status: 'not-run', reason: 'No outcome was recorded.' },
+        global_verification: result.global_verification ?? { status: 'unverified', blockers: [] }
     }));
     const scopedFacts = facts.filter((fact) => verificationIds.has(fact.id));
-    verification.passed = scopedFacts.filter((fact) => fact.ai.status === 'pass').length;
-    verification.rejected = scopedFacts.filter((fact) => fact.ai.status === 'fail').length;
-    verification.errors = scopedFacts.filter((fact) => fact.ai.status === 'error').length;
-    verification.not_run = scopedFacts.filter((fact) => fact.ai.status === 'not-run').length;
-    verification.facts = scopedFacts.map(({ id: factId, ai }) => ({ id: factId, ...ai }));
+    verification.local_verified = scopedFacts.filter((fact) => fact.local_verification.status === 'pass' && fact.local_verification.outcome === 'verified').length;
+    verification.local_disproved = scopedFacts.filter((fact) => fact.local_verification.status === 'pass' && fact.local_verification.outcome === 'disproved').length;
+    verification.local_rejected = scopedFacts.filter((fact) => fact.local_verification.status === 'fail').length;
+    verification.local_errors = scopedFacts.filter((fact) => fact.local_verification.status === 'error').length;
+    verification.local_not_run = scopedFacts.filter((fact) => fact.local_verification.status === 'not-run').length;
+    verification.global_verified = scopedFacts.filter((fact) => fact.global_verification.status === 'verified').length;
+    verification.global_disproved = scopedFacts.filter((fact) => fact.global_verification.status === 'disproved').length;
+    verification.global_blocked = scopedFacts.filter((fact) => fact.global_verification.status === 'blocked').length;
+    verification.global_unverified = scopedFacts.filter((fact) => fact.global_verification.status === 'unverified').length;
+    verification.global_rejected = scopedFacts.filter((fact) => fact.global_verification.status === 'rejected').length;
+    verification.global_invalid = scopedFacts.filter((fact) => fact.global_verification.status === 'invalid').length;
+    verification.facts = scopedFacts.map(({ id: factId, local_verification, global_verification }) => ({
+        id: factId, local_verification, global_verification
+    }));
     const manifest = {
-        schema_version: 3,
+        schema_version: 4,
         snapshot_id: graph.snapshot_id,
         target: id,
         stale,
@@ -730,7 +815,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
             ...file,
             path: relativePosix(directory, path.resolve(root, file.path))
         })),
-        results: workspaceResults.map((result) => ({ ...result, ai: outcomes.get(result.id) })),
+        results: workspaceResults,
         proofs: provisional.manifest.proofs,
         protected_goal_results: mainGoalNodes
     };
@@ -745,7 +830,7 @@ export async function inspectWorkspace(root, requested, options = {}) {
         : provisional.complete !== false);
     if (complete && options.write !== false) {
         const snapshot = {
-            schema_version: 3,
+            schema_version: 4,
             snapshot_id: graph.snapshot_id,
             source_signature: sourceSignature,
             workspace: id,
@@ -760,13 +845,14 @@ export async function inspectWorkspace(root, requested, options = {}) {
             atomicJson(path.join(directory, 'graph.json'), graph)
         ]);
         await atomicJson(path.join(directory, 'latest.json'), {
-            schema_version: 3,
+            schema_version: 4,
             snapshot_id: graph.snapshot_id,
             file: relativePosix(directory, snapshotFile)
         });
     }
     const mechanicalOk = complete && !stale && scopedMechanicalDiagnostics.every((item) => item.severity !== 'error');
-    const aiOk = facts.filter((fact) => verificationIds.has(fact.id)).every((fact) => fact.ai.status === 'pass');
+    const verificationOperational = scopedFacts.every((fact) => fact.local_verification.status !== 'error');
+    const globallyVerified = scopedFacts.every((fact) => fact.global_verification.status === 'verified');
     const statuses = {};
     const kinds = {};
     for (const result of workspaceResults) {
@@ -774,9 +860,9 @@ export async function inspectWorkspace(root, requested, options = {}) {
         kinds[result.kind] = (kinds[result.kind] ?? 0) + 1;
     }
     const inspection = {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'workspace-inspect',
-        ok: mechanicalOk && aiOk,
+        ok: mechanicalOk && verificationOperational,
         complete,
         snapshot_id: graph.snapshot_id,
         snapshot_published: complete && options.write !== false,
@@ -796,7 +882,8 @@ export async function inspectWorkspace(root, requested, options = {}) {
             statuses,
             errors: diagnostics.filter((item) => item.severity === 'error').length,
             mechanical_ok: mechanicalOk,
-            ai_ok: aiOk
+            verification_operational: verificationOperational,
+            globally_verified: globallyVerified
         },
         verification,
         facts,

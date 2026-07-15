@@ -67,7 +67,7 @@ export function deriveGraphFindings(snapshot, options = {}) {
     const unusedExports = (manifest.results ?? []).filter((result) => result.export && !importedExports.has(result.id) && selection.result(result))
         .sort((left, right) => left.id.localeCompare(right.id))
         .map((result) => ({ id: result.id, export: result.export, file: result.file, line: result.line }));
-    const mathematicalNodes = graph.nodes.filter((node) => node.origin !== undefined && ['canonical', 'main-goal', 'workspace'].includes(node.origin));
+    const mathematicalNodes = graph.nodes.filter((node) => node.origin !== undefined && ['main-goal', 'workspace'].includes(node.origin));
     const isolatedFacts = mathematicalNodes.filter((node) => selection.node(node) && (outgoing.get(node.id)?.length ?? 0) === 0 && (incoming.get(node.id)?.length ?? 0) === 0)
         .sort((left, right) => left.id.localeCompare(right.id));
     const goalRoots = new Set();
@@ -86,14 +86,19 @@ export function deriveGraphFindings(snapshot, options = {}) {
             reachable.add(id);
     const unreachableFacts = goalRoots.size === 0 ? [] : mathematicalNodes.filter((node) => selection.node(node) && !reachable.has(node.id))
         .sort((left, right) => left.id.localeCompare(right.id));
-    const errorIds = new Set(diagnostics.filter((item) => item.severity === 'error' && item.id).map((item) => item.id));
-    const errorFiles = new Set(diagnostics.filter((item) => item.severity === 'error' && !item.id && item.file).map((item) => item.file));
-    const candidateStatuses = new Set(['candidate', 'workspace-candidate']);
+    const localNonblockingCodes = new Set([
+        'DEPENDENCY_UNAVAILABLE', 'WORKSPACE_DEPENDENCY_UNAVAILABLE', 'DEPENDENCY_CYCLE', 'IMPORT_CYCLE'
+    ]);
+    const localBlockingErrorIds = new Set(diagnostics.filter((item) => (item.severity === 'error' && item.id && !localNonblockingCodes.has(item.code))).map((item) => item.id));
+    const localBlockingErrorFiles = new Set(diagnostics.filter((item) => (item.severity === 'error' && !item.id && item.file && !localNonblockingCodes.has(item.code))).map((item) => item.file));
     const candidateReadyForAi = mathematicalNodes.filter((node) => {
-        if (!selection.node(node) || !candidateStatuses.has(node.status) || errorIds.has(node.id) || (node.file !== undefined && errorFiles.has(node.file)))
+        if (!selection.node(node) || node.local_verification?.status !== 'not-run')
             return false;
-        return graph.edges.filter((edge) => edge.from === node.id).every((edge) => (edge.checks?.existence === 'pass' && edge.checks.scope === 'pass'
-            && edge.checks.status === 'pass' && edge.checks.cycle === 'pass'));
+        if (localBlockingErrorIds.has(node.id) || (node.file && localBlockingErrorFiles.has(node.file)))
+            return false;
+        if (/proof|open|rejected|invalid|unavailable|stale/i.test(node.local_verification.reason ?? ''))
+            return false;
+        return graph.edges.filter((edge) => edge.from === node.id).every((edge) => edge.checks?.existence === 'pass');
     }).sort((left, right) => left.id.localeCompare(right.id));
     const invalidRoots = staleFactIds({ manifest, diagnostics });
     const invalidEvidenceDependents = mathematicalNodes.filter((node) => selection.node(node) && [...invalidRoots].some((root) => traverse(graph, root, true).has(node.id)))
@@ -106,7 +111,7 @@ export function deriveGraphFindings(snapshot, options = {}) {
         const direct = new Set(incoming.get(node.id) ?? []);
         const transitive = traverse(graph, node.id, true);
         transitive.delete(node.id);
-        const verified = [...transitive].filter((id) => nodes.get(id)?.status === 'verified').length;
+        const verified = [...transitive].filter((id) => nodes.get(id)?.global_verification?.status === 'verified').length;
         return { fact: node, direct_dependents: direct.size, transitive_dependents: transitive.size, verified_dependents: verified };
     }).filter((item) => item.transitive_dependents > 0)
         .sort((left, right) => right.transitive_dependents - left.transitive_dependents
@@ -116,7 +121,7 @@ export function deriveGraphFindings(snapshot, options = {}) {
         definitions: {
             isolated: 'A protected main goal or workspace fact with no incoming or outgoing semantic dependency edge.',
             unreachable: 'A protected main goal or workspace fact outside the dependency closure of every protected main goal (or the selected workspace target).',
-            candidate_ready_for_ai: 'A candidate with no fact-level programmatic error and with every direct edge passing existence, scope, status, and cycle checks.',
+            candidate_ready_for_ai: 'A proof or refutation candidate whose direct dependency statements can be materialized for a local conditional AI check. Upstream verification state, scope, and cycles do not gate the local check.',
             heavily_reused: 'A fact ranked by the number of distinct transitive reverse dependencies, then direct reverse dependencies.'
         },
         unused_imports: unusedImports.sort((left, right) => `${left.file}\0${left.id}`.localeCompare(`${right.file}\0${right.id}`)),

@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { findCycles } from '../semantic/compiler.js';
 import { atomicJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
-import { workspaceStatus } from '../workspace/support.js';
 function uniqueDiagnostics(items) {
     const seen = new Set();
     return items.filter((item) => {
@@ -20,7 +19,9 @@ function compiledWorkspaceResults(index, workspace) {
         ...result,
         origin: 'workspace',
         workspace: workspace.id,
-        status: workspaceStatus(result)
+        status: 'workspace-unverified',
+        local_verification: { status: 'not-run', reason: 'Workspace has not been locally verified in the current aggregate inspection.' },
+        global_verification: { status: 'unverified', blockers: [], reason: 'local-verification-not-run' }
     }));
     const localIds = new Set(results.map((result) => result.id));
     const goal = index.goals.find((result) => result.id === workspace.id);
@@ -41,7 +42,9 @@ function compiledWorkspaceResults(index, workspace) {
             dependencies: [...new Set(proof?.dependencies ?? [])].sort(),
             uses: [...new Set(proof?.dependencies ?? [])].sort(),
             marker: proof?.marker ?? null,
-            status: workspaceStatus({ ...goal, proof_present: proof?.proof_present ?? false }, proof?.marker)
+            status: 'workspace-unverified',
+            local_verification: { status: 'not-run', reason: 'Workspace has not been locally verified in the current aggregate inspection.' },
+            global_verification: { status: 'unverified', blockers: [], reason: 'local-verification-not-run' }
         });
     }
     return results.sort((left, right) => left.id.localeCompare(right.id));
@@ -50,7 +53,7 @@ function compiledWorkspaceManifest(index, workspace) {
     const compilation = workspace.compilation;
     const results = compiledWorkspaceResults(index, workspace);
     return {
-        schema_version: 3,
+        schema_version: 4,
         target: workspace.id,
         stale: workspace.stale,
         files: compilation?.manifest.files ?? [],
@@ -110,8 +113,12 @@ export function buildAggregateSnapshot(index, inspected = new Map()) {
             edges.push({
                 from: result.id,
                 to: dependency,
-                checks: result.reference_checks?.find((check) => check.dependency === dependency)
-                    ?? { existence: resultById.has(dependency) ? 'pass' : 'fail', scope: resultById.has(dependency) ? 'pass' : 'fail', status: resultById.get(dependency)?.status === 'workspace-verified' ? 'pass' : 'fail', cycle: 'pass', ai_sufficiency: 'not-run' }
+                checks: (() => {
+                    const check = result.reference_checks?.find((item) => item.dependency === dependency);
+                    return check
+                        ? { existence: check.existence, scope: check.scope, cycle: check.cycle }
+                        : { existence: resultById.has(dependency) ? 'pass' : 'fail', scope: resultById.has(dependency) ? 'pass' : 'fail', cycle: 'pass' };
+                })()
             });
         }
     }
@@ -129,7 +136,10 @@ export function buildAggregateSnapshot(index, inspected = new Map()) {
             origin: result.origin === 'workspace' ? 'workspace' : 'main-goal',
             ownership: result.origin,
             ...(result.workspace ? { workspace: result.workspace } : {}),
-            identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash }
+            identity: { statement_hash: result.statement_hash, proof_hash: result.proof_hash },
+            local_verification: result.local_verification ?? { status: 'not-run', reason: 'No local verification result is available.' },
+            global_verification: result.global_verification ?? { status: 'unverified', blockers: [], reason: 'local-verification-not-run' },
+            ...(result.disproof ? { disproof: result.disproof } : {})
         })),
         ...unresolved.map((id) => ({ id, title: '', kind: 'unknown', status: 'missing', origin: 'unresolved' }))
     ];
@@ -138,14 +148,14 @@ export function buildAggregateSnapshot(index, inspected = new Map()) {
         if (known.has(edge.to))
             adjacency.get(edge.from)?.push(edge.to);
     const cycles = findCycles(adjacency);
-    const graph = { schema_version: 3, nodes, edges, cycles };
+    const graph = { schema_version: 4, nodes, edges, cycles };
     graph.snapshot_id = sha256(stableJson({ graph, context_hash: index.contextHash }, 0));
     const files = [
         ...index.goalsCompilation.manifest.files,
         ...[...workspaceManifests.values()].flatMap((manifest) => manifest.files)
     ];
     const manifest = {
-        schema_version: 3,
+        schema_version: 4,
         snapshot_id: graph.snapshot_id,
         files,
         results,
@@ -157,7 +167,7 @@ export function buildAggregateSnapshot(index, inspected = new Map()) {
         ...[...inspected.values()].flatMap((result) => result.diagnostics)
     ]);
     return {
-        schema_version: 3,
+        schema_version: 4,
         snapshot_id: graph.snapshot_id,
         context_hash: index.contextHash,
         source_signature: projectSourceSignature(index),
@@ -219,7 +229,7 @@ export async function publishAggregateSnapshot(index, snapshot, options = {}) {
         atomicJson(path.join(index.root, '.qmd-prover', 'diagnostics.json'), snapshot.diagnostics)
     ]);
     await atomicJson(path.join(graphsRoot, 'latest.json'), {
-        schema_version: 3,
+        schema_version: 4,
         snapshot_id: snapshot.snapshot_id,
         file: relativePosix(index.root, snapshotFile)
     });

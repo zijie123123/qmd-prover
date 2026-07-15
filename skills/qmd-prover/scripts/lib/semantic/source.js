@@ -129,6 +129,8 @@ export function setProofMarker(source, target, marker = null) {
 export function setDefinitionMarker(source, target, marker = null) {
     if (marker != null && !CONTROL_MARKER_SET.has(marker))
         throw new Error(`Invalid definition marker: ${marker}`);
+    if (marker === 'DISPROVED')
+        throw new Error('DISPROVED applies only to theorem-like linked proofs, not definitions');
     const id = target.replace(/^@/, '');
     const div = locateDiv(source, id);
     if (!div || !div.attrs.classes.includes('definition'))

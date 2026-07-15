@@ -3,8 +3,8 @@ import path from 'node:path';
 import { buildProjectInspectionIndex } from '../inspection/index.js';
 import { externalPolicyHash, readExternalPolicy } from '../infrastructure/external.js';
 import { AUX, readJson, stableJson } from '../infrastructure/files.js';
-import { hasErrorCode } from '../shared/core.js';
-import { checkerContract } from './protocol.js';
+import { hasErrorCode, isRecord } from '../shared/core.js';
+import { checkerContract, verificationOutcome } from './protocol.js';
 async function jsonFiles(directory) {
     try {
         return (await readdir(directory, { withFileTypes: true }))
@@ -49,6 +49,14 @@ export async function checkStaleness(root = process.cwd(), options = {}) {
                 reasons.add('workspace-cache-invalid');
                 continue;
             }
+            if (!isRecord(record.report) || !isRecord(record.packet) || !isRecord(record.packet.target)) {
+                reasons.add('workspace-cache-invalid');
+            }
+            else {
+                const outcome = verificationOutcome(record.report, record.packet);
+                if (record.outcome !== outcome || record.accepted !== (outcome !== 'rejected'))
+                    reasons.add('workspace-cache-invalid');
+            }
             if (record.external_basis_hash !== externalHash)
                 reasons.add('external-basis-changed');
             if (stableJson(record.checker_contract ?? {}, 0) !== stableJson(contract, 0))
@@ -62,6 +70,13 @@ export async function checkStaleness(root = process.cwd(), options = {}) {
                 const proof = proofs.length === 1 ? proofs[0] : null;
                 if (!goal || record.statement_hash !== goal.statement_hash || record.proof_hash !== proof?.proof_hash)
                     reasons.add('workspace-source-changed');
+            }
+            const dependencySnapshot = isRecord(record.dependency_snapshot) ? record.dependency_snapshot : {};
+            for (const [dependencyId, saved] of Object.entries(dependencySnapshot)) {
+                const current = workspace.compilation?.manifest.results.find((result) => result.id === dependencyId);
+                const identity = isRecord(saved) && isRecord(saved.identity) ? saved.identity : {};
+                if (!current || identity.statement_hash !== current.statement_hash)
+                    reasons.add('workspace-local-context-changed');
             }
         }
         if (reasons.size)
@@ -81,7 +96,7 @@ export async function checkStaleness(root = process.cwd(), options = {}) {
         });
     changed.sort((left, right) => left.id.localeCompare(right.id));
     return {
-        schema_version: 3,
+        schema_version: 4,
         operation: 'check-staleness',
         ok: !index.fatal && index.goalsCompilation.complete && index.workspaces.every((workspace) => workspace.compilation?.complete !== false),
         changed,

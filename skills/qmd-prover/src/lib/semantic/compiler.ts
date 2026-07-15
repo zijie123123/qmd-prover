@@ -1,11 +1,9 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { externalPolicyHash, readExternalPolicy } from '../infrastructure/external.js';
 import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
 import { loadConfig } from '../infrastructure/config.js';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
-import { accepted, checkerContract } from '../verification/protocol.js';
 import {
   KIND_BY_PREFIX, RESULT_KINDS, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN, isControlMarker
 } from '../shared/core.js';
@@ -154,80 +152,6 @@ function resolveImport(importer: string, imported: string): string | null {
 }
 
 
-function verificationStatus(result: SemanticResult, verification: Record<string, UnknownRecord>, evidence: Map<string, VerificationEvidence>): SemanticResult['status'] {
-  const record = verification[result.id];
-  const marker = result.marker_valid ? result.marker : null;
-  const identityMatches = record?.statement_hash === result.statement_hash
-    && record?.title_hash === result.title_hash
-    && record?.kind === result.kind
-    && record.proof_hash === result.proof_hash;
-  if (record?.status === 'stale') return 'stale';
-  if (marker === 'REVOKED' && record?.status === 'revoked' && identityMatches && typeof record.reason === 'string' && record.reason.trim()) return 'revoked';
-  if (marker === 'VERIFIED' && record?.status === 'verified' && identityMatches && evidence.get(result.id)?.valid) return 'verified';
-  if (record?.status === 'rejected'
-    && record.statement_hash === result.statement_hash
-    && record.title_hash === result.title_hash
-    && record.kind === result.kind
-    && record.rejected_proof_hash === result.proof_hash
-    && evidence.get(result.id)?.valid) return 'rejected';
-  if (marker === 'OPEN' || (!result.proof_present && result.kind !== 'definition')) return 'open';
-  return 'candidate';
-}
-
-interface VerificationEvidence { valid: boolean; record: UnknownRecord | null; cache: UnknownRecord | null }
-
-async function verificationEvidence(root: string, verification: Record<string, UnknownRecord>): Promise<Map<string, VerificationEvidence>> {
-  const evidence = new Map<string, VerificationEvidence>();
-  const verificationRoot = path.join(root, AUX, 'verification');
-  function evidencePath(relative: unknown): string | null {
-    if (typeof relative !== 'string') return null;
-    const absolute = path.resolve(root, relative);
-    return absolute.startsWith(`${verificationRoot}${path.sep}`) ? absolute : null;
-  }
-  await Promise.all(Object.entries(verification).map(async ([id, entry]) => {
-    if (typeof entry.status !== 'string' || !['verified', 'rejected'].includes(entry.status)) return;
-    let record: UnknownRecord | null = null;
-    let cache: UnknownRecord | null = null;
-    const recordFile = evidencePath(entry.record);
-    const cacheFile = evidencePath(entry.cache);
-    try { if (recordFile) record = await readJson<UnknownRecord>(recordFile); } catch { /* Invalid evidence fails closed below. */ }
-    try { if (cacheFile) cache = await readJson<UnknownRecord>(cacheFile); } catch { /* Invalid evidence fails closed below. */ }
-    if (!record) {
-      evidence.set(id, { valid: false, record: null, cache });
-      return;
-    }
-    const sharedValid = record.submission_id === entry.submission_id
-      && record.target === id
-      && record.statement_hash === entry.statement_hash
-      && record.title_hash === entry.title_hash
-      && record.kind === entry.kind
-      && record.verification_key === entry.verification_key
-      && record.external_basis_hash === entry.external_basis_hash
-      && stableJson(record.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
-      && stableJson(record.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
-      && isRecord(record.report)
-      && record.accepted === accepted(record.report);
-    const valid = Boolean(entry.status === 'verified'
-      ? sharedValid
-        && record.accepted === true
-        && record.proof_hash === entry.proof_hash
-        && cache?.id === id
-        && cache.statement_hash === entry.statement_hash
-        && cache.title_hash === entry.title_hash
-        && cache.kind === entry.kind
-        && cache.proof_hash === entry.proof_hash
-        && stableJson(cache.dependency_snapshot ?? {}, 0) === stableJson(entry.dependency_snapshot ?? {}, 0)
-        && cache.external_basis_hash === entry.external_basis_hash
-        && cache.verification_key === entry.verification_key
-        && stableJson(cache.checker_contract ?? {}, 0) === stableJson(entry.checker_contract ?? {}, 0)
-      : sharedValid
-        && record.accepted === false
-        && record.proof_hash === entry.rejected_proof_hash);
-    evidence.set(id, { valid, record, cache });
-  }));
-  return evidence;
-}
-
 async function initializeAux(root: string): Promise<void> {
   const directories = ['workspaces', 'proposals', 'verification', 'accepted', 'rejected', 'reports', 'graphs', 'generated', 'cache'];
   await Promise.all(directories.map((directory) => mkdir(path.join(root, AUX, directory), { recursive: true })));
@@ -251,7 +175,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   const files: SourceFileRecord[] = [];
   const allResults: SemanticResult[] = [];
   const allProofs: ParsedProof[] = [];
-  const semanticMode = options.semanticMode ?? 'full';
+  const semanticMode = options.semanticMode ?? 'workspace';
 
   for (const file of discovered) {
     try {
@@ -349,6 +273,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         if (kind === 'definition') {
           if (content.markers.length > 1) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_MULTIPLE', `${id} has more than one reserved control marker`, file.relative, line, id));
           if (content.markers.some((marker) => marker.index !== content.marker_index)) diagnostics.push(diagnostic('error', 'DEFINITION_MARKER_POSITION', `${id} must put its reserved marker in the last nonempty paragraph of the definition block`, file.relative, line, id));
+          if (content.marker === 'DISPROVED') diagnostics.push(diagnostic('error', 'DEFINITION_DISPROVED_FORBIDDEN', `${id} is a definition and cannot be marked DISPROVED; state a theorem-like well-definedness claim and refute that claim instead`, file.relative, line, id));
         } else if (content.markers.length > 0) diagnostics.push(diagnostic('error', 'RESULT_MARKER_LOCATION', `${id} must put its reserved marker in the first nonempty paragraph of its linked proof`, file.relative, line, id));
         const legacyHeaders = content.blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(asArray(block.c)[2]).toLowerCase()));
         if (legacyHeaders.length) diagnostics.push(diagnostic('error', 'LEGACY_RESULT_SECTIONS', `${id} must use a result body and a separate linked .proof block, not Statement/Uses/Proof headings`, file.relative, line, id));
@@ -435,7 +360,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         const count = idCounts.get(dependency) ?? 0;
         const existsCheck = count === 1 ? 'pass' : 'fail';
         const scopeCheck = count === 1 && available.has(dependency) ? 'pass' : 'fail';
-        result.reference_checks.push({ dependency, existence: existsCheck, scope: scopeCheck, status: 'pending', ai_sufficiency: 'not-run' });
+        result.reference_checks.push({ dependency, existence: existsCheck, scope: scopeCheck });
         if (count === 0) diagnostics.push(diagnostic('error', 'DEPENDENCY_UNKNOWN', `@${dependency} cited by @${result.id} does not exist`, result.file, result.proof_line ?? result.line, result.id));
         else if (count > 1) diagnostics.push(diagnostic('error', 'DEPENDENCY_AMBIGUOUS', `@${dependency} cited by @${result.id} is ambiguous`, result.file, result.proof_line ?? result.line, result.id));
         else if (!available.has(dependency)) diagnostics.push(diagnostic('error', 'DEPENDENCY_UNAVAILABLE', `@${dependency} cited by @${result.id} is not local or explicitly imported`, result.file, result.proof_line ?? result.line, result.id));
@@ -467,12 +392,6 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
     }
   }
 
-  const verification = semanticMode !== 'full'
-    ? {}
-    : await readJson<Record<string, UnknownRecord>>(path.join(root, AUX, 'verification', 'index.json'), {});
-  const evidence = semanticMode !== 'full' ? new Map<string, VerificationEvidence>() : await verificationEvidence(root, verification);
-  const currentExternalBasisHash = externalPolicyHash(await readExternalPolicy(root));
-  const currentCheckerContract = checkerContract(config);
   for (const result of allResults) {
     if (semanticMode === 'project-goals') {
       result.status = 'open';
@@ -481,85 +400,39 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         `${result.id} contains the legacy ${result.marker} marker; workspace inspection ignores it and never rewrites user notes`,
         result.file, result.proof_line ?? result.line, result.id
       ));
-    } else result.status = verificationStatus(result, verification, evidence);
-  }
-  const compiledFiles = new Map(files.map((file) => [file.path, file]));
-  let statusChanged = true;
-  while (semanticMode === 'full' && statusChanged) {
-    statusChanged = false;
-    for (const result of allResults.filter((item) => ['verified', 'rejected'].includes(item.status))) {
-      const entry = verification[result.id] ?? {};
-      const cache = evidence.get(result.id)?.cache;
-      const dependencySnapshot = asRecord(entry.dependency_snapshot);
-      const dependencyChanged = stableJson(Object.keys(dependencySnapshot).sort(), 0) !== stableJson(result.dependencies, 0)
-        || Object.entries(dependencySnapshot).some(([id, identity]) => {
-        const dependency = byId.get(id);
-        return !dependency || sha256(`${dependency.statement_hash}:${dependency.proof_hash}:${dependency.status}`) !== identity;
-      });
-      const scope = result.status === 'verified' ? cache?.scope : entry.scope;
-      const sourceFile = result.status === 'verified' ? asRecord(cache?.source).file : entry.source_file;
-      const contract = result.status === 'verified' ? cache?.checker_contract : entry.checker_contract;
-      const scopeChanged = stableJson(scope ?? [], 0) !== stableJson(compiledFiles.get(result.file)?.imports ?? [], 0);
-      const sourceChanged = sourceFile !== result.file;
-      const checkerChanged = stableJson(contract ?? {}, 0) !== stableJson(currentCheckerContract, 0);
-      const externalBasisChanged = entry.external_basis_hash !== currentExternalBasisHash;
-      if (dependencyChanged || scopeChanged || sourceChanged || checkerChanged || externalBasisChanged) {
-        const previousStatus = result.status;
-        result.status = 'candidate';
-        const reasons = [
-          ...(dependencyChanged ? ['dependency-snapshot-changed'] : []),
-          ...(scopeChanged ? ['scope-changed'] : []),
-          ...(sourceChanged ? ['source-association-changed'] : []),
-          ...(checkerChanged ? ['checker-contract-changed'] : []),
-          ...(externalBasisChanged ? ['external-basis-changed'] : [])
-        ];
-        if (previousStatus === 'verified') result.stale_reasons = reasons;
-        else result.rejection_stale_reasons = reasons;
-        statusChanged = true;
-      }
     }
   }
   for (const result of allResults) {
-    const record = verification[result.id];
-    if (semanticMode !== 'project-goals') {
-      if (result.marker === 'VERIFIED' && result.status !== 'verified') diagnostics.push(diagnostic('error', 'VERIFIED_RECORD_INVALID', `${result.id} has VERIFIED without a matching current record`, result.file, result.proof_line ?? result.line, result.id));
-      if (result.marker === 'REJECTED' && result.status !== 'rejected') diagnostics.push(diagnostic('error', 'REJECTED_RECORD_INVALID', `${result.id} has REJECTED without a matching current failed-check record`, result.file, result.proof_line ?? result.line, result.id));
-      if (result.marker === 'REVOKED' && result.status !== 'revoked') diagnostics.push(diagnostic('error', 'REVOKED_RECORD_INVALID', `${result.id} has REVOKED without a matching revocation record and reason`, result.file, result.proof_line ?? result.line, result.id));
-      if (record?.status === 'verified' && result.marker !== 'VERIFIED') diagnostics.push(diagnostic('error', 'VERIFIED_MARKER_MISSING', `${result.id} has a verification record but no matching VERIFIED marker`, result.file, result.proof_line ?? result.line, result.id));
-    }
     for (const check of result.reference_checks ?? []) {
-      const premise = idCounts.get(check.dependency) === 1 ? byId.get(check.dependency) : null;
-      check.status = semanticMode === 'project-goals' || premise?.status === 'verified' ? 'pass' : 'fail';
       check.cycle = cycleEdges.has(`${result.id}\0${check.dependency}`) ? 'fail' : 'pass';
-      check.ai_sufficiency = result.status === 'verified' ? 'pass' : 'not-run';
-      if (semanticMode !== 'project-goals' && check.existence === 'pass' && check.scope === 'pass' && check.cycle === 'pass' && check.status === 'fail') {
-        diagnostics.push(diagnostic('error', 'DEPENDENCY_STATUS_INSUFFICIENT', `${result.id} cites @${check.dependency}, whose current status is ${premise?.status ?? 'missing'}`, result.file, result.proof_line ?? result.line, result.id));
-      }
-    }
-    if (semanticMode !== 'project-goals' && result.status === 'verified') {
-      for (const dependency of result.dependencies) {
-        if (byId.get(dependency)?.status !== 'verified') diagnostics.push(diagnostic('error', 'VERIFIED_DEPENDENCY_INVALID', `${result.id} depends on unverified @${dependency}`, result.file, result.proof_line ?? result.line, result.id));
-      }
     }
   }
 
   allResults.sort((a, b) => a.id.localeCompare(b.id));
   files.sort((a, b) => a.path.localeCompare(b.path));
   diagnostics.sort((a, b) => `${a.file ?? ''}:${a.line ?? 0}:${a.code}`.localeCompare(`${b.file ?? ''}:${b.line ?? 0}:${b.code}`));
-  const manifest: Manifest = { schema_version: 2, files, results: allResults, proofs: allProofs.map(({ blocks, markers, marker_index, ...proof }) => proof) };
+  const manifest: Manifest = { schema_version: 4, files, results: allResults, proofs: allProofs.map(({ blocks, markers, marker_index, ...proof }) => proof) };
   const missingIds = uniqueSorted(allResults.flatMap((result) => result.dependencies).filter((id) => !byId.has(id)));
   const graph: DependencyGraph = {
-    schema_version: 2,
+    schema_version: 4,
     nodes: [
       ...allResults.map(({ id, title, kind, status, file, line, origin, statement_hash, proof_hash }) => ({
-        id, title, kind, status, file, line, origin: 'canonical', ownership: origin,
+        id, title, kind, status, file, line,
+        origin: semanticMode === 'project-goals' ? 'main-goal' : 'workspace',
+        ownership: origin,
         identity: { statement_hash, proof_hash }
       })),
       ...missingIds.map((id) => ({ id, title: '', kind: 'unknown' as const, status: 'missing', origin: 'unresolved' }))
     ],
     edges: allResults.flatMap((result) => result.dependencies.map((dependency) => {
       const check = result.reference_checks?.find((item) => item.dependency === dependency);
-      return { from: result.id, to: dependency, checks: check ?? { existence: 'fail', scope: 'fail', status: 'fail', cycle: 'pass', ai_sufficiency: 'not-run' } };
+      return {
+        from: result.id,
+        to: dependency,
+        checks: check
+          ? { existence: check.existence, scope: check.scope, cycle: check.cycle }
+          : { existence: 'fail' as const, scope: 'fail' as const, cycle: 'pass' as const }
+      };
     })).sort((a, b) => `${a.from}:${a.to}`.localeCompare(`${b.from}:${b.to}`)),
     cycles: dependencyCycles
   };
@@ -577,7 +450,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
   if (options.write !== false) {
     await atomicJson(path.join(root, AUX, 'diagnostics.json'), diagnostics);
     if (complete) {
-      const snapshot = { schema_version: 2, snapshot_id: graph.snapshot_id, manifest, graph, summary, diagnostics };
+      const snapshot = { schema_version: 4, snapshot_id: graph.snapshot_id, manifest, graph, summary, diagnostics };
       const snapshotFile = path.join(root, AUX, 'graphs', `${graph.snapshot_id.slice('sha256:'.length)}.json`);
       await Promise.all([
         atomicJson(snapshotFile, snapshot),
@@ -586,7 +459,7 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
         ...(protectStatements && ok ? [atomicJson(locksFile, locks)] : [])
       ]);
       await atomicJson(path.join(root, AUX, 'graphs', 'latest.json'), {
-        schema_version: 2,
+        schema_version: 4,
         snapshot_id: graph.snapshot_id,
         file: relativePosix(root, snapshotFile)
       });

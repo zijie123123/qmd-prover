@@ -20,15 +20,14 @@ test('compiler reads metadata imports, linked proofs, and deterministic semantic
   const firstManifest = await readFile(path.join(root, '.qmd-prover', 'manifest.json'), 'utf8');
   const second = await compileProject(root, options);
   const secondManifest = await readFile(path.join(root, '.qmd-prover', 'manifest.json'), 'utf8');
-  assert.equal(first.ok, false);
+  assert.equal(first.ok, true);
   assert.equal(first.complete, true);
-  assert.equal(second.ok, false);
+  assert.equal(second.ok, true);
   assert.equal(firstManifest, secondManifest);
   assert.deepEqual(must(first.summary.goals).map((goal) => goal.id), ['thm-main-goal']);
   assert.deepEqual(first.graph.edges.map(({ from, to }) => ({ from, to })), [{ from: 'thm-main-goal', to: 'lem-base' }]);
   assert.deepEqual(must(first.manifest.results.find((item) => item.id === 'thm-main-goal')).dependencies, ['lem-base']);
-  assert.ok(first.diagnostics.some((item) => item.code === 'DEPENDENCY_STATUS_INSUFFICIENT' && item.severity === 'error'));
-  assert.equal(must(first.graph.edges[0]?.checks).status, 'fail');
+  assert.deepEqual(must(first.graph.edges[0]?.checks), { existence: 'pass', scope: 'pass', cycle: 'pass' });
   assert.equal(must(theoremBundle(first, '@thm-main-goal').dependencies[0]).id, 'lem-base');
 });
 
@@ -93,11 +92,14 @@ test('compiler enforces introduction dates and record-backed marker placement', 
   const missingDate = result('lem-date-missing', 'Missing date.').replace(' date="2026-07-13"', '');
   const invalidDate = result('lem-date-invalid', 'Invalid date.').replace('2026-07-13', '2026-02-30');
   const misplacedDefinition = result('def-marker-position', 'VERIFIED\n\nA construction.');
+  const disprovedDefinition = result('def-disproved', 'A construction.\n\nDISPROVED');
+  const misplacedDisproof = result('lem-disproof-position', 'A claim.', { proofText: 'An argument.\n\nDISPROVED' });
   const unsupportedRejected = result('lem-rejected-marker', 'A claim.', { proofText: 'REJECTED\n\nA failed proof.' });
-  await writeFile(path.join(root, 'shape-details.qmd'), [missingDate, invalidDate, misplacedDefinition, unsupportedRejected].join('\n'));
+  await writeFile(path.join(root, 'shape-details.qmd'), [missingDate, invalidDate, misplacedDefinition, disprovedDefinition, misplacedDisproof, unsupportedRejected].join('\n'));
   const compilation = await compileProject(root, options);
   const codes = new Set(compilation.diagnostics.map((item) => item.code));
-  for (const code of ['RESULT_DATE_MISSING', 'RESULT_DATE_INVALID', 'DEFINITION_MARKER_POSITION', 'REJECTED_RECORD_INVALID']) assert.ok(codes.has(code), code);
+  for (const code of ['RESULT_DATE_MISSING', 'RESULT_DATE_INVALID', 'DEFINITION_MARKER_POSITION', 'DEFINITION_DISPROVED_FORBIDDEN', 'PROOF_MARKER_POSITION']) assert.ok(codes.has(code), code);
+  assert.equal(codes.has('REJECTED_RECORD_INVALID'), false);
   assert.equal(must(compilation.manifest.results.find((item) => item.id === 'def-marker-position')).status, 'candidate');
   assert.equal(must(compilation.manifest.results.find((item) => item.id === 'lem-rejected-marker')).status, 'candidate');
 });
@@ -154,7 +156,8 @@ test('inspector supports fact, path, search, and lowest-frontier queries on a na
     `${result('lem-frontier-middle', 'The middle claim.', { proofText: 'Use @lem-frontier-base.' })}\n${proof('thm-main-frontier', 'Use @lem-frontier-middle.')}`
   ));
   const projectInspection = await inspectProject(root, options);
-  assert.equal(projectInspection.ok, false);
+  assert.equal(projectInspection.ok, true);
+  assert.equal(projectInspection.verification.available, false);
   assert.equal(projectInspection.snapshot_published, true);
   const factInspection = await inspectFact(root, '@thm-main-frontier', options);
   assert.deepEqual(factInspection.graph.nodes.map((node) => node.id).sort(), ['lem-frontier-base', 'lem-frontier-middle', 'thm-main-frontier']);

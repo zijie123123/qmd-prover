@@ -1,6 +1,6 @@
 # qmd-prover
 
-qmd-prover is a Codex skill and dependency-free Node runtime for disciplined mathematical proof workflows in Quarto Markdown. Canonical mathematics remains readable QMD; goal workspaces, verification reports, and generated Quarto observability inputs stay under `.qmd-prover/`.
+qmd-prover is a Codex skill and dependency-free Node runtime for disciplined mathematical proof workflows in Quarto Markdown. User QMD remains notes and protected main-goal storage; persistent workspace mathematics, independently verified proofs and refutations, dependency graphs, and generated Quarto observability inputs stay under `.qmd-prover/`.
 
 ## Repository layout
 
@@ -22,7 +22,7 @@ The dispatcher is `scripts/qmd-prover.js`.
 
 - Node.js 20 or later
 - Pandoc on `PATH`, or `QMD_PROVER_PANDOC` pointing to a compatible executable
-- An independent verifier configured through `QMD_PROVER_VERIFIER` or `.qmd-prover/config.yml`
+- An optional AI verifier configured through `QMD_PROVER_VERIFIER` or `.qmd-prover/config.yml`; without one, machine dependency inspection still works and AI verification remains `not-run`
 
 ## Install
 

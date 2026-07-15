@@ -11,18 +11,19 @@ import { bareProject, fakePandoc, here, must, options, proof, result, verifier }
 interface CliError extends Error { code?: string | number | null }
 interface CliProcessResult { error: CliError | null; stdout: string; stderr: string }
 interface CliJsonResult {
-  fact: { id: string };
+  fact: { id: string; status?: string; disproof?: { refutation: string } };
+  graph?: { nodes: Array<{ id: string; status: string; disproof?: { refutation: string } }> };
   scope: { type: string; path: string };
   operation: string;
 }
 
 test('project initialization inventories external policy, adopts, preserves, appends, and synchronizes safely', async () => {
   const canonicalSource = await readFile(path.join(here, '..', 'skills', 'qmd-prover', 'references', 'AGENTS.md'), 'utf8');
-  const canonicalBlock = must(canonicalSource.match(/<!-- qmd-prover-contract:start version=14 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0];
+  const canonicalBlock = must(canonicalSource.match(/<!-- qmd-prover-contract:start version=16 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0];
 
   const fresh = await bareProject();
   const created = await initializeProject(fresh);
-  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 14 });
+  assert.deepEqual({ ok: created.ok, status: created.status, version: created.contract_version }, { ok: true, status: 'created', version: 16 });
   assert.equal(must(created.existing).external_policy.mode, 'unrestricted');
   assert.equal(created.workspace_root, '.qmd-prover/workspaces');
   assert.equal((await stat(path.join(fresh, '.qmd-prover', 'workspaces'))).isDirectory(), true);
@@ -76,7 +77,7 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.ok(appended.includes(canonicalBlock));
 
   const stale = await bareProject();
-  const oldBlock = canonicalBlock.replace('version=14', 'version=1');
+  const oldBlock = canonicalBlock.replace('version=16', 'version=1');
   await writeFile(path.join(stale, 'AGENTS.md'), `# Local before\n\n${oldBlock}\n\n## Local after\n`);
   const syncRequired = await initializeProject(stale);
   assert.deepEqual({ ok: syncRequired.ok, status: syncRequired.status, current: syncRequired.current_contract_version }, { ok: false, status: 'sync-required', current: 1 });
@@ -88,7 +89,7 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.doesNotMatch(synchronized, /version=1 -->/);
 
   const malformed = await bareProject();
-  const malformedSource = 'Local policy\n\n<!-- qmd-prover-contract:start version=14 -->\nUnclosed contract\n';
+  const malformedSource = 'Local policy\n\n<!-- qmd-prover-contract:start version=16 -->\nUnclosed contract\n';
   await writeFile(path.join(malformed, 'AGENTS.md'), malformedSource);
   const malformedResult = await initializeProject(malformed);
   assert.equal(malformedResult.status, 'malformed-contract');
@@ -107,7 +108,7 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
     cwd: root
   }, (error, stdout, stderr) => error ? reject(error) : resolve(JSON.parse(stdout))));
   assert.equal(initialized.status, 'created');
-  assert.equal(initialized.contract_version, 14);
+  assert.equal(initialized.contract_version, 16);
   assert.equal(initialized.workspace_root, '.qmd-prover/workspaces');
   const policyRoot = await bareProject();
   await writeFile(path.join(policyRoot, 'AGENTS.md'), '# Existing policy\n');
@@ -156,6 +157,14 @@ test('dispatcher preserves JSON commands and adds workspace operations', async (
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
   }, (error, stdout) => error ? reject(error) : resolve(stdout)));
   assert.match(printed, new RegExp(`snapshot: ${jsonInspection.snapshot_id}`));
+  await writeFile(
+    path.join(root, workspace.workspace, 'main-proof.qmd'),
+    proof('thm-main-cli', 'DISPROVED\n\nThis verifier fixture checks the proposed counterexample.')
+  );
+  const disproved = await runJson(['inspect', 'fact', '@thm-main-cli']);
+  assert.equal(disproved.fact.status, 'workspace-disproved');
+  assert.match(disproved.fact.disproof?.refutation ?? '', /proposed counterexample/);
+  assert.equal(disproved.graph?.nodes.find((node) => node.id === 'thm-main-cli')?.status, 'workspace-disproved');
   await writeFile(path.join(root, 'duplicate.qmd'), result('thm-main-cli', 'Duplicate.'));
   const failed = await new Promise<{ error: CliError | null; stdout: string }>((resolve) => execFile(process.execPath, [cli, 'inspect', 'project'], {
     cwd: root, env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier }
@@ -235,9 +244,9 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(skill, /Stop and ask before creating, appending, or synchronizing project policy/);
   assert.match(skill, /workspace init @thm-main-ID/);
   assert.match(skill, /An `@id` citation is a dependency but does not grant cross-file scope/);
-  assert.match(skill, /workspace-verified/);
+  assert.match(skill, /global status is `verified`/);
   assert.match(skill, /submit proof.*retired/);
-  assert.match(contract, /<!-- qmd-prover-contract:start version=14 -->/);
+  assert.match(contract, /<!-- qmd-prover-contract:start version=16 -->/);
   assert.match(contract, /\.qmd-prover\/\.external\.qmd/);
   assert.match(contract, /An absent file permits external mathematics/);
   assert.match(contract, /a whitespace-only file permits none/);
@@ -254,10 +263,11 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(contract, /ISO `date`/);
   assert.match(contract, /`OPEN`/);
   assert.match(contract, /`REJECTED`/);
+  assert.match(contract, /`DISPROVED`/);
   assert.match(contract, /`REVOKED`/);
-  assert.match(contract, /Independent verification runs in dependency order/);
+  assert.match(contract, /Machine dependency analysis and local AI verification have separate state/);
   assert.match(contract, /narrow fact or path inspection verifies only the selected facts/);
-  assert.match(contract, /workspace-verified/);
+  assert.match(contract, /globally verified exactly when every direct dependency is globally verified/);
   assert.match(contract, /qmd-prover\.js" init/);
   assert.match(contract, /\.qmd-prover\/workspaces\/<thm-main-ID>\//);
   assert.match(contract, /QMD outside `\.qmd-prover\/` is user-owned notes/);
@@ -267,12 +277,14 @@ test('skill requires a once-per-context versioned project contract preflight', a
   assert.match(contract, /check staleness` is read-only/);
   assert.match(contract, /submit proof` and `verification revoke` are retired/);
   assert.match(contract, /Project-specific additions/);
-  const managed = must(contract.match(/<!-- qmd-prover-contract:start version=14 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0];
-  assert.equal(must(examplePolicy.match(/<!-- qmd-prover-contract:start version=14 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0], managed);
+  const managed = must(contract.match(/<!-- qmd-prover-contract:start version=16 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0];
+  assert.equal(must(examplePolicy.match(/<!-- qmd-prover-contract:start version=16 -->[\s\S]*?<!-- qmd-prover-contract:end -->/))[0], managed);
   assert.match(cliReference, /### Diagnostic codes/);
   assert.match(cliReference, /not a QMD class, attribute, status marker/);
   assert.match(cliReference, /`GLOBAL_DUPLICATE_ID`/);
   assert.match(cliReference, /`WORKSPACE_UNINITIALIZED`/);
+  assert.match(cliReference, /workspace-disproved/);
+  assert.match(cliReference, /`disproved`/);
 });
 
 test('maintainer and agent documentation preserves the full design structure', async () => {
@@ -310,7 +322,7 @@ test('maintainer and agent documentation preserves the full design structure', a
     '## Purpose', '## Components', '## System boundary', '## Mathematical project model',
     '### Example: one theorem after prolonged work', '### Workspace dependency model',
     '### Retention instead of canonical promotion', '## Semantic QMD and inspection',
-    '### Complete workspace QMD example', '### Inspection scopes', '### Verification status', '### Dependency analysis and search',
+    '### Complete workspace QMD example', '### Inspection scopes', '### Three inspection layers', '### Dependency analysis and search',
     '### Staleness and transitive invalidation', '## How agents use the infrastructure',
     '## Installation and requirements', '## Starting a mathematical project',
     '## Using qmd-prover through Codex or Claude Code', '## Using the Node utilities directly',
@@ -319,7 +331,7 @@ test('maintainer and agent documentation preserves the full design structure', a
   requireHeadings(files.discipline, [
     '## Role', '## Canonical and local policy', '### Example: project-local policy',
     '## External mathematical basis', '## Rule categories', '### Mechanically enforceable rules',
-    '### Mathematically judged rules', '### Agent conduct rules', '## Semantic scope',
+    '### Locally mathematically judged rules', '### Agent conduct rules', '## Semantic scope',
     '## Recognized block types', '### Definition block', '### Lemma block',
     '### Proposition block', '### Theorem block', '### Corollary block',
     '### Main-goal theorem block', '### Proof block',
@@ -328,8 +340,8 @@ test('maintainer and agent documentation preserves the full design structure', a
   requireHeadings(files.inspector, [
     '## Role', '### Diagnostics versus QMD source',
     '## 1. Inspect a theorem, lemma, or definition', '### Select and parse the fact',
-    '### Check references programmatically', '### Check sufficiency with AI',
-    '### Record the result and workspace state', '### Construct the related dependency graph',
+    '### Build the mechanical graph', '### Check one conditional step with AI',
+    '### Compose global state and record evidence', '### Construct the related dependency graph',
     '## 2. Inspect a file or folder', '### Source discovery', '### Aggregate checks',
     '### Aggregate dependency graph', '## 3. Inspect the project or one workspace',
     '### Workspace discovery', '### Workspace checks', '### Workspace and project dependency graphs',
@@ -342,7 +354,7 @@ test('maintainer and agent documentation preserves the full design structure', a
   requireHeadings(files.proving, [
     '## Role', '## Flexible proof development', '## Mathematical agent workspace',
     '## Preparing a candidate', '### Example candidate', '## Candidate preflight',
-    '### Example preflight failure', '## Independent verification', '### Example verifier packet',
+    '### Example preflight failure', '## Local conditional verification', '### Example verifier packet',
     '## Rejection and repair', '### Example rejection and repair', '## Safe acceptance',
     '### Example stale acceptance', '## Records', '## Invocation model',
     '### Example direct invocation'

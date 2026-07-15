@@ -92,16 +92,15 @@ test('large workspace fixture completes through the public CLI, persists its gra
     assert.deepEqual(findings.unreachable.facts.map((fact) => fact.id), ['lem-semantic-substitution']);
     assert.equal(first.verification.eligible, 32);
     assert.equal(first.verification.verifier_calls, 32);
-    assert.equal(first.verification.passed, 32);
-    assert.equal(first.verification.not_run, 0);
+    assert.equal(first.verification.local_verified, 32);
+    assert.equal(first.verification.local_not_run, 0);
+    assert.equal(first.verification.global_verified, 32);
     assert.ok(first.facts.every((fact) => fact.status === 'workspace-verified'));
     assert.ok(first.graph.edges.every((edge) => edge.checks?.existence === 'pass'
       && edge.checks.scope === 'pass'
-      && edge.checks.status === 'pass'
-      && edge.checks.cycle === 'pass'
-      && edge.checks.ai_sufficiency === 'pass'));
+      && edge.checks.cycle === 'pass'));
     const targetFact = must(first.facts.find((fact) => fact.id === target));
-    assert.match(must(targetFact.ai.report).summary, /\[external:declared:# External mathematical basis/);
+    assert.match(must(targetFact.local_verification.report).summary, /\[external:declared:# External mathematical basis/);
 
     const firstCalls = await verifierCalls(countFile);
     assert.equal(firstCalls.length, 32);
@@ -125,17 +124,17 @@ test('large workspace fixture completes through the public CLI, persists its gra
     assert.equal(second.snapshot_id, first.snapshot_id);
     assert.equal(second.verification.verifier_calls, 0);
     assert.equal(second.verification.cache_hits, 32);
-    assert.equal(second.verification.passed, 32);
+    assert.equal(second.verification.local_verified, 32);
     assert.deepEqual(await verifierCalls(countFile), firstCalls);
 
     await writeFile(path.join(root, '.qmd-prover', '.external.qmd'), '# External mathematical basis\n\nStandard first-order metatheory and dependent choice may be used.\n');
     const changedBasis = await inspectWorkspace(root, `@${target}`, { pandoc: fakePandoc });
     assert.equal(changedBasis.ok, true, JSON.stringify(changedBasis.diagnostics));
     assert.equal(changedBasis.stale, false);
-    assert.equal(changedBasis.snapshot_id, first.snapshot_id);
+    assert.notEqual(changedBasis.snapshot_id, first.snapshot_id);
     assert.equal(changedBasis.verification.verifier_calls, 32);
     assert.equal(changedBasis.verification.cache_hits, 0);
-    assert.match(must(must(changedBasis.facts.find((fact) => fact.id === target)).ai.report).summary, /dependent choice may be used/);
+    assert.match(must(must(changedBasis.facts.find((fact) => fact.id === target)).local_verification.report).summary, /dependent choice may be used/);
     assert.equal((await verifierCalls(countFile)).length, 64);
 
     const cli = await runWorkspaceCli(root);
@@ -167,8 +166,8 @@ test('inspect fact locates a large-workspace fact and verifies only its dependen
     assert.deepEqual((await verifierCalls(countFile)).sort(), inspected.graph.nodes.map((node) => node.id).sort());
     const latest = await readJson<{ schema_version: number; file: string }>(path.join(root, '.qmd-prover', 'graphs', 'latest.json'));
     const aggregate = await readJson<{ schema_version: number; goals: unknown[]; notes: unknown[]; workspaces: unknown[]; graph: { nodes: unknown[] } }>(path.join(root, latest.file));
-    assert.equal(latest.schema_version, 3);
-    assert.equal(aggregate.schema_version, 3);
+    assert.equal(latest.schema_version, 4);
+    assert.equal(aggregate.schema_version, 4);
     assert.equal(aggregate.goals.length, 1);
     assert.equal(aggregate.notes.length, 1);
     assert.equal(aggregate.workspaces.length, 1);
@@ -189,14 +188,15 @@ test('inspect fact uses the main-goal workspace overlay without changing user no
     assert.equal(inspected.ok, true, JSON.stringify(inspected.diagnostics));
     assert.equal(inspected.fact.id, target);
     assert.equal(inspected.fact.status, 'workspace-verified');
-    assert.equal(inspected.check.ai.status, 'pass');
+    assert.equal(inspected.check.local_verification.status, 'pass');
+    assert.equal(inspected.check.global_verification.status, 'verified');
     assert.deepEqual(await readFile(userFile), before);
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
   }
 });
 
-test('large workspace rechecks exactly the reverse dependency closure after one leaf proof changes', async () => {
+test('large workspace rechecks only the changed local proof when dependency statements stay fixed', async () => {
   const { root, workspace } = await materializeLargeProject();
   const countFile = path.join(root, 'large-incremental-verifier-calls.txt');
   process.env.QMD_PROVER_VERIFIER = verifier;
@@ -226,9 +226,9 @@ test('large workspace rechecks exactly the reverse dependency closure after one 
     const changed = await inspectWorkspace(root, `@${target}`, { pandoc: fakePandoc });
     assert.equal(changed.ok, true, JSON.stringify(changed.diagnostics));
     assert.notEqual(changed.snapshot_id, first.snapshot_id);
-    assert.equal(changed.verification.verifier_calls, affected.length);
-    assert.equal(changed.verification.cache_hits, 32 - affected.length);
-    assert.deepEqual((await verifierCalls(countFile)).slice(32).sort(), affected);
+    assert.equal(changed.verification.verifier_calls, 1);
+    assert.equal(changed.verification.cache_hits, 31);
+    assert.deepEqual((await verifierCalls(countFile)).slice(32), [changedId]);
 
     const stable = await inspectWorkspace(root, `@${target}`, { pandoc: fakePandoc });
     assert.equal(stable.snapshot_id, changed.snapshot_id);
@@ -240,7 +240,7 @@ test('large workspace rechecks exactly the reverse dependency closure after one 
   }
 });
 
-test('large workspace blocks the full reverse dependency closure after a leaf proof is rejected', async () => {
+test('large workspace locally checks every fact and globally blocks the reverse closure after a leaf proof is rejected', async () => {
   const { root, workspace } = await materializeLargeProject();
   const foundations = path.join(workspace, 'foundations.qmd');
   const source = await readFile(foundations, 'utf8');
@@ -255,16 +255,20 @@ test('large workspace blocks the full reverse dependency closure after a leaf pr
     const rejectedId = 'lem-substitution-composition';
     const blocked = reverseClosure(inspected.graph.edges, rejectedId).filter((id) => id !== rejectedId);
     const summary = asRecord(inspected.summary);
-    assert.equal(inspected.ok, false);
+    assert.equal(inspected.ok, true);
     assert.equal(summary.mechanical_ok, true);
-    assert.equal(summary.ai_ok, false);
-    assert.equal(inspected.verification.verifier_calls, 25);
-    assert.equal(inspected.verification.passed, 24);
-    assert.equal(inspected.verification.rejected, 1);
-    assert.equal(inspected.verification.not_run, 7);
-    assert.equal(must(inspected.facts.find((fact) => fact.id === rejectedId)).ai.status, 'fail');
-    assert.deepEqual(inspected.facts.filter((fact) => fact.ai.status === 'not-run').map((fact) => fact.id).sort(), blocked);
-    assert.equal(asRecord(asRecord(must(inspected.facts.find((fact) => fact.id === target))).programmatic).reason, 'reference-check-failed');
+    assert.equal(summary.verification_operational, true);
+    assert.equal(summary.globally_verified, false);
+    assert.equal(inspected.verification.verifier_calls, 32);
+    assert.equal(inspected.verification.local_verified, 31);
+    assert.equal(inspected.verification.local_rejected, 1);
+    assert.equal(inspected.verification.local_not_run, 0);
+    assert.equal(inspected.verification.global_verified, 24);
+    assert.equal(inspected.verification.global_rejected, 1);
+    assert.equal(inspected.verification.global_blocked, 7);
+    assert.equal(must(inspected.facts.find((fact) => fact.id === rejectedId)).local_verification.status, 'fail');
+    assert.deepEqual(inspected.facts.filter((fact) => fact.global_verification.status === 'blocked').map((fact) => fact.id).sort(), blocked);
+    assert.equal(must(inspected.facts.find((fact) => fact.id === target)).mechanical?.status, 'pass');
     assert.ok(inspected.diagnostics.some((item) => item.code === 'WORKSPACE_AI_CHECK_REJECTED' && item.id === rejectedId));
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
@@ -284,7 +288,9 @@ test('large workspace fixture exposes a missing cross-file import as a mechanica
     const codes = new Set(inspected.diagnostics.map((item) => item.code));
     assert.ok(codes.has('DEPENDENCY_UNAVAILABLE'));
     assert.ok(codes.has('WORKSPACE_DEPENDENCY_UNAVAILABLE'));
-    assert.ok(inspected.verification.not_run > 0);
+    assert.equal(inspected.verification.local_not_run, 0);
+    assert.equal(inspected.verification.verifier_calls, 32);
+    assert.ok(inspected.verification.global_invalid > 0);
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
   }

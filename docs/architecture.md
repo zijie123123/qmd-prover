@@ -31,7 +31,7 @@ makes it clear which layer owns a safety decision.
 
 `inspection/index.ts` and `inspection/aggregate.ts` are deliberate first-class
 modules. The former discovers project scopes and performs project-wide
-preflight; the latter constructs and publishes the schema-v3 project view.
+preflight; the latter constructs and publishes the schema-v4 project view.
 Neither belongs in the application dispatcher, because rendering, inspection,
 and dependency analysis all need the same project model.
 
@@ -90,13 +90,13 @@ Large workflows keep orchestration separate from reusable mechanics:
   goal-like uninitialized directories, orphan workspaces, global IDs, and
   forbidden cross-scope dependencies without calling the verifier.
 - `inspection/aggregate.ts` normalizes project-relative locations, merges
-  current workspace snapshots, computes the schema-v3 total graph, and
+  current workspace snapshots, computes the schema-v4 total graph, and
   publishes it atomically when publication is safe.
 - `inspection/graph.ts` owns traversal, subgraphs, shortest paths, alternative
   paths, and proof-frontier mechanics.
 - `inspection/findings.ts` derives reusable graph findings.
 - `inspection/operations.ts` coordinates project, fact, path, and dependency
-  operations and converts domain failures into stable schema-v3 results.
+  operations and converts domain failures into stable schema-v4 results.
 - `inspection/report.ts` is presentation-only and must not change selection,
   checking, or publication semantics.
 - `workspace/initialize.ts` creates protected goal-workspace state only after
@@ -126,10 +126,23 @@ following invariants are architectural, not merely test conveniences:
 - User QMD is notes and protected main-goal storage, never a proof destination.
 - Inspection never initializes a workspace or overwrites `progress.qmd`.
 - Main-goal statement locks and workspace protected snapshots fail closed.
-- All verifier calls occur only after the relevant mechanical checks pass.
-- Exact accepted and rejected workspace decisions are keyed by mathematical
-  identity, dependency state, scope, external basis, checker contract, and
-  protocol.
+- Mechanical compilation and graph analysis never read AI verdicts, proof
+  acceptance, or upstream verification state.
+- A local verifier call requires a materializable target and exact direct
+  dependency statements, but it does not require those dependencies to have
+  accepted proofs. Scope and cycle errors remain machine diagnostics and can
+  invalidate global composition without becoming claims about the local
+  mathematical implication.
+- Exact locally verified, disproved, and rejected decisions are keyed by the
+  target statement or construction, submitted proof or refutation, direct
+  dependency statements, semantic context, external basis, checker contract,
+  and protocol. Dependency proof text and dependency verdicts are not inputs.
+- Global verification is a deterministic graph fold. A fact is globally
+  verified only when it is mechanically valid, locally accepted, and every
+  direct dependency is globally verified.
+- A source `DISPROVED` marker selects refutation review but never establishes
+  falsity by itself. Only a current independent decision may publish structured
+  disproof evidence, and a disproved node is never a usable premise.
 - Narrow inspection never verifies unrelated facts and never downgrades a
   current unrelated workspace snapshot when it refreshes the aggregate graph.
 - A project-global duplicate ID stops all inspect and dependency operations

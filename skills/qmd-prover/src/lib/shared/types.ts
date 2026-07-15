@@ -28,18 +28,32 @@ export interface Diagnostic {
 }
 
 export type ResultKind = 'definition' | 'lemma' | 'theorem' | 'proposition' | 'corollary' | 'unknown';
-export type CanonicalStatus = 'open' | 'candidate' | 'rejected' | 'verified' | 'revoked' | 'stale';
 export type ResultOrigin = 'user' | 'agent' | 'workspace';
-export type ControlMarker = 'OPEN' | 'REJECTED' | 'VERIFIED' | 'REVOKED';
+export type ControlMarker = 'OPEN' | 'REJECTED' | 'DISPROVED' | 'VERIFIED' | 'REVOKED';
 export type CheckStatus = 'pass' | 'fail' | 'pending' | 'not-run' | 'not-applicable';
+export type VerificationMode = 'definition-construction' | 'proof' | 'refutation';
+export type VerificationOutcome = 'verified' | 'disproved' | 'rejected';
+export type GlobalVerificationStatus = 'verified' | 'disproved' | 'blocked' | 'unverified' | 'rejected' | 'invalid';
+
+export interface GlobalVerification {
+  status: GlobalVerificationStatus;
+  blockers: string[];
+  reason?: string;
+}
+
+export interface DisproofEvidence {
+  status: 'conditional' | 'global';
+  summary: string;
+  refutation: string;
+  source: string;
+  verification_key?: string;
+}
 
 export interface ReferenceCheck {
   dependency: string;
   existence: CheckStatus;
   scope: CheckStatus;
-  status: CheckStatus;
   cycle?: CheckStatus;
-  ai_sufficiency?: CheckStatus;
   source?: string;
   target?: string;
 }
@@ -98,6 +112,9 @@ export interface SemanticResult {
   reference_checks?: ReferenceCheck[];
   stale_reasons?: string[];
   rejection_stale_reasons?: string[];
+  disproof?: DisproofEvidence;
+  local_verification?: AiCheck;
+  global_verification?: GlobalVerification;
   origin: ResultOrigin;
   workspace?: string;
 }
@@ -125,15 +142,15 @@ export interface GraphNode {
   scope?: 'selected' | 'external';
   workspace?: string;
   identity?: { statement_hash: string; proof_hash: string };
-  ai?: { status: string };
+  local_verification?: AiCheck;
+  global_verification?: GlobalVerification;
+  disproof?: DisproofEvidence;
 }
 
 export interface GraphEdgeChecks {
   existence: CheckStatus;
   scope: CheckStatus;
-  status: CheckStatus;
   cycle?: CheckStatus;
-  ai_sufficiency?: CheckStatus;
 }
 
 export interface GraphEdge {
@@ -197,7 +214,7 @@ export interface CompilerOptions {
   excludeFiles?: string[];
   externalTargets?: string[];
   protectStatements?: boolean;
-  semanticMode?: 'full' | 'workspace' | 'project-goals';
+  semanticMode?: 'workspace' | 'project-goals';
 }
 
 export interface RuntimeOptions extends CompilerOptions {
@@ -248,12 +265,13 @@ export interface Compilation {
 }
 
 export interface VerifierReport {
-  verdict: 'correct' | 'incorrect';
+  verdict: 'correct' | 'incorrect' | 'disproved';
   summary: string;
   critical_errors: string[];
   gaps: string[];
   nonblocking_comments: string[];
   repair_hints: string;
+  refutation: string;
 }
 
 export interface VerifierPacketInput {
@@ -272,6 +290,7 @@ export interface VerifierTarget extends JsonObject {
   cited_dependencies: string[];
   identity: { statement_hash: string; proof_hash: string };
   source: { file: string };
+  verification_mode: VerificationMode;
 }
 
 export interface VerifierPacket extends JsonObject {
@@ -281,13 +300,6 @@ export interface VerifierPacket extends JsonObject {
   dependencies: JsonObject[];
   external_basis: JsonObject;
   scope: unknown;
-}
-
-export interface ProgrammaticEligibility {
-  ready: boolean;
-  reason?: string;
-  references?: ReferenceCheck[];
-  diagnostics?: Diagnostic[];
 }
 
 export interface AiCheck {
@@ -301,6 +313,7 @@ export interface AiCheck {
   error?: string;
   remediation?: string;
   report?: VerifierReport | null;
+  outcome?: VerificationOutcome;
   details?: {
     command?: string;
     exit_code?: number | null;
@@ -310,24 +323,8 @@ export interface AiCheck {
     [key: string]: unknown;
   };
   inherited?: boolean;
-  programmatic?: ProgrammaticEligibility;
   submission_id?: string;
   decision_id?: string;
-}
-
-export interface VerifierDecisionLocation { id: string; relative: string; file: string }
-
-export interface VerificationDecisionRecord extends JsonObject {
-  submission_id: string;
-  accepted: boolean;
-  source: string;
-  report: VerifierReport;
-}
-
-export interface VerifierDecisionLookup {
-  location: VerifierDecisionLocation;
-  record: VerificationDecisionRecord | null;
-  invalid: boolean;
 }
 
 export interface StalenessChange {
@@ -349,20 +346,29 @@ export interface StalenessReport extends OperationResult {
 }
 
 export interface InspectionVerificationSummary {
+  available: boolean;
   eligible: number;
   verifier_calls: number;
   cache_hits: number;
-  passed: number;
-  rejected: number;
-  errors: number;
-  not_run: number;
+  local_verified: number;
+  local_disproved: number;
+  local_rejected: number;
+  local_errors: number;
+  local_not_run: number;
+  global_verified: number;
+  global_disproved: number;
+  global_blocked: number;
+  global_unverified: number;
+  global_rejected: number;
+  global_invalid: number;
 }
 
 export interface FactInspectionCheck {
   id: string;
   status: string;
-  programmatic: { status: 'pass' | 'fail'; references: ReferenceCheck[] };
-  ai: AiCheck;
+  mechanical: { status: 'pass' | 'fail'; references: ReferenceCheck[] };
+  local_verification: AiCheck;
+  global_verification: GlobalVerification;
   diagnostics: Diagnostic[];
 }
 
@@ -476,17 +482,25 @@ export interface WorkspaceInspectResult extends OperationResult {
   graph: DependencyGraph;
   diagnostics: Diagnostic[];
   verification: {
+    available: boolean;
     eligible: number;
     verifier_calls: number;
     cache_hits: number;
     cache_misses: number;
     invalid_cache_entries: number;
-    passed: number;
-    rejected: number;
-    errors: number;
-    not_run: number;
+    local_verified: number;
+    local_disproved: number;
+    local_rejected: number;
+    local_errors: number;
+    local_not_run: number;
+    global_verified: number;
+    global_disproved: number;
+    global_blocked: number;
+    global_unverified: number;
+    global_rejected: number;
+    global_invalid: number;
     stopped_after?: string | null;
-    facts?: Array<{ id: string } & AiCheck>;
+    facts?: Array<{ id: string; local_verification: AiCheck; global_verification: GlobalVerification }>;
   };
   facts: Array<{
     id: string;
@@ -494,13 +508,14 @@ export interface WorkspaceInspectResult extends OperationResult {
     status: string;
     file: string;
     line?: number;
-    programmatic?: {
+    mechanical?: {
       status: 'pass' | 'fail';
-      verification_mode: 'definition-construction' | 'proof';
+      verification_mode: VerificationMode;
       references: ReferenceCheck[];
       diagnostics: string[];
       reason?: string;
     };
-    ai: AiCheck;
+    local_verification: AiCheck;
+    global_verification: GlobalVerification;
   }>;
 }

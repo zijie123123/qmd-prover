@@ -1,6 +1,6 @@
 ---
 name: qmd-prover
-description: Initialize and inspect semantic-QMD mathematical projects; formulate definitions and results from ideas; develop, independently verify, repair, report, and render proofs in persistent goal workspaces. Use when a user asks to initialize qmd-prover, state or prove one or more protected main goals, grow an existing mathematical development, inspect facts, paths, dependencies, workspaces, or progress, audit staleness, review verifier findings, or render theorem navigation.
+description: Initialize and inspect semantic-QMD mathematical projects; formulate definitions and results from ideas; develop, locally AI-check, globally compose, repair, report, and render proofs in persistent goal workspaces. Use when a user asks to initialize qmd-prover, state or prove one or more protected main goals, grow an existing mathematical development, inspect facts, paths, dependencies, workspaces, or progress, audit staleness, review verifier findings, or render theorem navigation.
 ---
 
 # qmd-prover
@@ -47,7 +47,7 @@ Write every agent-created definition, intermediate result, proof attempt, calcul
 
 Within the workspace, follow the complete declaration, proof, import, and export rules in the canonical contract. An `@id` citation is a dependency but does not grant cross-file scope. Keep every explicit ID globally unique. Never cite another workspace or another protected main goal as a fact; adopt and prove the needed claim locally, or use the declared external basis.
 
-Follow every unproved workspace dependency instead of treating it as established. `workspace-verified` is current evidence in one exact workspace snapshot, not formal verification, human review, or permission to promote material into user notes.
+Follow every unproved workspace dependency instead of treating it as established. Read the three separate inspection layers: `mechanical` describes machine structure, `local_verification` says only whether the submitted proof follows conditionally from its direct dependency statements, and `global_verification` composes the whole upstream closure. Use a fact as a premise only when its global status is `verified`. These are informal AI-review states, not formal verification, human review, or permission to promote material into user notes.
 
 ## Using the infrastructure
 
@@ -63,15 +63,16 @@ node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" inspe
 
 `workspace inspect @thm-main-ID` is a compatibility alias. Fact and workspace-path inspection check only selected facts and their transitive local dependencies. Use `inspect project` for deliberate whole-project audits: it checks initialized workspaces independently and returns their complete results plus the aggregate graph.
 
-Repair every mechanical diagnostic and every verifier critical error or gap. If the verifier is unconfigured, unavailable, failing, or malformed, repair `verification.command` or `QMD_PROVER_VERIFIER` before rerunning the affected scope. Never bypass the independent check or declare your own work verified.
+Repair every mechanical diagnostic and every local-verifier critical error or gap. An unconfigured verifier is a supported machine-only mode: the graph remains available, local checks are `not-run`, and global results remain unverified. When the user requests AI verification, repair an unavailable, failing, or malformed `verification.command` or `QMD_PROVER_VERIFIER` before relying on global results. Never declare your own work verified.
 
 Use dependency operations to inspect the aggregate all-workspace graph, search facts, show paths and cycles, calculate impact, and locate proof frontiers. A global duplicate ID is project-fatal and must be renamed before any inspect or dependency operation can proceed.
 
 ## Status and rendering
 
 - `OPEN` marks an incomplete active workspace proof; `REJECTED` retains an inactive failed attempt. No marker means candidate.
+- `DISPROVED` begins a theorem-like proof body that proposes a precise counterexample or refutation; definitions cannot use it. A local disproof is conditional on its direct dependencies and becomes globally disproved only when the complete upstream closure is globally verified. A verifier may also discover a refutation without changing QMD.
 - `VERIFIED` and `REVOKED` are legacy canonical markers. Never add, restore, migrate, or delete them manually.
-- Exact workspace acceptances and rejections are cached by mathematical identity, dependency state, import scope, external basis, checker contract, and protocol. Narrow inspection preserves current outcomes for unrelated facts and workspaces.
+- Exact local verified, disproved, and rejected outcomes are cached by the target statement, submitted proof or refutation, direct dependency statements, semantic context, external basis, checker contract, and protocol. Dependency proof text and verification state are excluded; changing only an upstream proof triggers global recomposition rather than downstream AI calls.
 - `check staleness` is a read-only audit of protected goal snapshots, workspace sources, external basis, checker contract, caches, and legacy state. It never edits QMD.
 - `submit proof` and `verification revoke` are retired compatibility commands. They return structured `retired` results and write nothing.
 - Use `verification show` only to read a retained legacy verification record.

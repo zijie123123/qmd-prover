@@ -7,21 +7,23 @@ file or folder, one goal workspace or the complete project, and the aggregate
 dependency graph. A protected main goal is declared in user QMD; every other
 qmd-prover fact is an explicit declaration in an initialized goal workspace.
 
-For every selected fact, the inspector performs two different checks:
+For every selected fact, the inspector exposes three deliberately separate
+layers:
 
-- a programmatic check establishes source shape, identity, reference
-  existence, import scope, dependency state, cycle freedom, and protected
-  context; and
-- an independent AI check judges whether the referenced local facts and
-  explicit external basis are sufficient for the exact definition construction
-  or proof.
+- `mechanical` establishes source shape, identity, exact dependency edges,
+  reference existence, import scope, cycle freedom, and protected context
+  without consulting AI;
+- `local_verification` asks an optional AI verifier whether the submitted proof
+  follows assuming only the exact conclusions of its direct dependencies; and
+- `global_verification` deterministically composes machine validity, the local
+  verdict, and the complete upstream dependency closure.
 
 The inspector uses Pandoc JSON as its semantic parser. It extracts dependency
 edges only from `@id` references in a workspace definition construction or
 linked proof. Ordinary user-note exposition, theorem-like blocks other than
 `thm-main-*`, and bibliographic citations do not enter the graph.
 
-Inspection returns stable schema-v3 JSON by default. `--print` selects a
+Inspection returns stable schema-v4 JSON by default. `--print` selects a
 human-readable report but must not change selection, diagnostics, verification,
 graph construction, or snapshot publication.
 
@@ -32,12 +34,15 @@ dependencies. A duplicate ID across project scopes is fatal for every
 inspection and dependency operation: no verifier call occurs and no aggregate
 replacement is published. Other workspace failures remain local.
 
-Independent verification runs only for mechanically eligible cache misses in
-the selected dependency closure. The exact key covers the statement or
-construction, proof, dependency identities and states, import scope, external
-basis, checker contract, and protocol. Accepted and rejected decisions are both
-reusable. A verifier infrastructure failure fails closed and prevents
-downstream facts from being treated as checked.
+Local verification runs for selected facts whose exact target and direct
+dependency statements can be materialized. It is not gated by upstream AI
+verdicts, and machine scope or cycle findings remain separate diagnostics. The
+exact local key covers the target statement or construction, submitted proof
+or refutation, exact direct dependency statements, semantic context, external
+basis, checker contract, and protocol. It excludes dependency proof text,
+dependency verdicts, and the transitive proof closure. Verified, disproved,
+and rejected local decisions are reusable. Without a verifier, machine
+inspection remains operational and local checks are `not-run`.
 
 ### Diagnostics versus QMD source
 
@@ -58,6 +63,8 @@ The project-level codes introduced by workspace-centric inspection are:
 | `WORKSPACE_ORPHAN` | Workspace metadata names no current protected goal, or its target disagrees with the directory name. |
 | `WORKSPACE_STALE` | The protected goal no longer matches the snapshot recorded when the workspace was initialized. |
 | `WORKSPACE_SOURCE_STALE` | Workspace sources or verifier context changed while an independent check was running, so that result is not accepted or cached. |
+| `WORKSPACE_AI_DISPROOF_REJECTED` | Independent review did not confirm a source-marked refutation. The diagnostic carries the verifier's explanation and repair hints. |
+| `DEFINITION_DISPROVED_FORBIDDEN` | A definition uses a marker reserved for refuting theorem-like statements. |
 | `PARSE_ERROR` | Pandoc could not launch or could not parse a relevant QMD file. This remains distinct from lookup failure. |
 | `FACT_UNKNOWN` | Parsing and project indexing completed, but the requested ID does not name a protected goal or workspace declaration. |
 
@@ -96,7 +103,7 @@ Selection follows these rules:
 Inspection never calls workspace initialization and never copies or edits a
 proof in user QMD.
 
-### Check references programmatically
+### Build the mechanical graph
 
 For every selected construction or proof, check that:
 
@@ -108,8 +115,7 @@ For every selected construction or proof, check that:
 - same-file dependencies are local, while cross-file dependencies have a
   matching producer export and exact consumer import;
 - no dependency resolves to another workspace or another protected main goal;
-- dependency edges are cycle-free;
-- every local dependency has current usable workspace status; and
+- dependency edges and cycle membership are reported exactly; and
 - the protected main-goal snapshot, workspace files, external basis, and
   checker contract have not changed during the operation.
 
@@ -117,10 +123,17 @@ Missing and unavailable references remain as explanatory edges in the scoped
 workspace graph. Forbidden cross-workspace or main-goal edges are diagnosed but
 are omitted from the project aggregate graph.
 
-### Check sufficiency with AI
+Mechanical analysis never asks whether a dependency has been proved, rejected,
+or checked by AI. Those labels cannot create, remove, or alter an edge.
 
-After programmatic checks pass, send a bounded packet to the independent
-verifier.
+### Check one conditional step with AI
+
+When the target and its direct dependency statements are materializable, send
+a bounded packet to the optional verifier. The packet supplies the exact
+submitted proof and the exact conclusions of only the direct dependencies. It
+does not supply dependency proofs, dependency AI states, or a transitive proof
+bundle. The verifier must assume those conclusions and judge the proof actually
+submitted, rather than solve the theorem by an unrelated route.
 
 For a definition, ask whether the cited local facts and external basis make the
 construction meaningful, provide all required objects and operations, and
@@ -136,24 +149,55 @@ For a theorem-like result, ask whether:
 - the proof establishes the exact declaration, especially the protected
   main-goal statement.
 
+If the proof begins with `DISPROVED`, change the verification mode from proof
+to refutation. Ask whether the proposed counterexample satisfies every
+hypothesis and actually falsifies the exact statement, rather than merely
+showing that one proof attempt has a gap. An ordinary proof review may also
+discover that the statement itself is false.
+
 The verifier returns a verdict, summary, critical errors, gaps, nonblocking
-comments, and repair hints. Only `correct` with no critical errors or gaps
-passes. Missing, failing, timing-out, or malformed verifier output produces a
-structured infrastructure error and no verified status.
+comments, repair hints, and a refutation field. `correct` with no critical
+errors or gaps verifies an ordinary proof. `disproved` with a nonempty
+refutation and no critical errors or gaps establishes a disproof. A
+source-marked refutation must receive that same conclusive verdict. Missing
+configuration produces `not-run`, not an error. A configured verifier that
+fails, times out, or returns malformed output produces a structured
+infrastructure error and no local conclusion.
 
-### Record the result and workspace state
+### Compose global state and record evidence
 
-If both checks pass, qmd-prover:
+For every selected workspace graph, qmd-prover computes global status after
+the local checks. A fact is globally verified exactly when its mechanical state
+passes, its local proof is accepted, and all direct dependencies are globally
+verified. A locally accepted fact with an unconcluded upstream dependency is
+`blocked`; a fact without a local check is `unverified`; a machine-invalid fact
+is `invalid`. This fold is deterministic and makes no AI calls.
+
+For current local evidence, qmd-prover:
 
 - stores the exact verifier packet and report under the goal workspace;
 - records a decision keyed by the complete verification identity;
-- reports the fact as `workspace-verified` in the workspace manifest and graph;
+- reports local and global fields separately in the workspace manifest and
+  graph;
 - atomically publishes a current workspace snapshot; and
 - refreshes the aggregate project graph when the operation owns publication.
 
+For a conclusive refutation, the same safe publication path reports
+`workspace-disproved` and stores structured evidence with the verifier summary,
+refutation, source, and exact verification key. The verifier never inserts or
+removes `DISPROVED` in QMD.
+
+Verification summaries count local outcomes (`local_verified`,
+`local_disproved`, `local_rejected`, `local_errors`, `local_not_run`) separately
+from globally composed outcomes (`global_verified`, `global_disproved`,
+`global_blocked`, `global_unverified`, `global_rejected`, `global_invalid`).
+`ok` reports operational success, not the truth of the selected theorem.
+
 If the verifier rejects the proof, qmd-prover caches the exact rejection and
 reports `workspace-rejected` with the complete repair information. Rejection
-never changes user QMD.
+never changes user QMD. A rejected source-marked refutation receives
+`workspace-disproof-rejected` so it cannot be confused with either a false
+statement or an ordinary failed proof.
 
 Current inspection writes no `VERIFIED` or `REVOKED` marker. Those markers and
 old project verification records are legacy read-only state. `submit proof` and
@@ -168,8 +212,9 @@ The single-fact graph contains:
 - its direct local dependencies;
 - its complete transitive local dependency closure;
 - unresolved references needed to explain failures;
-- status, workspace, identity, and source location for each node; and
-- edge-level existence, scope, status, cycle, and AI-sufficiency checks.
+- status, workspace, identity, and source location for each node;
+- structured disproof evidence on every independently disproved node; and
+- edge-level machine existence, scope, and cycle checks.
 
 It deliberately excludes reverse dependencies and unrelated facts. Reverse
 dependencies can be queried from the aggregate graph, but they are not part of
@@ -185,10 +230,11 @@ current snapshots from unselected workspaces.
 
 With `--print`, display:
 
-- selected ID, kind, workspace, source, and final status;
-- programmatic and independent-AI results;
+- selected ID, kind, workspace, source, and composed status;
+- mechanical, local-AI, and global-composition results;
 - direct and transitive dependencies;
 - exact blockers and paths;
+- confirmed refutation evidence when the selected statement is disproved;
 - relevant diagnostics and verifier repair hints; and
 - the scoped graph as a readable tree or edge list.
 
@@ -221,7 +267,7 @@ For a workspace path:
   proof links, and cycles;
 - select facts declared or proved in the requested path;
 - add each selected fact's transitive local dependency closure;
-- verify only that closure in dependency order;
+- locally check only that closure in deterministic order;
 - report selected facts separately from external context nodes; and
 - leave unrelated facts outside the verification count.
 
@@ -250,7 +296,8 @@ With `--print`, display:
 - context dependencies outside the selected path;
 - missing imports, exports, references, or proofs;
 - cycles and blockers in the selected closure; and
-- independent verification calls, cache hits, rejections, and errors.
+- local verification calls, cache hits, local outcomes, global outcomes,
+  rejections, and errors.
 
 ## 3. Inspect the project or one workspace
 
@@ -292,9 +339,10 @@ A full workspace inspection:
 - rejects proofs of other protected goals;
 - rejects dependencies on another workspace or main goal;
 - checks imports, exports, cycles, and proof completeness;
-- schedules every local fact in dependency order;
-- reuses exact current acceptances or rejections; and
-- publishes a schema-v3 workspace snapshot when parsing is complete.
+- schedules every selected local fact independently of upstream AI outcomes;
+- reuses exact current local verified, disproved, or rejected decisions;
+- computes global status over the complete workspace graph; and
+- publishes a schema-v4 workspace snapshot when parsing is complete.
 
 `inspect project` runs this operation for every initialized workspace. A
 malformed workspace does not prevent healthy workspaces from being inspected
@@ -304,7 +352,10 @@ when any blocking diagnostic remains.
 Project success is stricter than “all discovered workspaces passed.” Every
 protected main goal must have a current initialized workspace whose complete
 inspection passes. A goal without a workspace is listed with a specific
-missing-workspace diagnostic.
+missing-workspace diagnostic. Here “passes” is operational: sources and machine
+checks are valid and any configured verifier ran successfully. It does not mean
+that every goal is globally verified; the aggregate summary and each fact's
+`global_verification` field state that separately.
 
 ### Workspace and project dependency graphs
 
@@ -313,7 +364,8 @@ overlay, local dependency edges, and unresolved references. It can retain an
 invalid reference for explanation.
 
 The aggregate project graph has one node per globally unique ID and records
-workspace or main-goal origin, source, status, and identity. A current overlay
+workspace or main-goal origin, source, status, identity, and any confirmed
+disproof evidence. A current overlay
 replaces the open main-goal node. Cross-workspace and other-main-goal edges are
 not published. The snapshot also contains:
 
@@ -324,8 +376,9 @@ not published. The snapshot also contains:
 - cycle paths; and
 - a source signature independent of verifier result.
 
-The source signature allows dependency analysis to reuse a saved verified or
-rejected graph only while sources and context remain current.
+The source signature allows dependency analysis to reuse a saved graph only
+while sources and context remain current. Local evidence has its own exact
+cache identity; global status is recomputed from current graph and local state.
 
 ### `--print` report
 
@@ -348,7 +401,7 @@ For project inspection, also show:
 
 ## 4. Analyze and search the dependency graph
 
-Dependency operations use the latest current schema-v3 aggregate snapshot.
+Dependency operations use the latest current schema-v4 aggregate snapshot.
 They never rebuild a graph from user-note theorem-like content.
 
 ### Dependency queries
@@ -370,13 +423,19 @@ Every target ID is validated against the aggregate graph. Unknown IDs return a
 structured lookup diagnostic. A global duplicate prevents graph analysis
 rather than allowing a query to choose one owner arbitrarily.
 
+Impact analysis reports reverse dependents from the machine graph regardless
+of their AI state. Changing a dependency proof with the same statement changes
+global composition but does not invalidate downstream local AI cache entries;
+changing the dependency statement does both. A disproved node remains unusable
+as a globally established premise.
+
 ### Find the proof frontier
 
 For a selected fact:
 
 1. Traverse its local aggregate dependency closure.
-2. Find open, candidate, rejected, stale, missing, malformed, or otherwise
-   unusable facts.
+2. Find open, candidate, rejected, disproved, stale, missing, malformed, or
+   otherwise unusable facts.
 3. Remove a blocked fact from the frontier when a lower unresolved dependency
    already explains the block.
 4. Return the lowest unresolved claims with paths from the selected result.
@@ -416,12 +475,13 @@ workspaces, or publish a proof into user notes.
 
 An exact workspace decision records:
 
-- target ID, kind, statement or construction, and proof identity;
-- every local dependency's identity, status, origin, and verification key;
-- normalized import scope;
+- target ID, kind, statement or construction, proof or refutation identity,
+  and verification mode;
+- every direct local dependency's exact statement identity;
+- normalized semantic and source context;
 - external-basis hash and exact verifier packet context;
 - checker contract and protocol;
-- verifier report and acceptance decision; and
+- verifier report and verified, disproved, or rejected outcome; and
 - source and workspace ownership.
 
 Workspace snapshots additionally carry a signature over active workspace
@@ -446,11 +506,12 @@ evidence when available; it does not guess a replacement identity.
 
 ### Report transitive invalidation
 
-If a local dependency changes, cache keys for facts that directly or
-transitively depend on it no longer match. The audit reports the affected
-workspace and its source/cache reasons. Subsequent inspection derives the
-fact-level propagation from exact dependency identities, rechecks only the
-necessary facts in dependency order, and reuses unaffected decisions.
+If a direct dependency statement changes, the dependent local cache key no
+longer matches; that may continue through facts whose direct input statements
+also changed. If only a dependency proof or AI verdict changes, downstream
+local cache keys remain current and only deterministic global composition
+changes. The audit reports the affected workspace and source/cache reasons,
+and subsequent inspection reuses every unaffected local decision.
 
 This is logical invalidation, not source-marker mutation. `VERIFIED` and
 `REVOKED` in old user files remain untouched legacy text and do not establish
@@ -482,9 +543,12 @@ With `--print`, display:
 
 The project contract requires agents to:
 
-- inspect current scope before relying on workspace-verified mathematics;
+- inspect current global state before relying on workspace-verified mathematics or
+  reporting a statement as established false;
+- never use a workspace-disproved statement as a dependency;
 - treat missing, corrupt, or stale caches as unverified;
 - rerun the narrowest affected inspection after a source or context change;
 - never add or restore `VERIFIED` manually;
 - never delete or rewrite legacy state merely to migrate a project; and
-- never bypass programmatic checks or independent verification.
+- never confuse a local conditional AI pass with global verification, and
+  never bypass mechanical checks or global composition.

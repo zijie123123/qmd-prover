@@ -1,5 +1,5 @@
 export const AUX = '.qmd-prover';
-export const CONTROL_MARKERS = ['OPEN', 'REJECTED', 'VERIFIED', 'REVOKED'];
+export const CONTROL_MARKERS = ['OPEN', 'REJECTED', 'DISPROVED', 'VERIFIED', 'REVOKED'];
 export const CONTROL_MARKER_SET = new Set(CONTROL_MARKERS);
 export function isControlMarker(value) {
     return typeof value === 'string' && CONTROL_MARKER_SET.has(value);

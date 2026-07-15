@@ -2,7 +2,7 @@ import type { ResultKind, UnknownRecord } from './types.js';
 
 export const AUX = '.qmd-prover';
 
-export const CONTROL_MARKERS = ['OPEN', 'REJECTED', 'VERIFIED', 'REVOKED'] as const;
+export const CONTROL_MARKERS = ['OPEN', 'REJECTED', 'DISPROVED', 'VERIFIED', 'REVOKED'] as const;
 export type ControlMarker = typeof CONTROL_MARKERS[number];
 export const CONTROL_MARKER_SET: ReadonlySet<string> = new Set(CONTROL_MARKERS);
 

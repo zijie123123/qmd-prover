@@ -1,9 +1,7 @@
 import { spawn } from 'node:child_process';
-import path from 'node:path';
-import { externalPolicyHash } from '../infrastructure/external.js';
-import { AUX, readJson, sha256, stableJson } from '../infrastructure/files.js';
+import { sha256, stableJson } from '../infrastructure/files.js';
 import { asErrorLike, asRecord, isRecord } from '../shared/core.js';
-export const VERIFIER_PROTOCOL_VERSION = 2;
+export const VERIFIER_PROTOCOL_VERSION = 4;
 const PROTOCOL_NAME = 'qmd-prover-independent-verifier';
 function verificationConfig(config = {}) {
     if (isRecord(config) && isRecord(config.verification))
@@ -80,6 +78,8 @@ function cloneJson(value, fallback) {
     return JSON.parse(JSON.stringify(value));
 }
 function targetMode(target) {
+    if (target.verification_mode === 'refutation')
+        return 'refutation';
     return String(target?.kind ?? '').toLowerCase() === 'definition'
         ? 'definition-construction'
         : 'proof';
@@ -117,15 +117,21 @@ function normalizedTarget(target = {}) {
 function reviewPrompt(mode, contract) {
     const common = [
         'Act as an independent mathematical verifier, not as the author of the submission.',
-        'Judge only the exact target, dependencies, scope, and external basis supplied in this packet. Do not silently import facts, assumptions, definitions, or intended meanings that are not supplied or explicitly permitted by the external basis.',
+        'Perform a local conditional check. Assume each statement in dependencies is true, and judge whether the submitted proof establishes the exact target from those direct premises and the supplied semantic context and external basis.',
+        'Check the proof that was actually submitted. Do not replace it with a different proof merely because the target may be derivable by some other argument.',
+        'Do not inspect or infer whether a dependency has itself been proved. Dependency verification state and dependency proof text are deliberately absent; global validity is computed separately from the dependency graph.',
+        'Judge only the exact target, direct dependency statements, semantic context, and external basis supplied in this packet. Do not silently import facts, assumptions, definitions, or intended meanings that are not supplied or explicitly permitted by the external basis.',
         'Check that every cited dependency is used with the hypotheses, domains, directions, side conditions, and quantified variables required by its exact statement. A citation by name is not evidence that it applies.',
         'Check quantifier order, variable binding, hidden existence or uniqueness assumptions, degenerate and boundary cases, and whether every required case is covered.',
         'Report a gap whenever a mathematically necessary step is omitted, even if the conclusion is plausible or standard. Do not repair the argument silently.',
-        'Treat unavailable, out-of-scope, unresolved, stale, or unverified dependencies as unusable evidence.',
-        `Return only one JSON object conforming to output_schema. The acceptance policy requires verdict="correct", no critical_errors, and ${contract.require_zero_gaps ? 'no gaps' : 'all material gaps to be reported explicitly'}.`
+        'Reject the submitted proof if it relies on an undeclared premise, a stronger version of a dependency, or an interpretation not supplied by the semantic context.',
+        `Return only one JSON object conforming to output_schema. A proved claim requires verdict="correct"; a false claim requires verdict="disproved" and a nonempty refutation. Either conclusive verdict also requires no critical_errors and ${contract.require_zero_gaps ? 'no gaps' : 'all material gaps to be reported explicitly'}.`
     ];
     if (mode === 'definition-construction') {
         common.splice(2, 0, 'The target is a definition construction. Verify that every object and operation needed to make the construction meaningful is supplied, that all well-definedness/existence/uniqueness obligations claimed by the construction or linked justification are established, and that the construction is not circular through itself or its dependencies. Do not demand a theorem-style proof when the construction is intrinsically definitional, but do demand justification for nontrivial well-definedness claims.');
+    }
+    else if (mode === 'refutation') {
+        common.splice(2, 0, 'The target is a theorem-like statement accompanied by a proposed counterexample or refutation. Check that the supplied argument really falsifies the exact quantified statement, satisfies every stated hypothesis, and does not merely expose a gap in some proof attempt. Return verdict="disproved" with a concise self-contained refutation when it succeeds; otherwise return verdict="incorrect" and explain the defect.');
     }
     else {
         common.splice(2, 0, 'The target is a theorem-like result (theorem, lemma, proposition, or corollary). Verify that the supplied proof establishes the exact statement—not a nearby, weaker, stronger, converse, or special-case claim—from the supplied hypotheses and admissible dependencies.');
@@ -142,7 +148,7 @@ export function buildVerifierPacket({ target, dependencies = [], externalBasis =
     return {
         schema_version: VERIFIER_PROTOCOL_VERSION,
         protocol: { name: PROTOCOL_NAME, version: VERIFIER_PROTOCOL_VERSION },
-        task: 'independent-mathematical-verification',
+        task: 'local-conditional-mathematical-verification',
         checker_contract: contract,
         instructions: reviewPrompt(mode, contract),
         target: normalized,
@@ -150,12 +156,13 @@ export function buildVerifierPacket({ target, dependencies = [], externalBasis =
         external_basis: cloneJson(externalBasis ?? { mode: 'none', content: '' }, { mode: 'none', content: '' }),
         scope: cloneJson(scope, null),
         output_schema: {
-            verdict: '"correct" or "incorrect"',
+            verdict: '"correct", "incorrect", or "disproved"',
             summary: 'string',
             critical_errors: ['string'],
             gaps: ['string'],
             nonblocking_comments: ['string'],
-            repair_hints: 'string'
+            repair_hints: 'string',
+            refutation: 'nonempty string when verdict is "disproved"; otherwise an empty string is allowed'
         }
     };
 }
@@ -166,48 +173,6 @@ export function verificationKey(packetOrInput, config = undefined) {
     const suppliedContract = wrapped ? input.checker_contract : undefined;
     const contract = suppliedContract ?? asRecord(packet).checker_contract ?? checkerContract(config ?? {});
     return sha256(stableJson({ packet, checker_contract: contract }, 0));
-}
-export function verifierDecisionLocation(root, key) {
-    const digest = String(key).replace(/^sha256:/, '');
-    return {
-        id: `inspection-${digest.slice(0, 24)}`,
-        relative: `${AUX}/verification/checks/${digest}.json`,
-        file: path.join(path.resolve(root), AUX, 'verification', 'checks', `${digest}.json`)
-    };
-}
-export async function readVerifierDecision(root, key, packet) {
-    const location = verifierDecisionLocation(root, key);
-    let record;
-    try {
-        record = await readJson(location.file);
-    }
-    catch (error) {
-        return { location, record: null, invalid: asErrorLike(error).code !== 'ENOENT' };
-    }
-    let report = null;
-    try {
-        report = normalizeReport(record.report);
-    }
-    catch { /* Invalid cached decisions fail closed. */ }
-    if (!report || typeof record.submission_id !== 'string' || typeof record.source !== 'string' || typeof record.accepted !== 'boolean') {
-        return { location, record: null, invalid: true };
-    }
-    const valid = record.verification_key === key
-        && record?.packet_hash === sha256(stableJson(packet, 0))
-        && record.target === packet.target.id
-        && record.statement_hash === packet.target.identity.statement_hash
-        && record.proof_hash === packet.target.identity.proof_hash
-        && stableJson(record?.checker_contract ?? {}, 0) === stableJson(packet.checker_contract ?? {}, 0)
-        && record.external_basis_hash === externalPolicyHash(packet.external_basis)
-        && record.accepted === accepted(report);
-    const decision = valid && report ? {
-        ...record,
-        submission_id: record.submission_id,
-        accepted: record.accepted,
-        source: record.source,
-        report
-    } : null;
-    return { location, record: decision, invalid: !valid };
 }
 function listOfStrings(report, field, { optional = false } = {}) {
     const value = report[field];
@@ -231,20 +196,25 @@ function normalizeReport(value) {
         throw new VerifierError('schema', 'Verifier output must be a JSON object');
     }
     const report = value;
-    if (report.verdict !== 'correct' && report.verdict !== 'incorrect') {
-        throw new VerifierError('schema', 'Verifier verdict must be "correct" or "incorrect"', { field: 'verdict' });
+    if (report.verdict !== 'correct' && report.verdict !== 'incorrect' && report.verdict !== 'disproved') {
+        throw new VerifierError('schema', 'Verifier verdict must be "correct", "incorrect", or "disproved"', { field: 'verdict' });
     }
     const commentsField = report.nonblocking_comments !== undefined
         ? 'nonblocking_comments'
         : report.comments !== undefined ? 'comments' : null;
-    return {
+    const normalized = {
         verdict: report.verdict,
         summary: stringField(report, 'summary'),
         critical_errors: listOfStrings(report, 'critical_errors'),
         gaps: listOfStrings(report, 'gaps'),
         nonblocking_comments: commentsField ? listOfStrings(report, commentsField) : [],
-        repair_hints: stringField(report, 'repair_hints')
+        repair_hints: stringField(report, 'repair_hints'),
+        refutation: stringField(report, 'refutation')
     };
+    if (normalized.verdict === 'disproved' && !normalized.refutation.trim()) {
+        throw new VerifierError('schema', 'A disproved verdict requires a nonempty refutation', { field: 'refutation' });
+    }
+    return normalized;
 }
 export function accepted(report) {
     return report?.verdict === 'correct'
@@ -252,6 +222,27 @@ export function accepted(report) {
         && report.critical_errors.length === 0
         && Array.isArray(report.gaps)
         && report.gaps.length === 0;
+}
+export function disproved(report) {
+    return report?.verdict === 'disproved'
+        && typeof report.refutation === 'string'
+        && report.refutation.trim().length > 0
+        && Array.isArray(report.critical_errors)
+        && report.critical_errors.length === 0
+        && Array.isArray(report.gaps)
+        && report.gaps.length === 0;
+}
+export function verificationOutcome(report, packetOrMode) {
+    const mode = typeof packetOrMode === 'string'
+        ? packetOrMode
+        : targetMode(asRecord(packetOrMode.target));
+    if (mode === 'refutation')
+        return disproved(report) ? 'disproved' : 'rejected';
+    if (accepted(report))
+        return 'verified';
+    if (mode === 'proof' && disproved(report))
+        return 'disproved';
+    return 'rejected';
 }
 function execute(command, args, packet) {
     return new Promise((resolve, reject) => {

@@ -18,7 +18,7 @@ function inspectedNodes(result) {
     let ids = [];
     if (result.fact)
         ids = [result.fact.id];
-    else if (result.facts?.some((item) => item.programmatic))
+    else if (result.facts?.some((item) => item.mechanical))
         ids = result.facts.map((item) => item.id);
     else if (result.manifest?.results)
         ids = result.manifest.results.map((item) => item.id);
@@ -91,7 +91,7 @@ export function printReport(input) {
         lines.push(`errors: ${result.summary.errors ?? result.diagnostics?.filter((item) => item.severity === 'error').length ?? 0}`);
     }
     if (result.verification) {
-        lines.push(`verification: calls=${result.verification.verifier_calls ?? 0}, cache-hits=${result.verification.cache_hits ?? 0}, passed=${result.verification.passed ?? 0}, rejected=${result.verification.rejected ?? 0}, errors=${result.verification.errors ?? 0}, not-run=${result.verification.not_run ?? 0}`);
+        lines.push(`verification: available=${result.verification.available}, calls=${result.verification.verifier_calls ?? 0}, cache-hits=${result.verification.cache_hits ?? 0}, local-verified=${result.verification.local_verified ?? 0}, local-disproved=${result.verification.local_disproved ?? 0}, local-rejected=${result.verification.local_rejected ?? 0}, local-errors=${result.verification.local_errors ?? 0}, local-not-run=${result.verification.local_not_run ?? 0}, global-verified=${result.verification.global_verified ?? 0}, global-disproved=${result.verification.global_disproved ?? 0}, global-blocked=${result.verification.global_blocked ?? 0}, global-unverified=${result.verification.global_unverified ?? 0}, global-rejected=${result.verification.global_rejected ?? 0}, global-invalid=${result.verification.global_invalid ?? 0}`);
     }
     if (result.staleness) {
         lines.push(`staleness: ${result.staleness.ok ? 'checked' : 'failed'}, changed=${result.staleness.changed?.length ?? 0}, invalidated=${result.staleness.invalidated?.length ?? 0}`);
@@ -129,6 +129,9 @@ export function printReport(input) {
         for (const [file, facts] of [...byFile].sort(([left], [right]) => left.localeCompare(right))) {
             lines.push(`  ${file}: ${facts.map((item) => `@${item.id} [${item.kind}, ${item.status}]`).join(', ')}`);
         }
+        for (const node of nodes.filter((item) => item.disproof)) {
+            lines.push(`${node.disproof?.status ?? 'conditional'} disproof @${node.id}: ${node.disproof?.refutation}`);
+        }
     }
     if (result.manifest?.protected_goal_results?.length) {
         lines.push('protected main-goal references rejected by workspace scope:');
@@ -136,39 +139,45 @@ export function printReport(input) {
             lines.push(`  @${item.id} [${item.kind}, ${item.status}] ${item.file}:${item.line ?? '?'}`);
         }
     }
-    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.programmatic !== undefined && item.ai !== undefined);
+    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.mechanical !== undefined
+        && item.local_verification !== undefined && item.global_verification !== undefined);
     if (checks.length) {
         lines.push('checks:');
         for (const check of [...checks].sort((left, right) => left.id.localeCompare(right.id))) {
-            lines.push(`  @${check.id}: programmatic=${check.programmatic.status}, ai=${check.ai.status}${check.ai.source ? ` (${check.ai.source})` : ''}`);
-            for (const reference of check.programmatic.references ?? []) {
-                lines.push(`    -> @${reference.dependency}: existence=${reference.existence}, scope=${reference.scope}, status=${reference.status}, cycle=${reference.cycle}, ai=${reference.ai_sufficiency}`);
+            lines.push(`  @${check.id}: mechanical=${check.mechanical.status}, local=${check.local_verification.status}${check.local_verification.outcome ? `, outcome=${check.local_verification.outcome}` : ''}${check.local_verification.source ? ` (${check.local_verification.source})` : ''}, global=${check.global_verification.status}`);
+            if (check.global_verification.blockers.length)
+                lines.push(`    global blockers: ${check.global_verification.blockers.map((id) => `@${id}`).join(', ')}`);
+            for (const reference of check.mechanical.references ?? []) {
+                lines.push(`    -> @${reference.dependency}: existence=${reference.existence}, scope=${reference.scope}, cycle=${reference.cycle}`);
             }
-            if (check.ai.reason)
-                lines.push(`    AI: ${check.ai.reason}`);
-            if (check.ai.error)
-                lines.push(`    AI error${check.ai.code ? ` (${check.ai.code})` : ''}: ${check.ai.error}`);
-            if (check.ai.details?.command)
-                lines.push(`    verifier command: ${check.ai.details.command}`);
-            if (check.ai.details?.exit_code !== undefined || check.ai.details?.signal)
-                lines.push(`    verifier termination: exit=${check.ai.details.exit_code ?? 'none'}, signal=${check.ai.details.signal ?? 'none'}`);
-            if (check.ai.details?.stderr_excerpt)
-                lines.push(`    verifier stderr: ${check.ai.details.stderr_excerpt}`);
-            if (check.ai.details?.stdout_excerpt)
-                lines.push(`    verifier stdout: ${check.ai.details.stdout_excerpt}`);
-            if (check.ai.remediation)
-                lines.push(`    remediation: ${check.ai.remediation}`);
-            if (check.ai.report) {
-                if (check.ai.report.summary)
-                    lines.push(`    summary: ${check.ai.report.summary}`);
-                for (const error of check.ai.report.critical_errors ?? [])
+            const local = check.local_verification;
+            if (local.reason)
+                lines.push(`    local verification: ${local.reason}`);
+            if (local.error)
+                lines.push(`    verifier error${local.code ? ` (${local.code})` : ''}: ${local.error}`);
+            if (local.details?.command)
+                lines.push(`    verifier command: ${local.details.command}`);
+            if (local.details?.exit_code !== undefined || local.details?.signal)
+                lines.push(`    verifier termination: exit=${local.details.exit_code ?? 'none'}, signal=${local.details.signal ?? 'none'}`);
+            if (local.details?.stderr_excerpt)
+                lines.push(`    verifier stderr: ${local.details.stderr_excerpt}`);
+            if (local.details?.stdout_excerpt)
+                lines.push(`    verifier stdout: ${local.details.stdout_excerpt}`);
+            if (local.remediation)
+                lines.push(`    remediation: ${local.remediation}`);
+            if (local.report) {
+                if (local.report.summary)
+                    lines.push(`    summary: ${local.report.summary}`);
+                if (local.report.refutation)
+                    lines.push(`    refutation: ${local.report.refutation}`);
+                for (const error of local.report.critical_errors ?? [])
                     lines.push(`    critical error: ${error}`);
-                for (const gap of check.ai.report.gaps ?? [])
+                for (const gap of local.report.gaps ?? [])
                     lines.push(`    gap: ${gap}`);
-                for (const comment of check.ai.report.nonblocking_comments ?? [])
+                for (const comment of local.report.nonblocking_comments ?? [])
                     lines.push(`    comment: ${comment}`);
-                if (check.ai.report.repair_hints)
-                    lines.push(`    repair hints: ${check.ai.report.repair_hints}`);
+                if (local.report.repair_hints)
+                    lines.push(`    repair hints: ${local.report.repair_hints}`);
             }
         }
     }
@@ -259,7 +268,7 @@ export function printReport(input) {
         lines.push('dependencies:');
         for (const edge of result.graph.edges) {
             const checks = edge.checks;
-            lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks?.existence}, scope=${checks?.scope}, status=${checks?.status}, cycle=${checks?.cycle}, ai=${checks?.ai_sufficiency}]`);
+            lines.push(`  @${edge.from} -> @${edge.to} [existence=${checks?.existence}, scope=${checks?.scope}, cycle=${checks?.cycle}]`);
         }
         const crossFile = result.graph.edges.filter((edge) => {
             const from = graphNodes.get(edge.from)?.file;
