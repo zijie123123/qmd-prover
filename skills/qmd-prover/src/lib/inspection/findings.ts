@@ -1,10 +1,21 @@
 import path from 'node:path';
 import { cleanId } from '../infrastructure/files.js';
 import { indexBy } from '../shared/core.js';
-import type {
-  DependencyGraph, Diagnostic, GraphFindings, GraphNode, Manifest, RuntimeOptions, SemanticResult
-} from '../shared/types.js';
+import type { Diagnostic, RuntimeOptions } from '../shared/types.js';
+import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
+import type { Manifest, SemanticResult } from '../semantic/model.js';
 import { adjacency, traverse } from './graph.js';
+
+export interface GraphFindings {
+  definitions: Record<'isolated' | 'unreachable' | 'candidate_ready_for_ai' | 'heavily_reused', string>;
+  unused_imports: Array<{ file: string; from: string; imported_file: string; id: string }>;
+  unused_exports: Array<{ id: string; export: string | null | undefined; file: string; line?: number }>;
+  isolated_facts: GraphNode[];
+  unreachable: { applicable: boolean; roots: string[]; facts: GraphNode[] };
+  invalid_evidence_dependents: Array<{ fact: GraphNode; invalid_sources: string[] }>;
+  candidate_ready_for_ai: GraphNode[];
+  heavily_reused: Array<{ fact: GraphNode; direct_dependents: number; transitive_dependents: number; verified_dependents: number }>;
+}
 
 function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return indexBy(items, (item) => item.id);

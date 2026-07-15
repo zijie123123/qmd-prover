@@ -2,10 +2,92 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sha256, stableJson } from '../infrastructure/files.js';
 import { asErrorLike, asRecord, isRecord } from '../shared/core.js';
-import type {
-  JsonObject, QmdProverConfig, VerificationMode, VerificationOutcome, VerifierPacket,
-  VerifierPacketInput, VerifierReport, VerifierTarget
-} from '../shared/types.js';
+import type { JsonObject } from '../shared/types.js';
+import type { QmdProverConfig } from '../infrastructure/config.js';
+
+/** How a fact is discharged: constructing a definition, proving, or refuting a claim. */
+export type VerificationMode = 'definition-construction' | 'proof' | 'refutation';
+export type VerificationOutcome = 'verified' | 'disproved' | 'rejected';
+export type GlobalVerificationStatus =
+  'verified' | 'disproved' | 'blocked' | 'unverified' | 'rejected' | 'invalid';
+
+export interface GlobalVerification {
+  status: GlobalVerificationStatus;
+  blockers: string[];
+  reason?: string;
+}
+
+export interface DisproofEvidence {
+  status: 'conditional' | 'global';
+  summary: string;
+  refutation: string;
+  source: string;
+  verification_key?: string;
+}
+
+/** A single verifier verdict recorded against a fact (local, before propagation). */
+export interface AiCheck {
+  status: 'pass' | 'fail' | 'error' | 'not-run';
+  source?: string;
+  reason?: string;
+  cached?: boolean;
+  attempted?: boolean;
+  fatal?: boolean;
+  code?: string;
+  error?: string;
+  remediation?: string;
+  report?: VerifierReport | null;
+  outcome?: VerificationOutcome;
+  details?: {
+    command?: string;
+    exit_code?: number | null;
+    signal?: string | null;
+    stderr_excerpt?: string;
+    stdout_excerpt?: string;
+    [key: string]: unknown;
+  };
+  inherited?: boolean;
+  submission_id?: string;
+  decision_id?: string;
+}
+
+export interface VerifierReport {
+  verdict: 'correct' | 'incorrect' | 'disproved';
+  summary: string;
+  critical_errors: string[];
+  gaps: string[];
+  nonblocking_comments: string[];
+  repair_hints: string;
+  refutation: string;
+}
+
+export interface VerifierPacketInput {
+  target: JsonObject;
+  dependencies?: JsonObject[];
+  externalBasis?: JsonObject | null;
+  scope?: unknown;
+  config?: QmdProverConfig | JsonObject;
+}
+
+export interface VerifierTarget extends JsonObject {
+  id: string;
+  kind: string;
+  semantic_text: string;
+  proof: string;
+  cited_dependencies: string[];
+  identity: { statement_hash: string; proof_hash: string };
+  source: { file: string };
+  verification_mode: VerificationMode;
+}
+
+export interface VerifierPacket extends JsonObject {
+  schema_version: number;
+  checker_contract: JsonObject;
+  target: VerifierTarget;
+  dependencies: JsonObject[];
+  external_basis: JsonObject;
+  scope: unknown;
+}
 
 export const VERIFIER_PROTOCOL_VERSION = 5;
 

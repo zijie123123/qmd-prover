@@ -1,6 +1,9 @@
-import type { ResultKind, UnknownRecord } from './types.js';
+import type { UnknownRecord } from './types.js';
 
 export const AUX = '.qmd-prover';
+
+/** The mathematical role a semantic result plays. Paired with {@link RESULT_KINDS}. */
+export type ResultKind = 'definition' | 'lemma' | 'theorem' | 'proposition' | 'corollary' | 'unknown';
 
 /** Stable output schema for every operation result and persisted snapshot. */
 export const SCHEMA_VERSION = 6;

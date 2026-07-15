@@ -9,11 +9,52 @@ import type { ProjectSnapshot } from './snapshot.js';
 import { buildProjectInspectionIndex } from './index.js';
 import { verifyFacts } from './verify.js';
 import type { VerifiedFact } from './verify.js';
-import type {
-  DependencyGraph, Diagnostic, FactInspectionCheck, GraphNode, InspectionVerificationSummary,
-  InspectFactResult, InspectPathResult, InspectProjectResult, DependencyAnalysisResult,
-  RuntimeOptions, SemanticResult, StalenessReport
-} from '../shared/types.js';
+import type { Diagnostic, OperationResult, RuntimeOptions } from '../shared/types.js';
+import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
+import type { SemanticResult } from '../semantic/model.js';
+import type { StalenessReport } from '../verification/staleness.js';
+import type { FactInspectionCheck, InspectionVerificationSummary } from './verify.js';
+import type { GraphFindings } from './findings.js';
+
+export interface InspectProjectResult extends OperationResult {
+  graph: DependencyGraph;
+  facts: FactInspectionCheck[];
+  verification: InspectionVerificationSummary;
+  staleness: StalenessReport;
+  diagnostics: Diagnostic[];
+  findings: GraphFindings;
+}
+
+export interface InspectFactResult extends OperationResult {
+  graph: DependencyGraph;
+  fact: SemanticResult;
+  check: FactInspectionCheck;
+  verification: InspectionVerificationSummary;
+  staleness: StalenessReport;
+  diagnostics: Diagnostic[];
+}
+
+export interface InspectPathResult extends OperationResult {
+  graph: DependencyGraph;
+  facts: FactInspectionCheck[];
+  verification: InspectionVerificationSummary;
+  staleness: StalenessReport;
+  diagnostics: Diagnostic[];
+  findings: GraphFindings;
+}
+
+export interface DependencyAnalysisResult extends OperationResult {
+  graph?: DependencyGraph;
+  frontier?: Array<{ fact: GraphNode; path: string[] | null }>;
+  direct?: GraphNode[];
+  transitive?: GraphNode[];
+  affected?: GraphNode[];
+  matches?: GraphNode[];
+  cycles?: string[][];
+  path?: string[] | null;
+  paths?: string[][];
+  findings?: GraphFindings;
+}
 
 
 function byId<T extends { id: string }>(items: T[]): Map<string, T> {

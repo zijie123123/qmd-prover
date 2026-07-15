@@ -3,9 +3,10 @@ import { compileProject } from '../semantic/compiler.js';
 import { externalPolicyHash, readExternalPolicy } from '../infrastructure/external.js';
 import { AUX, atomicJson, readJson, sha256, stableJson } from '../infrastructure/files.js';
 import { checkerContract } from '../verification/protocol.js';
-import type {
-  Compilation, Diagnostic, ExternalPolicy, JsonObject, RuntimeOptions, SemanticResult
-} from '../shared/types.js';
+import type { Diagnostic, JsonObject, RuntimeOptions } from '../shared/types.js';
+import type { ExternalPolicy } from '../infrastructure/external.js';
+import type { Compilation } from '../semantic/compiler.js';
+import type { SemanticResult } from '../semantic/model.js';
 
 export interface ProjectInspectionIndex {
   root: string;

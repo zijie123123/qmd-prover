@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { readJson } from '../skills/qmd-prover/src/lib/infrastructure/files.js';
 import { inspectFact, inspectProject } from '../skills/qmd-prover/src/lib/inspection/operations.js';
-import type { GraphEdge } from '../skills/qmd-prover/src/lib/shared/types.js';
+import type { GraphEdge } from '../skills/qmd-prover/src/lib/semantic/dependency-graph.js';
 import { bareProject, fakePandoc, here, must, verifier } from './support.js';
 
 const fixture = path.join(here, 'fixtures', 'large-project');

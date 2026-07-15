@@ -1,6 +1,8 @@
 import type { buildProjectInspectionIndex } from '../skills/qmd-prover/src/lib/inspection/index.js';
 import type { verifyFacts } from '../skills/qmd-prover/src/lib/inspection/verify.js';
-import type { Compilation, InspectionVerificationSummary, JsonObject } from '../skills/qmd-prover/src/lib/shared/types.js';
+import type { JsonObject } from '../skills/qmd-prover/src/lib/shared/types.js';
+import type { InspectionVerificationSummary } from '../skills/qmd-prover/src/lib/inspection/verify.js';
+import type { Compilation } from '../skills/qmd-prover/src/lib/semantic/compiler.js';
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
 type Assert<T extends true> = T;

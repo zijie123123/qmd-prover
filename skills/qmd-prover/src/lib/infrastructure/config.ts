@@ -1,7 +1,57 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { asRecord, asStringArray, hasErrorCode } from '../shared/core.js';
-import type { JsonObject, JsonValue, QmdProverConfig } from '../shared/types.js';
+import type { JsonObject, JsonValue } from '../shared/types.js';
+
+export interface ProjectConfig {
+  name: string;
+  root: string;
+  'discover-qmd-recursively': boolean;
+  exclude: string[];
+}
+
+export interface GoalsConfig {
+  'id-prefix': string;
+  'protect-statements': boolean;
+}
+
+export interface SemanticConfig { 'wildcard-imports': boolean }
+
+/** Optional explicit paths to external tools, used when they are not on PATH. */
+export interface ToolsConfig {
+  pandoc: string;
+  quarto: string;
+}
+
+export interface VerificationConfig {
+  /** none | claude | codex | command */
+  backend: string;
+  model: string;
+  effort: string;
+  'fresh-context': boolean;
+  'require-zero-gaps': boolean;
+  /** Path to the claude/codex CLI when backend is claude|codex (defaults to the backend name on PATH). */
+  executable?: string;
+  /** Fully custom verifier argv when backend is `command` (advanced escape hatch). */
+  command?: string | string[];
+  args?: string[];
+  timeout?: number;
+  [key: string]: unknown;
+}
+
+export interface RenderConfig {
+  'graph-engine': string;
+  'output-dir': string;
+}
+
+export interface QmdProverConfig {
+  project: ProjectConfig;
+  goals: GoalsConfig;
+  semantic: SemanticConfig;
+  tools: ToolsConfig;
+  verification: VerificationConfig;
+  render: RenderConfig;
+}
 
 const defaults: QmdProverConfig = {
   project: { name: '', root: '..', 'discover-qmd-recursively': true, exclude: ['.qmd-prover'] },

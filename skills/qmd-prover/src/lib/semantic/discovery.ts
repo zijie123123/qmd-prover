@@ -2,7 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AUX, relativePosix } from '../infrastructure/files.js';
 import { hasErrorCode, uniqueSorted } from '../shared/core.js';
-import type { QmdProverConfig } from '../shared/types.js';
+import type { QmdProverConfig } from '../infrastructure/config.js';
 
 interface Exclusion { pattern: string; negate: boolean }
 export interface DiscoveredFile { absolute: string; relative: string }

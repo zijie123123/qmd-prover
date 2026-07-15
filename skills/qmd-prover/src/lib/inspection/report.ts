@@ -1,8 +1,11 @@
 import { indexBy } from '../shared/core.js';
-import type {
-  AiCheck, DependencyGraph, Diagnostic, GlobalVerification, GraphFindings, GraphNode, InspectionVerificationSummary,
-  Manifest, OperationResult, SemanticResult, StalenessReport
-} from '../shared/types.js';
+import type { Diagnostic, OperationResult } from '../shared/types.js';
+import type { GraphFindings } from './findings.js';
+import type { InspectionVerificationSummary } from './verify.js';
+import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
+import type { Manifest, SemanticResult } from '../semantic/model.js';
+import type { AiCheck, GlobalVerification } from '../verification/protocol.js';
+import type { StalenessReport } from '../verification/staleness.js';
 import { blockerPaths } from './graph.js';
 import type { BlockerPath, FrontierItem } from './graph.js';
 import { deriveGraphFindings } from './findings.js';

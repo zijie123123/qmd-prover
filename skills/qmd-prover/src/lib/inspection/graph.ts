@@ -1,6 +1,7 @@
 import { cleanId } from '../infrastructure/files.js';
 import { indexBy } from '../shared/core.js';
-import type { DependencyGraph, GraphNode, RuntimeOptions } from '../shared/types.js';
+import type { RuntimeOptions } from '../shared/types.js';
+import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
 
 function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return indexBy(items, (item) => item.id);

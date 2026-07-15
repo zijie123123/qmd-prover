@@ -6,7 +6,7 @@ import {
 } from '../skills/qmd-prover/src/lib/shared/core.js';
 import { stableJson } from '../skills/qmd-prover/src/lib/infrastructure/files.js';
 import { factStatus } from '../skills/qmd-prover/src/lib/semantic/compiler.js';
-import type { SemanticResult } from '../skills/qmd-prover/src/lib/shared/types.js';
+import type { SemanticResult } from '../skills/qmd-prover/src/lib/semantic/model.js';
 
 test('shared semantic constants keep IDs, result kinds, and protected markers aligned', () => {
   assert.deepEqual(CONTROL_MARKERS, ['OPEN', 'REJECTED', 'DISPROVED', 'VERIFIED', 'REVOKED']);

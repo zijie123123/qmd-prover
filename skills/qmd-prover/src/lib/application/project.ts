@@ -3,7 +3,23 @@ import path from 'node:path';
 import { readExternalPolicy } from '../infrastructure/external.js';
 import { atomicWrite, exists, relativePosix, withWriteLock } from '../infrastructure/files.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
-import type { ExistingProjectInventory, InitializeProjectResult, JsonObject } from '../shared/types.js';
+import type { JsonObject, OperationResult } from '../shared/types.js';
+
+export interface ExistingProjectInventory {
+  agents_md: boolean;
+  external_policy: { path: string; mode: string };
+  qmd_prover_state: boolean;
+  quarto_configs: string[];
+  qmd_file_count: number;
+  qmd_files: string[];
+}
+
+export interface InitializeProjectResult extends OperationResult {
+  status: string;
+  contract_version: number;
+  path: string;
+  existing?: ExistingProjectInventory;
+}
 
 const START = '<!-- qmd-prover-contract:start version=';
 const END = '<!-- qmd-prover-contract:end -->';

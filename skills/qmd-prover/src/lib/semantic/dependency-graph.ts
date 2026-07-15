@@ -1,3 +1,46 @@
+import type { ResultKind } from '../shared/core.js';
+import type { CheckStatus } from './model.js';
+import type { AiCheck, DisproofEvidence, GlobalVerification } from '../verification/protocol.js';
+
+export type GraphNodeOrigin = 'main-goal' | 'fact' | 'unresolved';
+
+export interface GraphNode {
+  id: string;
+  status: string;
+  kind?: ResultKind;
+  title?: string;
+  file?: string;
+  line?: number;
+  origin?: GraphNodeOrigin;
+  ownership?: string;
+  scope?: 'selected' | 'external';
+  identity?: { statement_hash: string; proof_hash: string };
+  local_verification?: AiCheck;
+  global_verification?: GlobalVerification;
+  disproof?: DisproofEvidence;
+}
+
+export interface GraphEdgeChecks {
+  existence: CheckStatus;
+  scope: CheckStatus;
+  cycle?: CheckStatus;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  checks?: GraphEdgeChecks;
+  source?: string;
+}
+
+export interface DependencyGraph {
+  schema_version: number;
+  snapshot_id?: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  cycles: string[][];
+}
+
 export function findCycles(adjacency: Map<string, string[]>): string[][] {
   const cycles: string[][] = [];
   const state = new Map<string, 'visiting' | 'visited'>();

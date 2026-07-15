@@ -6,7 +6,19 @@ import { executableAvailable } from '../infrastructure/executables.js';
 import { resolveProjectSnapshot } from '../inspection/snapshot.js';
 import { buildProjectInspectionIndex } from '../inspection/index.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
-import type { Compilation, DependencyGraph, RenderResult, RuntimeOptions } from '../shared/types.js';
+import type { Diagnostic, OperationResult, RuntimeOptions } from '../shared/types.js';
+import type { Compilation, CompilationSummary } from '../semantic/compiler.js';
+import type { DependencyGraph } from '../semantic/dependency-graph.js';
+
+export interface RenderResult extends OperationResult {
+  status: string;
+  output?: string;
+  graph_svg?: string;
+  report?: string;
+  render_command?: string;
+  summary: CompilationSummary;
+  diagnostics?: Diagnostic[];
+}
 
 function escapeXml(value: unknown = ''): string {
   const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' };

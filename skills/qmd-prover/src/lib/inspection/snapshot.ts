@@ -1,9 +1,11 @@
 import path from 'node:path';
 import { AUX, atomicJson, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
-import type {
-  AiCheck, Compilation, DependencyGraph, Diagnostic, GlobalVerification, GraphNode, Manifest, RuntimeOptions
-} from '../shared/types.js';
+import type { Diagnostic, RuntimeOptions } from '../shared/types.js';
+import type { Compilation } from '../semantic/compiler.js';
+import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
+import type { Manifest } from '../semantic/model.js';
+import type { AiCheck, GlobalVerification } from '../verification/protocol.js';
 import type { ProjectInspectionIndex } from './index.js';
 
 // A graph node is a topology-plus-status view. The verbose per-fact detail

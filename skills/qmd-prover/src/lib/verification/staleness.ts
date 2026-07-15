@@ -6,9 +6,26 @@ import { externalPolicyHash } from '../infrastructure/external.js';
 import { AUX, readJson, stableJson } from '../infrastructure/files.js';
 import { SCHEMA_VERSION, hasErrorCode, isRecord } from '../shared/core.js';
 import { checkerContract, verificationOutcome } from './protocol.js';
-import type {
-  JsonObject, RuntimeOptions, StalenessChange, StalenessReport, VerifierPacket, VerifierReport
-} from '../shared/types.js';
+import type { JsonObject, OperationResult, RuntimeOptions } from '../shared/types.js';
+import type { VerifierPacket, VerifierReport } from './protocol.js';
+
+export interface StalenessChange {
+  id: string;
+  reasons: string[];
+  previous?: unknown;
+  current?: unknown;
+}
+
+export interface StalenessInvalidation { id: string; path: string[]; reasons?: unknown }
+
+export interface StalenessReport extends OperationResult {
+  schema_version: number;
+  operation: string;
+  ok: boolean;
+  changed: StalenessChange[];
+  invalidated: StalenessInvalidation[];
+  snapshot_id?: string;
+}
 
 async function jsonFiles(directory: string): Promise<string[]> {
   try {

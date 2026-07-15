@@ -1,7 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AUX, exists, relativePosix, sha256 } from './files.js';
-import type { ExternalPolicy, JsonObject } from '../shared/types.js';
+import type { JsonObject } from '../shared/types.js';
+
+export interface ExternalPolicy extends JsonObject {
+  path: string;
+  mode: 'unrestricted' | 'declared' | 'none';
+  content: string | null;
+}
 
 export function externalPolicyHash(policy: JsonObject): string {
   return sha256(JSON.stringify(policy));

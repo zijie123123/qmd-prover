@@ -7,16 +7,40 @@ import { locateDiv, locateProof } from './source.js';
 import {
   KIND_BY_PREFIX, RESULT_KINDS, SCHEMA_VERSION, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN, isControlMarker
 } from '../shared/core.js';
-import type { ControlMarker } from '../shared/core.js';
+import type { ControlMarker, ResultKind } from '../shared/core.js';
 import { asArray, asRecord, asString, errorMessage, isRecord, uniqueSorted } from '../shared/core.js';
 import type { PandocDocument, PandocNode } from './pandoc.js';
+import type { CompilerOptions, Diagnostic, DiagnosticSeverity, UnknownRecord } from '../shared/types.js';
+import type { QmdProverConfig } from '../infrastructure/config.js';
 import type {
-  Compilation, CompilerOptions, DependencyGraph, Diagnostic, DiagnosticSeverity, ImportDeclaration,
-  Manifest, ProofRecord, ResultKind, SemanticResult, SourceFileRecord, UnknownRecord
-} from '../shared/types.js';
+  ImportDeclaration, Manifest, ProofRecord, SemanticResult, SourceFileRecord
+} from './model.js';
 import { discover, discoveryExclusions } from './discovery.js';
 import { findCycles } from './dependency-graph.js';
+import type { DependencyGraph } from './dependency-graph.js';
 export { findCycles } from './dependency-graph.js';
+
+export interface CompilationSummary {
+  files: number;
+  results: number;
+  proofs?: number;
+  errors: number;
+  warnings: number;
+  statuses?: Record<string, number>;
+  kinds?: Record<string, number>;
+  goals?: Array<{ id: string; status: string; file: string; line?: number }>;
+}
+
+export interface Compilation {
+  root: string;
+  config: QmdProverConfig;
+  manifest: Manifest;
+  graph: DependencyGraph;
+  diagnostics: Diagnostic[];
+  summary: CompilationSummary;
+  ok: boolean;
+  complete: boolean;
+}
 
 function diagnostic(
   severity: DiagnosticSeverity,

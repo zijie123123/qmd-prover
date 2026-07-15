@@ -2,9 +2,8 @@ import path from 'node:path';
 import { AUX, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
 import { verificationOutcome, verifierErrorDetails } from './protocol.js';
 import { asErrorLike, asRecord, asStringArray, hasErrorCode, isRecord } from '../shared/core.js';
-import type {
-  AiCheck, JsonObject, UnknownRecord, VerificationOutcome, VerifierPacket, VerifierReport
-} from '../shared/types.js';
+import type { JsonObject, UnknownRecord } from '../shared/types.js';
+import type { AiCheck, VerificationOutcome, VerifierPacket, VerifierReport } from './protocol.js';
 
 export interface LocalOutcome extends AiCheck {
   verification_key?: string;

@@ -8,12 +8,53 @@ import { buildVerifierPacket, checkerContract, configured, invokeVerifier, verif
 import { cachedDecision, verifierFailure } from '../verification/cache.js';
 import type { LocalOutcome } from '../verification/cache.js';
 import { asErrorLike, CONTROL_MARKER_SET, SCHEMA_VERSION } from '../shared/core.js';
+import type { Diagnostic, JsonObject, RuntimeOptions } from '../shared/types.js';
+import type { ResultKind } from '../shared/core.js';
 import type {
-  Diagnostic, GlobalVerification, InspectionVerificationSummary, JsonObject, ReferenceCheck,
-  RuntimeOptions, SemanticResult, VerificationMode, VerifierPacket, VerifierReport
-} from '../shared/types.js';
+  AiCheck, GlobalVerification, VerificationMode, VerifierPacket, VerifierReport
+} from '../verification/protocol.js';
+import type { ReferenceCheck, SemanticResult } from '../semantic/model.js';
 import type { ProjectInspectionIndex } from './index.js';
 import { projectSourceSignature, readPublishedSnapshot } from './snapshot.js';
+
+export interface InspectionVerificationSummary {
+  available: boolean;
+  eligible: number;
+  verifier_calls: number;
+  cache_hits: number;
+  cache_misses: number;
+  invalid_cache_entries: number;
+  local_verified: number;
+  local_disproved: number;
+  local_rejected: number;
+  local_errors: number;
+  local_not_run: number;
+  global_verified: number;
+  global_disproved: number;
+  global_blocked: number;
+  global_unverified: number;
+  global_rejected: number;
+  global_invalid: number;
+  stopped_after?: string | null;
+}
+
+export interface FactInspectionCheck {
+  id: string;
+  status: string;
+  kind?: ResultKind;
+  file?: string;
+  line?: number;
+  mechanical: {
+    status: 'pass' | 'fail';
+    verification_mode?: VerificationMode;
+    references: ReferenceCheck[];
+    diagnostics?: string[];
+    reason?: string;
+  };
+  local_verification: AiCheck;
+  global_verification: GlobalVerification;
+  diagnostics: Diagnostic[];
+}
 
 export interface FactMechanicalCheck {
   status: 'pass' | 'fail';
