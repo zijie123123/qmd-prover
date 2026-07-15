@@ -47,7 +47,9 @@ async function verifierCalls(file: string): Promise<string[]> {
 
 async function runProjectCli(root: string): Promise<ProjectCliResult> {
   const cli = path.join(here, '..', 'skills', 'qmd-prover', 'scripts', 'qmd-prover.js');
-  return new Promise((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project'], {
+  // --graph keeps the full dependency graph inline so this test can assert on graph.edges;
+  // the default JSON is lean (compact facts, no embedded graph).
+  return new Promise((resolve, reject) => execFile(process.execPath, [cli, 'inspect', 'project', '--graph'], {
     cwd: root,
     env: { ...process.env, QMD_PROVER_PANDOC: fakePandoc, QMD_PROVER_VERIFIER: verifier },
     maxBuffer: 4 * 1024 * 1024

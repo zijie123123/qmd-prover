@@ -165,7 +165,9 @@ test('dispatcher preserves JSON commands over the unified project', async () => 
     path.join(root, 'workspace', 'main-proof.qmd'),
     proof('thm-main-cli', 'DISPROVED\n\nThis verifier fixture checks the proposed counterexample.')
   );
-  const disproved = await runJson(['inspect', 'fact', '@thm-main-cli']);
+  // --graph retains the subgraph so the graph-node assertion below still resolves;
+  // fact.status and fact.disproof are present in the lean default JSON regardless.
+  const disproved = await runJson(['inspect', 'fact', '@thm-main-cli', '--graph']);
   assert.equal(disproved.fact.status, 'disproved');
   assert.match(disproved.fact.disproof?.refutation ?? '', /proposed counterexample/);
   assert.equal(disproved.graph?.nodes.find((node) => node.id === 'thm-main-cli')?.status, 'disproved');

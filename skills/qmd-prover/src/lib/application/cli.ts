@@ -10,6 +10,8 @@ import { doctorProject } from './doctor.js';
 import { initializeProject } from './project.js';
 import { checkStaleness } from '../verification/staleness.js';
 import { listVerifications, showVerification } from '../verification/submissions.js';
+import { leanView } from '../inspection/lean.js';
+import type { LeanViewOptions } from '../inspection/lean.js';
 import { asRecord, hasErrorCode } from '../shared/core.js';
 import type { JsonObject, OperationResult, RuntimeOptions } from '../shared/types.js';
 
@@ -57,10 +59,20 @@ function presentation(args: string[]): { print: boolean; args: string[] } {
   return { print: args.includes('--print'), args: args.filter((item) => item !== '--print') };
 }
 
-function emit(value: OperationResult, print: boolean): void {
+// --print renders the full internal result; the default JSON path emits the lean
+// agent-facing projection (leanView). Slimming lives only here, so report.ts and
+// the on-disk snapshot keep the complete object.
+function emit(value: OperationResult, print: boolean, view: LeanViewOptions = {}): void {
   if (print) process.stdout.write(printReport(value));
-  else output(value);
+  else output(leanView(value, view));
   if (value.ok === false) process.exitCode = 2;
+}
+
+/** Pull an optional boolean flag out of an argument list, rejecting duplicates. */
+function extractFlag(args: string[], flag: string): { present: boolean; args: string[] } {
+  const occurrences = args.filter((item) => item === flag).length;
+  if (occurrences > 1) throw new Error(`Duplicate option ${flag}`);
+  return { present: occurrences === 1, args: args.filter((item) => item !== flag) };
 }
 
 type OptionMap = Record<string, string | boolean>;
@@ -141,24 +153,26 @@ export async function main(
     return;
   }
   if (command === 'inspect') {
-    const parsed = presentation(rest);
+    const graphFlag = extractFlag(rest, '--graph');
+    const parsed = presentation(graphFlag.args);
+    const view: LeanViewOptions = { graph: graphFlag.present };
     const [subcommand, ...tail] = parsed.args;
     if (subcommand === 'project') {
-      if (tail.length) throw new Error('inspect project accepts only --print');
-      emit(await inspectProject(root, options), parsed.print);
+      if (tail.length) throw new Error('inspect project accepts only --print and --graph');
+      emit(await inspectProject(root, options), parsed.print, view);
       return;
     }
     if (subcommand === 'fact') {
-      if (tail.length !== 1) throw new Error(`inspect ${subcommand} requires one semantic ID and optional --print`);
+      if (tail.length !== 1) throw new Error(`inspect ${subcommand} requires one semantic ID and optional --print and --graph`);
       if (!tail[0].replace(/^@/, '').trim()) throw new Error('inspect fact requires a non-empty semantic ID');
       const result: OperationResult = await inspectFact(root, tail[0], options);
       result.verification_history = await history(root, String(asRecord(result.fact).id ?? ''));
-      emit(result, parsed.print);
+      emit(result, parsed.print, view);
       return;
     }
     if (subcommand === 'path') {
-      if (tail.length !== 1) throw new Error('inspect path requires one QMD file or folder and optional --print');
-      emit(await inspectPath(root, tail[0], options), parsed.print);
+      if (tail.length !== 1) throw new Error('inspect path requires one QMD file or folder and optional --print and --graph');
+      emit(await inspectPath(root, tail[0], options), parsed.print, view);
       return;
     }
     throw new Error('inspect requires project, fact, or path');

@@ -51,6 +51,7 @@ export const HELP_COMMANDS = [
         'Requirements: Node.js 20+ and Pandoc (via PATH, tools.pandoc, or QMD_PROVER_PANDOC). A verifier (verification.backend claude|codex) and Quarto are optional.',
         'Run `qmd-prover doctor` to check dependencies before inspecting QMD.',
         'JSON is the default stable output. `--print` selects a concise human report where documented.',
+        'JSON is lean by default: facts are compact references {id, kind, status, file, line}, and listings carry counts. Drill into `inspect fact @ID` for per-fact detail, the dedicated `dependency` subcommands for itemized findings, or pass `--graph` to inspect for the full graph.',
         'Semantic IDs may be written as `@ID` or `ID`; output uses the canonical `@ID` form.',
         'Exit 1 means CLI usage/runtime failure; exit 2 means a structured domain result with ok:false.'
       ]
@@ -88,16 +89,39 @@ export const HELP_COMMANDS = [
     }
   }),
   command('inspect', ['qmd-prover inspect <command> [arguments]']),
-  command('inspect project', ['qmd-prover inspect project [--print]'], {
-    summary: 'Run machine analysis, optional local conditional verification, and global composition for every fact in the project; return the schema-v6 project graph.'
+  command('inspect project', ['qmd-prover inspect project [--print] [--graph]'], {
+    summary: 'Run machine analysis, optional local conditional verification, and global composition for every fact in the project.',
+    sections: {
+      options: [
+        '--print   Concise human report instead of JSON.',
+        '--graph   Include the full dependency graph (nodes and edges) inline in the JSON.'
+      ],
+      notes: [
+        'Default JSON is a lean dashboard: summary, goals, compact per-fact status, blockers, finding counts, and diagnostics.',
+        'Per-fact detail is available via `qmd-prover inspect fact @ID`; the complete graph is also written to .qmd-prover/graph.json.'
+      ]
+    }
   }),
-  command('inspect fact', ['qmd-prover inspect fact @ID [--print]'], {
+  command('inspect fact', ['qmd-prover inspect fact @ID [--print] [--graph]'], {
     acceptsPositionals: true,
-    summary: 'Locate a fact, locally check its dependency closure when a verifier is configured, and compute its global status.'
+    summary: 'Locate a fact, locally check its dependency closure when a verifier is configured, and compute its global status.',
+    sections: {
+      options: [
+        '--print   Concise human report instead of JSON.',
+        '--graph   Include the fact’s dependency subgraph inline in the JSON.'
+      ],
+      notes: ['Dependency lists are compact fact references {id, kind, status, file, line}; pass --graph for the full subgraph.']
+    }
   }),
-  command('inspect path', ['qmd-prover inspect path FILE_OR_FOLDER [--print]'], {
+  command('inspect path', ['qmd-prover inspect path FILE_OR_FOLDER [--print] [--graph]'], {
     acceptsPositionals: true,
-    summary: 'Run machine analysis and optional local/global verification for the facts declared under one project QMD file or folder.'
+    summary: 'Run machine analysis and optional local/global verification for the facts declared under one project QMD file or folder.',
+    sections: {
+      options: [
+        '--print   Concise human report instead of JSON.',
+        '--graph   Include the selected closure graph inline in the JSON.'
+      ]
+    }
   }),
   command('dependency', ['qmd-prover dependency <command> [arguments]']),
   command('dependency dependencies', ['qmd-prover dependency dependencies @ID [--print]'], { acceptsPositionals: true, summary: 'Show direct and transitive dependencies of one fact.' }),
@@ -116,7 +140,15 @@ export const HELP_COMMANDS = [
     sections: { options: ['--limit N       Number of paths, 1-25 (default 5).', '--max-depth N   Maximum edge depth, 1-100.'] }
   }),
   command('dependency cycles', ['qmd-prover dependency cycles [--print]'], { summary: 'List dependency cycles in the aggregate graph.' }),
-  command('dependency findings', ['qmd-prover dependency findings [--print]'], { summary: 'Return all graph hygiene, readiness, staleness-impact, and reuse findings.' }),
+  command('dependency findings', ['qmd-prover dependency findings [--print]'], {
+    summary: 'Return all graph hygiene, readiness, staleness-impact, and reuse findings.',
+    sections: {
+      notes: [
+        'JSON returns per-category counts plus compact fact references. Categories: unused_imports/exports, isolated_facts (no dependency edges), unreachable (outside every goal closure), invalid_evidence_dependents, candidate_ready_for_ai, and heavily_reused.',
+        'The large itemized lists also have dedicated commands: `dependency ready for ai`, `dependency reused`, `dependency isolated`, `dependency unreachable`.'
+      ]
+    }
+  }),
   command('dependency unused', ['qmd-prover dependency unused <command> [arguments]']),
   command('dependency unused imports', ['qmd-prover dependency unused imports [--print]'], { summary: 'List imported fact IDs not referenced by their consumer file.' }),
   command('dependency unused exports', ['qmd-prover dependency unused exports [--print]'], { summary: 'List exported facts not imported elsewhere.' }),

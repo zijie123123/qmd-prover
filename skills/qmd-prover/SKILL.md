@@ -66,7 +66,7 @@ verification show SUBMISSION_ID
 render [--allow-errors]
 ```
 
-Use `help COMMAND...` for exact filters, status values, ranges, side effects, and failure semantics. Only the commands shown with `[--print]` accept it; `init`, `verification list`, `verification show`, and `render` emit JSON only. `dependency search` matches every fact when `QUERY` is omitted, so its filters can be used on their own. A dependency query returns only its own answer (target, dependencies, path, matches, and so on); run `inspect project` when the whole graph is wanted. `render` writes nothing when project errors exist unless `--allow-errors` is explicit.
+Use `help COMMAND...` for exact filters, status values, ranges, side effects, and failure semantics. Only the commands shown with `[--print]` accept it; `init`, `verification list`, `verification show`, and `render` emit JSON only. `dependency search` matches every fact when `QUERY` is omitted, so its filters can be used on their own. A dependency query returns only its own answer (target, dependencies, path, matches, and so on) as compact fact references; run `inspect project --graph` when the whole graph is wanted. `render` writes nothing when project errors exist unless `--allow-errors` is explicit.
 
 Read [references/cli.md](references/cli.md) when configuring Pandoc or the verifier, troubleshooting command behavior, installing the skill, or needing the full command inventory.
 
