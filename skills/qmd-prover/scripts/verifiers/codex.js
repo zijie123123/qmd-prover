@@ -21,8 +21,14 @@ await runAdapter(async (prompt, options) => {
     const args = ['exec'];
     if (typeof options.model === 'string' && options.model)
         args.push('--model', options.model);
+    // Forward the configured reasoning effort (validated to a bare word upstream).
+    if (typeof options.effort === 'string' && options.effort) {
+        args.push('-c', `model_reasoning_effort="${options.effort}"`);
+    }
     // Read-only reasoning task: forbid the agent from touching the filesystem or network.
     args.push('--sandbox', 'read-only');
+    // The math project need not be a git repository; this is a pure reasoning call.
+    args.push('--skip-git-repo-check');
     args.push(prompt);
     const result = await runProcess(executable, args);
     if (result.code !== 0) {

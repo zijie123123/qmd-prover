@@ -4,16 +4,18 @@ qmd-prover:
   imports:
     - from: foundations.qmd
       use:
+        - def-fol-signature
+        - def-fol-terms
         - def-fol-formulas
         - def-fol-substitution
         - def-language-translation
         - lem-fresh-variable
-        - lem-substitution-composition
 ---
 
 ::: {#def-hilbert-calculus .definition name="Classical first-order proof calculus" date="2026-07-12" export="def-hilbert-calculus"}
-For a signature \(L\), an \(L\)-derivation from a set \(\Sigma\) of
-\(L\)-sentences is a finite sequence of \(L\)-formulas.  Each line is:
+For a signature \(L\) (@def-fol-signature), with \(L\)-terms as in
+@def-fol-terms, an \(L\)-derivation from a set \(\Sigma\) of \(L\)-sentences
+(@def-fol-formulas) is a finite sequence of \(L\)-formulas.  Each line is:
 
 1. a member of \(\Sigma\);
 2. an instance (under uniform formula substitution) of a classical
@@ -68,11 +70,13 @@ one modus-ponens step using the added assumption \(A\).
 :::
 
 ::: {#def-consistency .definition name="Syntactic consistency and completeness" date="2026-07-12" export="def-consistency"}
-A set \(\Sigma\) of \(L\)-sentences is *consistent* when there is no sentence
-\(A\) such that both \(\Sigma\vdash_L A\) and
-\(\Sigma\vdash_L\neg A\).  It is *negation-complete* when for every
+A set \(\Sigma\) of \(L\)-sentences, in the sense of @def-fol-formulas, is
+*consistent* when there is no \(L\)-sentence \(A\) such that both
+\(\Sigma\vdash_L A\) and \(\Sigma\vdash_L\neg A\) in the calculus
+@def-hilbert-calculus.  It is *negation-complete* when for every
 \(L\)-sentence \(A\), either \(A\in\Sigma\) or \(\neg A\in\Sigma\).  It is
-*deductively closed* when \(\Sigma\vdash_L A\) implies \(A\in\Sigma\).
+*deductively closed* when, for every \(L\)-sentence \(A\),
+\(\Sigma\vdash_L A\) implies \(A\in\Sigma\).
 :::
 
 ::: {#lem-consistency-characterizations .lemma name="Consistency characterizations" date="2026-07-12" export="lem-consistency-characterizations"}
@@ -87,8 +91,9 @@ Moreover, if \(\Sigma\nvdash_L A\), then
 :::
 
 ::: {.proof of="lem-consistency-characterizations"}
-If \(\Sigma\) derives \(C\) and \(\neg C\), a propositional tautology and two
-modus-ponens steps in @def-hilbert-calculus derive \(\bot\).  From \(\bot\),
+By @def-consistency, inconsistency of \(\Sigma\) means it derives some \(C\)
+and \(\neg C\); a propositional tautology and two
+modus-ponens steps in @def-hilbert-calculus then derive \(\bot\).  From \(\bot\),
 the tautology \(\bot\to B\) derives every \(B\); (iii) plainly implies (i).
 For the last assertion, inconsistency of
 \(\Sigma\cup\{\neg A\}\) would give a derivation of \(\bot\).  By
@@ -162,16 +167,60 @@ valid derivation of the correspondingly translated conclusion from
 :::
 
 ::: {.proof of="lem-constant-elimination"}
-Choose distinct variables \(y_i\) absent from the finite derivation using
-@lem-fresh-variable.  Translate every line by replacing \(c_i\) with \(y_i\)
-as in @def-language-translation.  Propositional and equality axiom instances
-remain instances; quantifier instances remain valid by
-@lem-substitution-composition; modus ponens is preserved.  Before translating,
-alpha-rename generalized variables away from the \(y_i\), which is permitted
-by @def-fol-formulas, so generalization is preserved.  The assumptions and
-conclusion, when they are \(L\)-sentences, are fixed.  Thus the translated
-sequence proves the general assertion under @def-hilbert-calculus, and its
-special case is an \(L\)-derivation of \(A\).
+Using @lem-fresh-variable, choose distinct variables \(y_1,\ldots,y_n\) that
+occur nowhere in the given finite derivation, and let \(T\) be the translation
+of @def-language-translation replacing each \(c_i\) by \(y_i\).  Because \(T\)
+alters only the constants \(c_i\), leaves every binder in place, and the \(y_i\)
+occur nowhere in the derivation, it commutes with substitution on the material
+of the derivation: for every formula \(C\), variable \(x\), and term \(t\) that
+occur, \(T(C[t/x])=T(C)[T(t)/x]\), by induction on \(C\) using
+@def-fol-substitution — each \(c_i\) is a constant untouched by \([t/x]\), and
+the fresh \(y_i\) are captured by no binder of \(C\); moreover, since \(T\)
+keeps the binders and introduces only the fresh \(y_i\), if \(t\) is free for
+\(x\) in \(C\) then \(T(t)\) is free for \(x\) in \(T(C)\).  Apply \(T\) to every
+line and verify each clause of @def-hilbert-calculus.  An assumption in
+\(\Sigma\) is an \(L\)-sentence with no \(c_i\), so \(T\) fixes it; a
+propositional-tautology instance maps to one because \(T\) commutes with
+\(\neg\) and \(\wedge\); a quantifier or equality axiom instance maps to an
+instance of the same schema by the commutation identity together with
+preservation of the free-for side condition; modus ponens is preserved because
+\(T(A\to B)=T(A)\to T(B)\); and a generalization step \(\forall z\) survives
+because \(z\) occurs in the derivation, hence differs from every fresh \(y_i\),
+so \(T(\forall z\,C)=\forall z\,T(C)\) is again a generalization.  The
+translated sequence is therefore an \(L\)-derivation from \(\Sigma\) of
+\(T\) applied to the conclusion, which is the general assertion.  When the
+conclusion \(A\) is an \(L\)-sentence it contains no \(c_i\), so \(T\) fixes it
+and the sequence derives \(A\) itself; this is the first assertion.
+:::
+
+::: {#lem-alpha-rename-provable .lemma name="Provable renaming of a bound variable" date="2026-07-12"}
+Let \(A\) be a formula and let \(y\) be a variable that does not occur in
+\(A\).  Then \(y\) is free for \(x\) in \(A\), the variable \(x\) is free for
+\(y\) in \(A[y/x]\), \((A[y/x])[x/y]=A\), and
+\[
+ \vdash_L \exists x\,A \leftrightarrow \exists y\,A[y/x].
+\]
+:::
+
+::: {.proof of="lem-alpha-rename-provable"}
+Since \(y\) does not occur in \(A\), no binder of \(A\) is \(\exists y\), so by
+@def-fol-substitution \(y\) is free for \(x\) in \(A\) and \(A[y/x]\) merely
+relabels the free occurrences of \(x\) as \(y\).  Those are the only
+occurrences of \(y\) in \(A[y/x]\), and each lies where \(x\) was free in
+\(A\), hence under no binder \(\exists x\); therefore \(x\) is free for \(y\) in
+\(A[y/x]\) and substituting \(x\) back gives \((A[y/x])[x/y]=A\).  For the
+biconditional, quantifier axiom 5 of @def-hilbert-calculus in its first form
+gives \((A[y/x])[x/y]\to\exists y\,A[y/x]\), that is
+\(A\to\exists y\,A[y/x]\); generalizing over \(x\) and applying the
+\(\exists\)-elimination form \(\forall x(A\to B)\to(\exists xA\to B)\) with
+\(B=\exists y\,A[y/x]\) — where \(x\notin\mathrm{FV}(B)\) because
+\(\mathrm{FV}(\exists y\,A[y/x])=\mathrm{FV}(A)\setminus\{x\}\) by
+@def-fol-formulas — yields \(\exists x\,A\to\exists y\,A[y/x]\).  Symmetrically,
+axiom 5 gives \(A[y/x]\to\exists x\,A\) since \(A=(A[y/x])[x/y]\); generalizing
+over \(y\) and using \(\exists\)-elimination with \(y\notin\mathrm{FV}(\exists
+x\,A)\) (as \(y\) does not occur in \(A\)) yields
+\(\exists y\,A[y/x]\to\exists x\,A\).  A propositional tautology combines the
+two implications into the stated equivalence.
 :::
 
 ::: {#lem-henkin-witness-consistency .lemma name="Fresh witness preserves consistency" date="2026-07-12" export="lem-henkin-witness-consistency"}
@@ -182,17 +231,22 @@ Then \(\Sigma\cup\{\exists xA(x)\to A(c)\}\) is consistent in
 :::
 
 ::: {.proof of="lem-henkin-witness-consistency"}
-Suppose the extension is inconsistent.  By
-@lem-consistency-characterizations and @lem-deduction it derives, from
-\(\Sigma\), the negation of \(\exists xA(x)\to A(c)\), and propositional
-logic consequently gives both \(\exists xA(x)\) and \(\neg A(c)\).
-The latter derivation uses the fresh constant only.  Replace \(c\) by a
-variable \(y\) fresh for the finite derivation using @lem-fresh-variable.
-Propositional logic gives \(A(y)\to\bot\); generalization gives
-\(\forall y(A(y)\to\bot)\), and quantifier axiom 5 of
-@def-hilbert-calculus gives \(\exists yA(y)\to\bot\), hence
-\(\neg\exists yA(y)\).  Alpha-equivalence identifies this with
-\(\neg\exists xA(x)\), contradicting the simultaneously derived existential
-and consistency of \(\Sigma\).  The replacement step is the one-constant
-argument of @lem-constant-elimination.
+Write \(A(x)\) for the body, so that \(A(c)=A(x)[c/x]\).  Suppose the extension
+is inconsistent.  By @lem-consistency-characterizations and @lem-deduction it
+derives from \(\Sigma\), in \(L\cup\{c\}\), the negation of
+\(\exists xA(x)\to A(c)\); propositional logic then yields derivations of both
+\(\exists xA(x)\) and \(\neg A(x)[c/x]\).  Using @lem-fresh-variable, choose a
+variable \(y\) occurring nowhere in this finite derivation, so in particular
+\(y\) does not occur in \(A(x)\).  Replacing \(c\) by \(y\) throughout — the
+one-constant case of @lem-constant-elimination — turns the derivation of
+\(\neg A(x)[c/x]\) into a derivation from \(\Sigma\) of \(\neg A(x)[y/x]\).
+Propositional logic gives \(A(x)[y/x]\to\bot\); generalization yields
+\(\forall y(A(x)[y/x]\to\bot)\), and the \(\exists\)-elimination form of
+quantifier axiom 5 in @def-hilbert-calculus (with \(y\notin\mathrm{FV}(\bot)\))
+gives \(\exists y\,A(x)[y/x]\to\bot\), hence \(\neg\exists y\,A(x)[y/x]\).
+Because \(y\) does not occur in \(A(x)\), @lem-alpha-rename-provable gives
+\(\vdash_L\exists xA(x)\leftrightarrow\exists y\,A(x)[y/x]\), so
+\(\Sigma\vdash_L\neg\exists xA(x)\).  This contradicts the derived
+\(\exists xA(x)\), so \(\Sigma\) would be inconsistent, against the hypothesis.
+Hence the extension is consistent.
 :::

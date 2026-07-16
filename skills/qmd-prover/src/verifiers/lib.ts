@@ -13,6 +13,8 @@
 // emitted .js still imports nothing but node:child_process.
 
 import { spawn } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { VerifierPacket, VerifierReport } from '../lib/verification/protocol.js';
 
 /** Flags parsed from argv: `--name value` yields a string, a bare `--flag` yields true. */
@@ -67,8 +69,8 @@ export function buildPrompt(packet: VerifierPacket): string {
     'VERIFICATION PACKET (JSON):',
     JSON.stringify(context, null, 2),
     '',
-    'Respond with ONLY one JSON object matching this schema — no prose, no markdown fences:',
-    JSON.stringify(packet.output_schema ?? {})
+    'OUTPUT SCHEMA — return one JSON object with exactly these fields (the values below describe each field):',
+    JSON.stringify(packet.output_schema ?? {}, null, 2)
   ].join('\n');
 }
 
@@ -139,6 +141,23 @@ function normalizeVerdict(object: Record<string, unknown>): VerifierReport {
 }
 
 /**
+ * Optional observability: when QMD_PROVER_VERIFIER_DEBUG names a directory, write the
+ * exact prompt, the model's raw stdout, and the extracted verdict for each check, keyed
+ * by target id. Purely diagnostic — any failure here is swallowed so it can never affect
+ * the verdict qmd-prover records. Used to inspect and tune the reviewer prompt.
+ */
+function debugDump(packet: VerifierPacket, part: 'prompt' | 'output' | 'verdict', value: string): void {
+  const dir = process.env.QMD_PROVER_VERIFIER_DEBUG?.trim();
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    const id = String((packet.target as { id?: unknown })?.id ?? 'unknown').replace(/[^\w.-]/g, '_') || 'unknown';
+    const suffix = part === 'verdict' ? 'verdict.json' : `${part}.txt`;
+    writeFileSync(join(dir, `${id}.${suffix}`), value);
+  } catch { /* diagnostic only */ }
+}
+
+/**
  * Standard adapter runner: read the packet, hand `(prompt, options)` to a backend
  * `invoke` that returns the model's raw text, then extract and emit the verdict.
  * On any failure it exits non-zero so qmd-prover records a verifier error.
@@ -153,8 +172,10 @@ export async function runAdapter(invoke: AdapterInvoke): Promise<void> {
   catch (error) { return fail(`verifier adapter: could not parse packet on stdin: ${(error as Error).message}`); }
 
   const options = parseArgs();
+  const prompt = buildPrompt(packet);
+  debugDump(packet, 'prompt', prompt);
   let output: string;
-  try { output = await invoke(buildPrompt(packet), options); }
+  try { output = await invoke(prompt, options); }
   catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err && err.code === 'ENOENT') {
@@ -162,8 +183,11 @@ export async function runAdapter(invoke: AdapterInvoke): Promise<void> {
     }
     return fail(`verifier adapter: ${err && err.message ? err.message : String(error)}`);
   }
+  debugDump(packet, 'output', String(output ?? ''));
 
   const verdict = extractVerdict(output);
   if (!verdict) return fail('verifier adapter: model output contained no JSON object with a "verdict" field', String(output).slice(0, 2000));
-  process.stdout.write(JSON.stringify(normalizeVerdict(verdict)));
+  const report = normalizeVerdict(verdict);
+  debugDump(packet, 'verdict', JSON.stringify(report, null, 2));
+  process.stdout.write(JSON.stringify(report));
 }

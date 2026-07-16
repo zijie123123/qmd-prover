@@ -12,11 +12,12 @@ semantic:
   wildcard-imports: false
 
 verification:
-  backend: none
+  backend: codex
   model: configurable
   effort: high
   fresh-context: true
   require-zero-gaps: true
+  definition-strictness: soft
 
 render:
   graph-engine: builtin

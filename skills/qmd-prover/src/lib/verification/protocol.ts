@@ -153,6 +153,17 @@ function modelFlag(verification: JsonObject): string {
   return model && model !== 'configurable' ? model : '';
 }
 
+/**
+ * The reasoning-effort level to forward to a backend adapter, or '' when unset. Restricted to a
+ * bare lowercase word so it is safe to splice into a CLI flag; the adapter maps it to whatever its
+ * CLI expects (e.g. codex `-c model_reasoning_effort`). Keeping this in the checker contract too
+ * means changing it re-keys the cache, so a different effort recomputes rather than reuses verdicts.
+ */
+function effortFlag(verification: JsonObject): string {
+  const effort = typeof verification.effort === 'string' ? verification.effort.trim().toLowerCase() : '';
+  return /^[a-z]+$/.test(effort) ? effort : '';
+}
+
 function backendExecutable(verification: JsonObject, backend: string): string {
   const configured = typeof verification.executable === 'string' ? verification.executable.trim() : '';
   return configured || backend;
@@ -179,7 +190,12 @@ export function verifierCommand(config: QmdProverConfig | JsonObject = {}): { co
   const backend = String(verification.backend ?? 'none').trim();
   if (backend === 'claude' || backend === 'codex') {
     const model = modelFlag(verification);
-    const args = [builtinAdapter(backend), '--executable', backendExecutable(verification, backend), ...(model ? ['--model', model] : [])];
+    const effort = effortFlag(verification);
+    const args = [
+      builtinAdapter(backend), '--executable', backendExecutable(verification, backend),
+      ...(model ? ['--model', model] : []),
+      ...(effort ? ['--effort', effort] : [])
+    ];
     return { command: process.execPath, args, source: `backend:${backend}` };
   }
   const custom = customCommand(verification.command);
@@ -279,47 +295,74 @@ function normalizedTarget(target: JsonObject = {}): VerifierTarget {
 }
 
 /**
- * A term-definedness rule, gated on verification.definition-strictness. `off` adds nothing;
- * `soft` only flags terms the verifier genuinely doubts; `strict` flags every load-bearing
- * non-standard term that is not fixed by a cited definition, semantic context, or external basis.
+ * The term-citation policy, gated on verification.definition-strictness. It governs only how
+ * a specialized term used without a supplied definition is treated; it never relaxes checking
+ * of the argument's actual logical steps. `off` is explicitly lenient (assume evident meaning),
+ * `soft` flags genuine doubt, `strict` demands every load-bearing term be fixed by a citation.
  */
-function termDefinednessRule(strictness: string): string | null {
-  if (strictness === 'soft') {
-    return 'Term definedness (soft): If the argument leans on a specialized term, object, or notation whose precise meaning you genuinely doubt is standard, and that meaning is not fixed by a cited definition, the supplied semantic context, or the external basis, report it as a gap. Do not flag ordinary, unambiguously standard mathematical vocabulary.';
-  }
+function termCitationRule(strictness: string): string {
   if (strictness === 'strict') {
-    return 'Term definedness (strict): Every specialized term, object, or notation the argument depends on must be fixed by a cited definition, the supplied semantic context, or the external basis, unless it is unambiguously standard mathematical vocabulary. Report as a gap any load-bearing term whose precise meaning is not so fixed, even when its intended meaning seems clear.';
+    return 'Term citations (strict): every specialized term, object, or notation the argument depends on must be fixed by a definition in the semantic context or by the external basis, unless it is unambiguously standard mathematical vocabulary. Report as a gap any load-bearing term whose precise meaning is not so fixed, even when the intended meaning seems clear.';
   }
-  return null;
+  if (strictness === 'soft') {
+    return 'Term citations (soft): if the argument leans on a specialized term, object, or notation whose precise meaning you genuinely doubt is standard, and that meaning is not fixed by the semantic context or the external basis, report it as a gap. Do not flag ordinary, unambiguously standard vocabulary, or a notion whose intended meaning is clear from context.';
+  }
+  return 'Term citations (lenient): do not treat the argument as defective merely because a specialized term, object, or notation is used without a supplied definition. When such a term is not fixed by the semantic context, assume its standard or contextually evident meaning and judge the argument on that basis. Report a defect only for an actual logical flaw, never for a missing citation alone.';
+}
+
+/** The mode-specific paragraph describing what kind of target is being checked. */
+function modeParagraph(mode: VerificationMode): string {
+  if (mode === 'definition-construction') {
+    return 'The target is a definition: its construction introduces a term, object, or notation and normally carries no separate proof. Confirm that everything needed to make the construction meaningful is supplied or available from the semantic context, that every existence, uniqueness, or well-definedness obligation the construction itself claims is discharged (inline or in a linked justification), and that it is not circular through itself or its dependencies. Do not demand a theorem-style proof for a purely definitional stipulation, but do require justification for any nontrivial well-definedness claim the construction actually asserts.';
+  }
+  if (mode === 'refutation') {
+    return 'The target is a theorem-like statement accompanied by a proposed counterexample or refutation. Confirm that the argument really falsifies the exact quantified statement, satisfies every stated hypothesis, and does not merely expose a gap in some proof attempt. If it succeeds, return verdict "disproved" with a self-contained refutation; otherwise return verdict "incorrect" and explain the defect.';
+  }
+  return 'The target is a theorem-like result (theorem, lemma, proposition, or corollary) with a submitted proof. Confirm that the proof establishes the exact stated result, and not a nearby, weaker, stronger, converse, or special-case claim.';
+}
+
+/** How to read the external_basis field: what background mathematics each mode permits. */
+function externalBasisParagraph(): string {
+  return [
+    'The external_basis field fixes what mathematics you may use beyond the supplied dependencies:',
+    '- mode "unrestricted": you may use standard, well-established mathematics as background (ordinary set theory, induction, elementary logic, and the like), but identify any nontrivial external result you invoke precisely enough to confirm its hypotheses; do not import project-specific results that are absent from the dependencies.',
+    '- mode "declared": you may use only the external results or classes of results described in external_basis.content, together with unambiguously elementary reasoning; treat anything beyond that as unavailable.',
+    '- mode "none": you may use no external mathematical results at all; every nonelementary fact must come from the supplied dependencies.'
+  ].join('\n');
 }
 
 function reviewPrompt(mode: VerificationMode, contract: JsonObject): string {
-  const common = [
-    'Act as an independent mathematical verifier, not as the author of the submission.',
-    'Perform a local conditional check. Assume each statement in dependencies is true, and judge whether the submitted proof establishes the exact target from those direct premises and the supplied semantic context and external basis.',
-    'Check the proof that was actually submitted. Do not replace it with a different proof merely because the target may be derivable by some other argument.',
-    'Do not inspect or infer whether a dependency has itself been proved. Dependency verification state and dependency proof text are deliberately absent; global validity is computed separately from the dependency graph.',
-    'Judge only the exact target, direct dependency statements, semantic context, and external basis supplied in this packet. Do not silently import facts, assumptions, definitions, or intended meanings that are not supplied or explicitly permitted by the external basis.',
-    'Check that every cited dependency is used with the hypotheses, domains, directions, side conditions, and quantified variables required by its exact statement. A citation by name is not evidence that it applies.',
-    'Among the dependencies, those with kind "definition" are the semantic context: each such statement fixes the meaning of the terms and notation it introduces and may be unfolded, whereas every other dependency is a fact whose statement you assume but do not unfold.',
-    'Check quantifier order, variable binding, hidden existence or uniqueness assumptions, degenerate and boundary cases, and whether every required case is covered.',
-    'Report a gap whenever a mathematically necessary step is omitted, even if the conclusion is plausible or standard. Do not repair the argument silently.',
-    'Reject the submitted proof if it relies on an undeclared premise, a stronger version of a dependency, or an interpretation not supplied by the semantic context.',
-    `Return only one JSON object conforming to output_schema. A proved claim requires verdict="correct"; a false claim requires verdict="disproved" and a nonempty refutation. Either conclusive verdict also requires no critical_errors and ${contract.require_zero_gaps ? 'no gaps' : 'all material gaps to be reported explicitly'}.`
+  const zeroGaps = contract.require_zero_gaps !== false;
+  const correctRule = zeroGaps
+    ? '- verdict "correct": the submission fully and validly establishes the exact target; critical_errors and gaps must both be empty.'
+    : '- verdict "correct": the submission fully and validly establishes the exact target; critical_errors and gaps must both be empty, so record any immaterial observation as a nonblocking_comment rather than a gap.';
+  const sections = [
+    'You are an independent mathematical verifier. Judge the submission strictly on its own merits: you did not write it, and you must neither assume it is correct nor repair it. Reason only from the material in this packet — do not read files, run commands, search, or rely on outside expectations about how this result is usually proved.',
+
+    'This is a LOCAL, CONDITIONAL check. Assume every statement in dependencies is true exactly as written, and do not consider how or whether it was proved: dependency proofs and their verification states are withheld deliberately and composed separately. Your only question is whether the submitted argument (the proof, construction, or refutation in target) establishes the exact target from those assumed dependency statements, the semantic context, and the permitted external basis — and from nothing else.',
+
+    modeParagraph(mode),
+
+    'Among dependencies, entries with kind "definition" are the semantic context: each fixes the meaning of the terms and notation it introduces and may be unfolded. Every other dependency is a fact whose statement you may assume but not unfold. A citation like @some-id in the text refers to the dependency carrying that id.',
+
+    externalBasisParagraph(),
+
+    'Establish the exact target and nothing weaker, stronger, or adjacent. Check that every cited dependency is applied with the exact hypotheses, domains, directions, side conditions, and quantified variables its statement requires — naming a result is not evidence that it applies. Scrutinize quantifier order and scope, variable binding and capture, hidden existence, uniqueness, or well-definedness assumptions, degenerate and boundary cases, and whether every case the argument relies on is actually covered.',
+
+    'Report a defect whenever a mathematically necessary step is missing, unjustified, or wrong — even when the conclusion is true, standard, or plausible — and never silently fill or replace it. Classify each defect: critical_errors are steps that are wrong, invalid, or depend on an undeclared or stronger-than-stated premise, so the argument fails as written; gaps are necessary steps that are missing or asserted without adequate justification, so the argument is incomplete though perhaps repairable; nonblocking_comments are remarks that do not affect validity.',
+
+    'Keep leniency about the meaning of terms separate from the rigor demanded of steps: granting a term its standard or evident meaning never licenses an unjustified inference. Every load-bearing step must be genuinely justified even when its conclusion is plausible, standard, or true, and a cited definition, lemma, or hypothesis supports a step only when it applies exactly as stated — invoking one for a claim it does not actually entail, or appealing to a result whose hypotheses are not met, is itself a defect rather than acceptable shorthand.',
+
+    termCitationRule(String(contract.definition_strictness ?? 'off')),
+
+    [
+      'Return exactly one JSON object matching output_schema, and nothing else — no prose, no markdown, no code fences.',
+      correctRule,
+      '- verdict "incorrect": the submission does not establish the target as written; list the specific critical_errors and/or gaps. This rejects the argument; it does not assert the target is false.',
+      '- verdict "disproved": the exact target statement is itself false; provide a self-contained refutation and keep critical_errors and gaps empty.'
+    ].join('\n')
   ];
-  if (mode === 'definition-construction') {
-    common.splice(2, 0,
-      'The target is a definition construction. Verify that every object and operation needed to make the construction meaningful is supplied, that all well-definedness/existence/uniqueness obligations claimed by the construction or linked justification are established, and that the construction is not circular through itself or its dependencies. Do not demand a theorem-style proof when the construction is intrinsically definitional, but do demand justification for nontrivial well-definedness claims.');
-  } else if (mode === 'refutation') {
-    common.splice(2, 0,
-      'The target is a theorem-like statement accompanied by a proposed counterexample or refutation. Check that the supplied argument really falsifies the exact quantified statement, satisfies every stated hypothesis, and does not merely expose a gap in some proof attempt. Return verdict="disproved" with a concise self-contained refutation when it succeeds; otherwise return verdict="incorrect" and explain the defect.');
-  } else {
-    common.splice(2, 0,
-      'The target is a theorem-like result (theorem, lemma, proposition, or corollary). Verify that the supplied proof establishes the exact statement—not a nearby, weaker, stronger, converse, or special-case claim—from the supplied hypotheses and admissible dependencies.');
-  }
-  const termRule = termDefinednessRule(String(contract.definition_strictness ?? 'off'));
-  if (termRule) common.splice(common.length - 1, 0, termRule);
-  return common.join('\n\n');
+  return sections.join('\n\n');
 }
 
 export function buildVerifierPacket({
@@ -346,13 +389,13 @@ export function buildVerifierPacket({
     external_basis: cloneJson(externalBasis ?? { mode: 'none', content: '' }, { mode: 'none', content: '' }),
     scope: cloneJson(scope, null),
     output_schema: {
-      verdict: '"correct", "incorrect", or "disproved"',
-      summary: 'string',
-      critical_errors: ['string'],
-      gaps: ['string'],
-      nonblocking_comments: ['string'],
-      repair_hints: 'string',
-      refutation: 'nonempty string when verdict is "disproved"; otherwise an empty string is allowed'
+      verdict: 'correct | incorrect | disproved',
+      summary: 'string: one or two sentences stating the overall judgement',
+      critical_errors: ['string: each a wrong or invalid step that breaks the argument'],
+      gaps: ['string: each a necessary step left missing or unjustified'],
+      nonblocking_comments: ['string: each an observation that does not affect validity'],
+      repair_hints: 'string: concrete guidance for fixing the errors and gaps, or empty',
+      refutation: 'string: self-contained counterexample, nonempty iff verdict is disproved'
     }
   };
 }
