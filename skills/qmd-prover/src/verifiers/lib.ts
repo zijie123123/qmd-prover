@@ -15,13 +15,16 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { VerifierPacket, VerifierReport } from '../lib/verification/protocol.js';
+import type { VerifierPacket, VerifierReport, VerifierUsage } from '../lib/verification/protocol.js';
 
 /** Flags parsed from argv: `--name value` yields a string, a bare `--flag` yields true. */
 export type AdapterOptions = Record<string, string | boolean>;
 
-/** The invoke callback each adapter supplies: prompt in, raw model text out. */
-export type AdapterInvoke = (prompt: string, options: AdapterOptions) => Promise<string>;
+/** What an adapter returns: the raw model text, or that text plus token usage the backend reported. */
+export type AdapterResult = string | { text: string; usage?: VerifierUsage };
+
+/** The invoke callback each adapter supplies: prompt in, raw model text (and optional usage) out. */
+export type AdapterInvoke = (prompt: string, options: AdapterOptions) => Promise<AdapterResult>;
 
 export interface ProcessResult {
   code: number | null;
@@ -174,8 +177,8 @@ export async function runAdapter(invoke: AdapterInvoke): Promise<void> {
   const options = parseArgs();
   const prompt = buildPrompt(packet);
   debugDump(packet, 'prompt', prompt);
-  let output: string;
-  try { output = await invoke(prompt, options); }
+  let result: AdapterResult;
+  try { result = await invoke(prompt, options); }
   catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err && err.code === 'ENOENT') {
@@ -183,11 +186,14 @@ export async function runAdapter(invoke: AdapterInvoke): Promise<void> {
     }
     return fail(`verifier adapter: ${err && err.message ? err.message : String(error)}`);
   }
+  const output = typeof result === 'string' ? result : result.text;
+  const usage = typeof result === 'string' ? undefined : result.usage;
   debugDump(packet, 'output', String(output ?? ''));
 
   const verdict = extractVerdict(output);
   if (!verdict) return fail('verifier adapter: model output contained no JSON object with a "verdict" field', String(output).slice(0, 2000));
-  const report = normalizeVerdict(verdict);
-  debugDump(packet, 'verdict', JSON.stringify(report, null, 2));
-  process.stdout.write(JSON.stringify(report));
+  // qmd-prover reads `usage` from the emitted JSON as metrics; it is not part of the verdict schema.
+  const emitted = usage ? { ...normalizeVerdict(verdict), usage } : normalizeVerdict(verdict);
+  debugDump(packet, 'verdict', JSON.stringify(emitted, null, 2));
+  process.stdout.write(JSON.stringify(emitted));
 }

@@ -17,6 +17,19 @@
 // needed to point it at a different model or executable — only config.
 
 import { runAdapter, runProcess } from './lib.js';
+import type { VerifierUsage } from '../lib/verification/protocol.js';
+
+/** Map the `usage` object of a `claude -p --output-format json` envelope into a VerifierUsage. */
+function claudeUsage(envelope: Record<string, unknown>): VerifierUsage | undefined {
+  const usage = envelope.usage;
+  if (!usage || typeof usage !== 'object') return undefined;
+  const record = usage as Record<string, unknown>;
+  const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  const input = num(record.input_tokens);
+  const output = num(record.output_tokens);
+  if (input === undefined && output === undefined) return undefined;
+  return { ...(input !== undefined ? { input_tokens: input } : {}), ...(output !== undefined ? { output_tokens: output } : {}), total_tokens: (input ?? 0) + (output ?? 0) };
+}
 
 await runAdapter(async (prompt, options) => {
   const executable = typeof options.executable === 'string' ? options.executable : 'claude';
@@ -27,13 +40,15 @@ await runAdapter(async (prompt, options) => {
   if (result.code !== 0) {
     throw new Error(`claude exited ${result.code ?? `signal ${result.signal}`}: ${result.stderr.trim() || result.stdout.trim()}`);
   }
-  // `--output-format json` wraps the answer as { ..., result: "<assistant text>" }.
+  // `--output-format json` wraps the answer as { ..., result: "<assistant text>", usage: {...} }.
   try {
     const envelope: unknown = JSON.parse(result.stdout);
-    if (envelope && typeof envelope === 'object' && typeof (envelope as { result?: unknown }).result === 'string') {
-      return (envelope as { result: string }).result;
+    if (envelope && typeof envelope === 'object') {
+      const record = envelope as Record<string, unknown>;
+      const usage = claudeUsage(record);
+      if (typeof record.result === 'string') return usage ? { text: record.result, usage } : record.result;
+      if ('verdict' in record) return usage ? { text: result.stdout, usage } : result.stdout;
     }
-    if (envelope && typeof envelope === 'object' && 'verdict' in envelope) return result.stdout;
   } catch { /* not an envelope; treat stdout as the assistant text */ }
   return result.stdout;
 });

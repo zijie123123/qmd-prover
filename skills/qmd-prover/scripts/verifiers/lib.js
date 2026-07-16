@@ -167,9 +167,9 @@ export async function runAdapter(invoke) {
     const options = parseArgs();
     const prompt = buildPrompt(packet);
     debugDump(packet, 'prompt', prompt);
-    let output;
+    let result;
     try {
-        output = await invoke(prompt, options);
+        result = await invoke(prompt, options);
     }
     catch (error) {
         const err = error;
@@ -178,11 +178,14 @@ export async function runAdapter(invoke) {
         }
         return fail(`verifier adapter: ${err && err.message ? err.message : String(error)}`);
     }
+    const output = typeof result === 'string' ? result : result.text;
+    const usage = typeof result === 'string' ? undefined : result.usage;
     debugDump(packet, 'output', String(output ?? ''));
     const verdict = extractVerdict(output);
     if (!verdict)
         return fail('verifier adapter: model output contained no JSON object with a "verdict" field', String(output).slice(0, 2000));
-    const report = normalizeVerdict(verdict);
-    debugDump(packet, 'verdict', JSON.stringify(report, null, 2));
-    process.stdout.write(JSON.stringify(report));
+    // qmd-prover reads `usage` from the emitted JSON as metrics; it is not part of the verdict schema.
+    const emitted = usage ? { ...normalizeVerdict(verdict), usage } : normalizeVerdict(verdict);
+    debugDump(packet, 'verdict', JSON.stringify(emitted, null, 2));
+    process.stdout.write(JSON.stringify(emitted));
 }

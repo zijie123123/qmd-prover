@@ -16,6 +16,14 @@
 // No qmd-prover code changes are needed to point it at a different model or executable —
 // only config.
 import { runAdapter, runProcess } from './lib.js';
+/** `codex exec` prints a "tokens used\n<N>" line (grouped digits) to stderr; pull out the count. */
+function parseCodexTokens(stderr) {
+    const match = /tokens used[\s:]*([\d][\d,]*)/i.exec(stderr);
+    if (!match)
+        return undefined;
+    const value = Number.parseInt(match[1].replace(/,/g, ''), 10);
+    return Number.isFinite(value) ? value : undefined;
+}
 await runAdapter(async (prompt, options) => {
     const executable = typeof options.executable === 'string' ? options.executable : 'codex';
     const args = ['exec'];
@@ -34,6 +42,8 @@ await runAdapter(async (prompt, options) => {
     if (result.code !== 0) {
         throw new Error(`codex exited ${result.code ?? `signal ${result.signal}`}: ${result.stderr.trim() || result.stdout.trim()}`);
     }
-    // `codex exec` prints the final assistant message (often the bare JSON) to stdout.
-    return result.stdout;
+    // `codex exec` prints the final assistant message (often the bare JSON) to stdout, and a
+    // token-usage line to stderr; report the token count so qmd-prover can record it.
+    const tokens = parseCodexTokens(result.stderr);
+    return tokens === undefined ? result.stdout : { text: result.stdout, usage: { total_tokens: tokens } };
 });

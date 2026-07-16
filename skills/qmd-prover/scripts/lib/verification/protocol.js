@@ -346,6 +346,7 @@ export function verificationOutcome(report, packetOrMode) {
 }
 function execute(command, args, packet) {
     return new Promise((resolve, reject) => {
+        const start = Date.now();
         const child = spawn(command, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
             env: {
@@ -361,13 +362,28 @@ function execute(command, args, packet) {
         child.stdout.on('data', (chunk) => { stdout += chunk; });
         child.stderr.on('data', (chunk) => { stderr += chunk; });
         child.on('error', reject);
-        child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+        child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr, duration_ms: Date.now() - start }));
         child.stdin.on('error', (error) => {
             if (asErrorLike(error).code !== 'EPIPE')
                 reject(error);
         });
         child.stdin.end(`${JSON.stringify(packet)}\n`);
     });
+}
+/** Read an optional `usage` object emitted by an adapter into a VerifierUsage, dropping non-numbers. */
+function extractUsage(report) {
+    const usage = asRecord(report).usage;
+    if (!isRecord(usage))
+        return undefined;
+    const num = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+    const result = {};
+    if (num(usage.total_tokens) !== undefined)
+        result.total_tokens = num(usage.total_tokens);
+    if (num(usage.input_tokens) !== undefined)
+        result.input_tokens = num(usage.input_tokens);
+    if (num(usage.output_tokens) !== undefined)
+        result.output_tokens = num(usage.output_tokens);
+    return Object.keys(result).length ? result : undefined;
 }
 export async function invokeVerifier(packet, config = {}) {
     const executable = verifierCommand(config);
@@ -399,9 +415,9 @@ export async function invokeVerifier(packet, config = {}) {
             stderr: result.stderr
         });
     }
-    let report;
+    let parsed;
     try {
-        report = JSON.parse(result.stdout);
+        parsed = JSON.parse(result.stdout);
     }
     catch {
         throw new VerifierError('malformed', 'Verifier did not return valid JSON', {
@@ -409,5 +425,9 @@ export async function invokeVerifier(packet, config = {}) {
             stderr: result.stderr
         });
     }
-    return normalizeReport(report);
+    const usage = extractUsage(parsed);
+    return {
+        report: normalizeReport(parsed),
+        metrics: { duration_ms: result.duration_ms, ...(usage ? { usage } : {}) }
+    };
 }

@@ -52,6 +52,8 @@ export interface AiCheck {
   inherited?: boolean;
   submission_id?: string;
   decision_id?: string;
+  /** Run cost of the check that produced this outcome (a fresh call; 0-work for a cache hit). */
+  metrics?: VerifierMetrics;
 }
 
 export interface VerifierReport {
@@ -62,6 +64,24 @@ export interface VerifierReport {
   nonblocking_comments: string[];
   repair_hints: string;
   refutation: string;
+}
+
+/** Token counts a backend reports for one check. Only fields the backend supplies are present. */
+export interface VerifierUsage {
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+}
+
+/**
+ * Run-specific cost of one verifier invocation: wall-clock duration and, when the backend
+ * reports it, token usage. These are NOT part of the verdict or the cache key — they vary per
+ * run — so they travel alongside the report rather than inside it.
+ */
+export interface VerifierMetrics {
+  duration_ms: number;
+  cached?: boolean;
+  usage?: VerifierUsage;
 }
 
 export interface VerifierPacketInput {
@@ -484,10 +504,11 @@ export function verificationOutcome(
   return 'rejected';
 }
 
-interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
+interface ProcessResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; duration_ms: number }
 
 function execute(command: string, args: string[], packet: VerifierPacket): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
+    const start = Date.now();
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
@@ -503,7 +524,7 @@ function execute(command: string, args: string[], packet: VerifierPacket): Promi
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
+    child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr, duration_ms: Date.now() - start }));
     child.stdin.on('error', (error) => {
       if (asErrorLike(error).code !== 'EPIPE') reject(error);
     });
@@ -511,7 +532,19 @@ function execute(command: string, args: string[], packet: VerifierPacket): Promi
   });
 }
 
-export async function invokeVerifier(packet: VerifierPacket, config: QmdProverConfig | JsonObject = {}): Promise<VerifierReport> {
+/** Read an optional `usage` object emitted by an adapter into a VerifierUsage, dropping non-numbers. */
+function extractUsage(report: unknown): VerifierUsage | undefined {
+  const usage = asRecord(report).usage;
+  if (!isRecord(usage)) return undefined;
+  const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+  const result: VerifierUsage = {};
+  if (num(usage.total_tokens) !== undefined) result.total_tokens = num(usage.total_tokens);
+  if (num(usage.input_tokens) !== undefined) result.input_tokens = num(usage.input_tokens);
+  if (num(usage.output_tokens) !== undefined) result.output_tokens = num(usage.output_tokens);
+  return Object.keys(result).length ? result : undefined;
+}
+
+export async function invokeVerifier(packet: VerifierPacket, config: QmdProverConfig | JsonObject = {}): Promise<{ report: VerifierReport; metrics: VerifierMetrics }> {
   const executable = verifierCommand(config);
   if (!executable) {
     throw new VerifierError(
@@ -546,14 +579,18 @@ export async function invokeVerifier(packet: VerifierPacket, config: QmdProverCo
     });
   }
 
-  let report: unknown;
+  let parsed: unknown;
   try {
-    report = JSON.parse(result.stdout);
+    parsed = JSON.parse(result.stdout);
   } catch {
     throw new VerifierError('malformed', 'Verifier did not return valid JSON', {
       stdout: result.stdout,
       stderr: result.stderr
     });
   }
-  return normalizeReport(report);
+  const usage = extractUsage(parsed);
+  return {
+    report: normalizeReport(parsed),
+    metrics: { duration_ms: result.duration_ms, ...(usage ? { usage } : {}) }
+  };
 }

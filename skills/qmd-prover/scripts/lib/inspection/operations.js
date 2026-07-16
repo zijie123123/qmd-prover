@@ -15,6 +15,7 @@ function emptyGraph() { return { schema_version: SCHEMA_VERSION, nodes: [], edge
 function emptyVerification() {
     return {
         available: false, eligible: 0, verifier_calls: 0, cache_hits: 0, cache_misses: 0, invalid_cache_entries: 0,
+        verifier_duration_ms: 0, verifier_tokens: 0,
         local_verified: 0, local_disproved: 0, local_rejected: 0, local_errors: 0, local_not_run: 0,
         global_verified: 0, global_disproved: 0, global_blocked: 0, global_unverified: 0,
         global_rejected: 0, global_invalid: 0

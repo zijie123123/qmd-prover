@@ -170,7 +170,7 @@ export function printReport(input: OperationResult): string {
     lines.push(`errors: ${result.summary.errors ?? result.diagnostics?.filter((item) => item.severity === 'error').length ?? 0}`);
   }
   if (result.verification) {
-    lines.push(`verification: available=${result.verification.available}, calls=${result.verification.verifier_calls ?? 0}, cache-hits=${result.verification.cache_hits ?? 0}, local-verified=${result.verification.local_verified ?? 0}, local-disproved=${result.verification.local_disproved ?? 0}, local-rejected=${result.verification.local_rejected ?? 0}, local-errors=${result.verification.local_errors ?? 0}, local-not-run=${result.verification.local_not_run ?? 0}, global-verified=${result.verification.global_verified ?? 0}, global-disproved=${result.verification.global_disproved ?? 0}, global-blocked=${result.verification.global_blocked ?? 0}, global-unverified=${result.verification.global_unverified ?? 0}, global-rejected=${result.verification.global_rejected ?? 0}, global-invalid=${result.verification.global_invalid ?? 0}`);
+    lines.push(`verification: available=${result.verification.available}, calls=${result.verification.verifier_calls ?? 0}, cache-hits=${result.verification.cache_hits ?? 0}, time=${Math.round((result.verification.verifier_duration_ms ?? 0) / 1000)}s, tokens=${result.verification.verifier_tokens ?? 0}, local-verified=${result.verification.local_verified ?? 0}, local-disproved=${result.verification.local_disproved ?? 0}, local-rejected=${result.verification.local_rejected ?? 0}, local-errors=${result.verification.local_errors ?? 0}, local-not-run=${result.verification.local_not_run ?? 0}, global-verified=${result.verification.global_verified ?? 0}, global-disproved=${result.verification.global_disproved ?? 0}, global-blocked=${result.verification.global_blocked ?? 0}, global-unverified=${result.verification.global_unverified ?? 0}, global-rejected=${result.verification.global_rejected ?? 0}, global-invalid=${result.verification.global_invalid ?? 0}`);
   }
   if (result.staleness) {
     lines.push(`staleness: ${result.staleness.ok ? 'checked' : 'failed'}, changed=${result.staleness.changed?.length ?? 0}, invalidated=${result.staleness.invalidated?.length ?? 0}`);
@@ -221,6 +221,10 @@ export function printReport(input: OperationResult): string {
         lines.push(`    -> @${reference.dependency}: existence=${reference.existence}, scope=${reference.scope}, cycle=${reference.cycle}`);
       }
       const local = check.local_verification;
+      if (local.metrics) {
+        const tokens = local.metrics.usage?.total_tokens;
+        lines.push(`    verifier metrics: ${local.metrics.cached ? 'cached; ' : ''}time=${(local.metrics.duration_ms / 1000).toFixed(1)}s${tokens != null ? `, tokens=${tokens}` : ''}`);
+      }
       if (local.reason) lines.push(`    local verification: ${local.reason}`);
       if (local.error) lines.push(`    verifier error${local.code ? ` (${local.code})` : ''}: ${local.error}`);
       if (local.details?.command) lines.push(`    verifier command: ${local.details.command}`);

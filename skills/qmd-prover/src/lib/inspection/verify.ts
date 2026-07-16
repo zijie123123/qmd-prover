@@ -12,7 +12,7 @@ import { asErrorLike, CONTROL_MARKER_SET, SCHEMA_VERSION } from '../shared/core.
 import type { Diagnostic, JsonObject, RuntimeOptions } from '../shared/types.js';
 import type { ResultKind } from '../shared/core.js';
 import type {
-  AiCheck, GlobalVerification, VerificationContext, VerificationMode, VerifierPacket, VerifierReport
+  AiCheck, GlobalVerification, VerificationContext, VerificationMode, VerifierMetrics, VerifierPacket, VerifierReport
 } from '../verification/protocol.js';
 import type { ReferenceCheck, SemanticResult } from '../semantic/model.js';
 import { projectSourceSignature, readPublishedSnapshot } from './snapshot.js';
@@ -24,6 +24,10 @@ export interface InspectionVerificationSummary {
   cache_hits: number;
   cache_misses: number;
   invalid_cache_entries: number;
+  /** Wall-clock time spent in fresh verifier calls this run (cache hits do no work). */
+  verifier_duration_ms: number;
+  /** Total tokens reported across fresh verifier calls this run, when the backend reports them. */
+  verifier_tokens: number;
   local_verified: number;
   local_disproved: number;
   local_rejected: number;
@@ -300,6 +304,8 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     cache_hits: 0,
     cache_misses: 0,
     invalid_cache_entries: 0,
+    verifier_duration_ms: 0,
+    verifier_tokens: 0,
     local_verified: 0,
     local_disproved: 0,
     local_rejected: 0,
@@ -368,11 +374,15 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     let report: VerifierReport;
     let source: string;
     let cachedResult = false;
+    let metrics: VerifierMetrics | undefined;
     if (cached.record) {
       report = cached.record.report;
       source = 'verification-cache';
       cachedResult = true;
       verification.cache_hits += 1;
+      // Surface the originally-recorded cost, flagged as cached (this run did no verifier work).
+      const recorded = (cached.record as { metrics?: VerifierMetrics }).metrics;
+      metrics = recorded ? { ...recorded, cached: true } : { duration_ms: 0, cached: true };
     } else if (fatal) {
       outcomes.set(result.id, fatal.failed_target
         ? verifierFailure(fatal, fatal.failed_target, true)
@@ -381,7 +391,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     } else {
       verification.cache_misses += 1;
       verification.verifier_calls += 1;
-      try { report = await invokeVerifier(packet, config); }
+      try { ({ report, metrics } = await invokeVerifier(packet, config)); }
       catch (error) {
         const failure = verifierFailure(error, result.id);
         failure.failed_target = result.id;
@@ -421,6 +431,10 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
         continue;
       }
 
+      if (metrics) {
+        verification.verifier_duration_ms += metrics.duration_ms;
+        verification.verifier_tokens += metrics.usage?.total_tokens ?? 0;
+      }
       const record = {
         schema_version: SCHEMA_VERSION,
         operation: 'local-conditional-verification',
@@ -429,6 +443,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
         outcome: verificationOutcome(report, packet),
         accepted: verificationOutcome(report, packet) !== 'rejected',
         report,
+        ...(metrics ? { metrics } : {}),
         statement_hash: result.statement_hash,
         proof_hash: result.proof_hash,
         dependency_snapshot: Object.fromEntries(packet.dependencies.map((dependency) => [String(dependency.id), {
@@ -461,7 +476,8 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
       source,
       cached: cachedResult,
       verification_key: key,
-      report
+      report,
+      ...(metrics ? { metrics } : {})
     };
     outcomes.set(result.id, outcome);
     if (decision === 'disproved') {
@@ -529,7 +545,8 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
           outcome: local.outcome,
           source: 'local-verifier-evidence',
           verification_key: local.verification_key,
-          report: local.report
+          report: local.report,
+          ...(local.metrics ? { metrics: local.metrics } : {})
         }
       : local;
     // A fact whose local check simply has not run keeps its marker- and
