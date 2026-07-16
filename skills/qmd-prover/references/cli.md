@@ -1,6 +1,6 @@
 # Dispatcher and installation reference
 
-qmd-prover is a self-contained Codex skill with a dependency-free Node dispatcher for mathematical proof workflows in Quarto Markdown. Every QMD file in the project is semantic mathematics compiled into one unified dependency graph. Exact verifier decisions, dependency graphs, and generated Quarto inputs live under `.qmd-prover/`, which holds only derived tool state.
+qmd-prover is a self-contained Codex skill with a dependency-free Node dispatcher for mathematical proof workflows in Quarto Markdown. Every QMD file in the project is semantic mathematics compiled into one unified dependency graph. Exact verifier decisions, dependency graphs, and generated Quarto inputs live under `.qmd-prover/`, alongside the authored inputs it version-controls: `config.yml`, the `.external.qmd` basis policy, and the `statement-locks.json` protection baseline. On first compile qmd-prover scaffolds a `.qmd-prover/.gitignore` that keeps those three files and ignores everything it regenerates (snapshots, manifest, diagnostics, caches, generated render output); it is written once and never overwritten.
 
 ## Requirements
 

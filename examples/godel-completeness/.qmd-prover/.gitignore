@@ -1,0 +1,6 @@
+# qmd-prover writes derived tool state here. Track only the authored inputs.
+/*
+!/.gitignore
+!/config.yml
+!/.external.qmd
+!/statement-locks.json

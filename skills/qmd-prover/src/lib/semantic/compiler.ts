@@ -1,6 +1,6 @@
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, scaffoldAuxGitignore, sha256, stableJson } from '../infrastructure/files.js';
 import { loadConfig, pandocCommand } from '../infrastructure/config.js';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
@@ -223,6 +223,7 @@ async function initializeAux(root: string): Promise<void> {
     `  output-dir: .qmd-prover/generated`,
     ``
   ].join('\n'));
+  await scaffoldAuxGitignore(root);
 }
 
 export async function compileProject(root = process.cwd(), options: CompilerOptions = {}): Promise<Compilation> {

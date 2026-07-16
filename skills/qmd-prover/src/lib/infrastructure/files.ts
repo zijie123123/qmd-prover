@@ -48,6 +48,26 @@ export async function atomicJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, stableJson(value));
 }
 
+/**
+ * Write `.qmd-prover/.gitignore` once, the first time any tool state lands there.
+ * It version-controls the authored inputs (config, external basis, statement-lock
+ * baseline) and ignores everything qmd-prover regenerates. Never overwritten, so a
+ * project may customize it (e.g. share the verifier cache).
+ */
+export async function scaffoldAuxGitignore(root: string): Promise<void> {
+  const file = path.join(root, AUX, '.gitignore');
+  if (await exists(file)) return;
+  await atomicWrite(file, [
+    '# qmd-prover writes derived tool state here. Track only the authored inputs.',
+    '/*',
+    '!/.gitignore',
+    '!/config.yml',
+    '!/.external.qmd',
+    '!/statement-locks.json',
+    ''
+  ].join('\n'));
+}
+
 export async function appendEvent(root: string, event: JsonObject): Promise<void> {
   const file = path.join(root, AUX, 'events.jsonl');
   await mkdir(path.dirname(file), { recursive: true });

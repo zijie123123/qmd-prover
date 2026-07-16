@@ -28,6 +28,22 @@ test('compiler reads metadata imports, linked proofs, and deterministic semantic
   assert.equal(must(theoremBundle(first, '@thm-main-goal').dependencies[0]).id, 'lem-base');
 });
 
+test('compilation scaffolds a .qmd-prover/.gitignore that keeps authored inputs and ignores derived state', async () => {
+  const root = await project();
+  await compileProject(root, options);
+  const gitignorePath = path.join(root, '.qmd-prover', '.gitignore');
+  const scaffolded = await readFile(gitignorePath, 'utf8');
+  assert.match(scaffolded, /^\/\*$/m);
+  for (const keep of ['!/.gitignore', '!/config.yml', '!/.external.qmd', '!/statement-locks.json']) {
+    assert.ok(scaffolded.includes(keep), `expected .gitignore to re-include ${keep}`);
+  }
+  assert.ok(!/!\/(graph|manifest|diagnostics)\.json/.test(scaffolded), 'derived snapshots must not be re-included');
+  // Written once and never clobbered, so a project may customize it.
+  await writeFile(gitignorePath, '/*\n!/config.yml\n!/verification/\n');
+  await compileProject(root, options);
+  assert.equal(await readFile(gitignorePath, 'utf8'), '/*\n!/config.yml\n!/verification/\n');
+});
+
 test('source discovery honors configured exclusions and gitignore reinclusions deterministically', async () => {
   const root = await project();
   await Promise.all([mkdir(path.join(root, 'generated')), mkdir(path.join(root, 'ignored'))]);

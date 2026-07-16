@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { AUX, atomicJson, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { AUX, atomicJson, readJson, relativePosix, scaffoldAuxGitignore, sha256, stableJson } from '../infrastructure/files.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
 import type { Diagnostic, RuntimeOptions } from '../shared/types.js';
 import type { Compilation } from '../semantic/compiler.js';
@@ -121,6 +121,7 @@ export async function publishProjectSnapshot(
   options: RuntimeOptions = {}
 ): Promise<boolean> {
   if (options.write === false || !index.compilation.complete) return false;
+  await scaffoldAuxGitignore(index.root);
   const graphsRoot = path.join(index.root, AUX, 'graphs');
   const snapshotFile = path.join(graphsRoot, `${snapshot.snapshot_id.replace(/^sha256:/, '')}.json`);
   await Promise.all([

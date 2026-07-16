@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { AUX, atomicJson, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { AUX, atomicJson, readJson, relativePosix, scaffoldAuxGitignore, sha256, stableJson } from '../infrastructure/files.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
 // A graph node is a topology-plus-status view. The verbose per-fact detail
 // (verifier reasons/reports, statement and proof hashes) lives in the manifest
@@ -95,6 +95,7 @@ export function buildProjectSnapshot(index, diagnostics = index.diagnostics) {
 export async function publishProjectSnapshot(index, snapshot, options = {}) {
     if (options.write === false || !index.compilation.complete)
         return false;
+    await scaffoldAuxGitignore(index.root);
     const graphsRoot = path.join(index.root, AUX, 'graphs');
     const snapshotFile = path.join(graphsRoot, `${snapshot.snapshot_id.replace(/^sha256:/, '')}.json`);
     await Promise.all([
