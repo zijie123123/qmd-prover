@@ -7,7 +7,7 @@
 //     executable: ""      # path to the `codex` CLI, or leave blank if it is on PATH
 //     model: configurable # or a concrete model id, e.g. gpt-5-codex
 //
-// qmd-prover spawns `node codex.mjs --executable <codex> [--model <id>]` and pipes the
+// qmd-prover spawns `node codex.js --executable <codex> [--model <id>]` and pipes the
 // verification packet to this adapter's stdin. We run the Codex CLI non-interactively
 // (`codex exec ...`) — the same entry point the Codex SDK's `thread.run()` drives — and
 // return the verdict JSON on stdout.
@@ -16,7 +16,7 @@
 // No qmd-prover code changes are needed to point it at a different model or executable —
 // only config.
 
-import { runAdapter, runProcess } from './lib.mjs';
+import { runAdapter, runProcess } from './lib.js';
 
 await runAdapter(async (prompt, options) => {
   const executable = typeof options.executable === 'string' ? options.executable : 'codex';

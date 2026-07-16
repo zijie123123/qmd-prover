@@ -144,9 +144,9 @@ export async function verificationContext(compilation: Compilation): Promise<Ver
 
 export const VERIFIER_BACKENDS = ['none', 'claude', 'codex', 'command'] as const;
 
-/** Absolute path to a shipped verifier adapter (scripts/verifiers/<backend>.mjs). */
+/** Absolute path to a shipped verifier adapter (scripts/verifiers/<backend>.js). */
 function builtinAdapter(backend: string): string {
-  return fileURLToPath(new URL(`../../verifiers/${backend}.mjs`, import.meta.url));
+  return fileURLToPath(new URL(`../../verifiers/${backend}.js`, import.meta.url));
 }
 
 /** The concrete model id to pass to a CLI, or '' when the backend should pick its own default. */

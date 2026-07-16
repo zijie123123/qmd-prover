@@ -7,7 +7,7 @@
 //     executable: ""      # path to the `claude` CLI, or leave blank if it is on PATH
 //     model: configurable # or a concrete model id, e.g. claude-opus-4-8
 //
-// qmd-prover spawns `node claude.mjs --executable <claude> [--model <id>]` and pipes
+// qmd-prover spawns `node claude.js --executable <claude> [--model <id>]` and pipes
 // the verification packet to this adapter's stdin. We run the Claude Code CLI in
 // headless print mode (`claude -p ... --output-format json`) — the same entry point the
 // Claude Agent SDK's `query()` drives — and return the verdict JSON on stdout.
@@ -16,7 +16,7 @@
 // interactive `claude login` in this environment). No qmd-prover code changes are
 // needed to point it at a different model or executable — only config.
 
-import { runAdapter, runProcess } from './lib.mjs';
+import { runAdapter, runProcess } from './lib.js';
 
 await runAdapter(async (prompt, options) => {
   const executable = typeof options.executable === 'string' ? options.executable : 'claude';
@@ -29,8 +29,10 @@ await runAdapter(async (prompt, options) => {
   }
   // `--output-format json` wraps the answer as { ..., result: "<assistant text>" }.
   try {
-    const envelope = JSON.parse(result.stdout);
-    if (envelope && typeof envelope.result === 'string') return envelope.result;
+    const envelope: unknown = JSON.parse(result.stdout);
+    if (envelope && typeof envelope === 'object' && typeof (envelope as { result?: unknown }).result === 'string') {
+      return (envelope as { result: string }).result;
+    }
     if (envelope && typeof envelope === 'object' && 'verdict' in envelope) return result.stdout;
   } catch { /* not an envelope; treat stdout as the assistant text */ }
   return result.stdout;
