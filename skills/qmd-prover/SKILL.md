@@ -5,12 +5,34 @@ description: Initialize and inspect semantic-QMD mathematical projects; formulat
 
 # qmd-prover
 
+## Locating the dispatcher
+
+Every command here runs the same dependency-free Node dispatcher bundled with this skill. Resolve
+its path once and reuse it. `QMD_PROVER_HOME` is the unified override — set it to the skill directory
+for any host or install scope; otherwise fall back to your host:
+
+```bash
+# Unified override (any host, global or in-project install):
+QMD_PROVER="$QMD_PROVER_HOME/scripts/qmd-prover.js"                       # when QMD_PROVER_HOME is set
+
+# Otherwise, by host:
+#   Claude Code — the active skill directory (global ~/.claude or in-project ./.claude):
+QMD_PROVER="${CLAUDE_SKILL_DIR}/scripts/qmd-prover.js"
+#   Codex, global install:
+QMD_PROVER="$HOME/.codex/skills/qmd-prover/scripts/qmd-prover.js"
+#   Codex, in-project install:
+QMD_PROVER=".codex/skills/qmd-prover/scripts/qmd-prover.js"
+```
+
+Use this resolved `$QMD_PROVER` path for every dispatcher call below, including the commands the
+project's `AGENTS.md` contract shows with a `${QMD_PROVER_HOME:-...}` path.
+
 ## Project setup
 
 When the user asks to initialize qmd-prover in the current project, run this from the project root:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" init
+node "$QMD_PROVER" init
 ```
 
 Read the returned `existing` inventory. If the status is `intent-required`, summarize the detected `AGENTS.md`, QMD files, Quarto configuration, `.qmd-prover` state, and external-policy mode, then ask whether the user wants to adopt the files in place, inspect them first, or leave them unchanged. Run `init --adopt-existing` only after the user chooses adoption.
@@ -32,7 +54,7 @@ Before drafting mathematics, changing qmd-prover state, or relying on a project 
 Run the dispatcher from the project root:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" <subcommand> [arguments]
+node "$QMD_PROVER" <subcommand> [arguments]
 ```
 
 Requirements: Node.js 20 or later and Pandoc on `PATH` (or `QMD_PROVER_PANDOC`, or `tools.pandoc` in config). The independent verifier is optional unless AI verification is requested; Quarto is optional unless final rendered output is requested. Run `doctor` first when availability is uncertain, and see "Environment and verifier setup" below to configure any missing tool. JSON is the default output; commands marked below accept `--print` for a concise human report. Semantic IDs accept either `@ID` or bare `ID`, and output normalizes them as `@ID`.
@@ -114,9 +136,9 @@ Do not impose a fixed proof loop. A request may concern one theorem, a family of
 After each coherent semantic-QMD edit, use the narrowest relevant operation:
 
 ```bash
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" inspect fact @ID
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" inspect path PATH
-node "${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js" inspect project
+node "$QMD_PROVER" inspect fact @ID
+node "$QMD_PROVER" inspect path PATH
+node "$QMD_PROVER" inspect project
 ```
 
 Fact and path inspection check only selected facts and their transitive local dependencies. Use `inspect project` for deliberate whole-project audits: it compiles every project QMD into one graph and checks every fact.

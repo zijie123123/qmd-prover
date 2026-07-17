@@ -12,7 +12,10 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "npm run build && npm run build:test-fixtures && node --import tsx --test tests/*.test.ts",
     "inspect": "node skills/qmd-prover/scripts/qmd-prover.js inspect project",
-    "install:skill": "npm run build && tsx tooling/install-skill.ts"
+    "install:skill": "npm run build && tsx tooling/install-skill.ts --local --claude",
+    "install:skill:global": "npm run build && tsx tooling/install-skill.ts --global --claude",
+    "install:skill:codex": "npm run build && tsx tooling/install-skill.ts --local --codex",
+    "install:skill:codex:global": "npm run build && tsx tooling/install-skill.ts --global --codex"
   },
   "engines": {
     "node": ">=20"

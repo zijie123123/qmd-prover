@@ -33,10 +33,10 @@ The protocol accepts `correct`, `incorrect`, or `disproved`. A locally accepted 
 
 ## Commands
 
-Run the dispatcher from the mathematical project root:
+Run the dispatcher from the mathematical project root. `QMD_PROVER_HOME` is the unified path to the skill directory (any host, global or in-project); Claude Code resolves it automatically via `${CLAUDE_SKILL_DIR}` in `SKILL.md`, and Codex defaults to `~/.codex/skills/qmd-prover`:
 
 ```bash
-QMD_PROVER="${CODEX_HOME:-$HOME/.codex}/skills/qmd-prover/scripts/qmd-prover.js"
+QMD_PROVER="${QMD_PROVER_HOME:-$HOME/.codex/skills/qmd-prover}/scripts/qmd-prover.js"
 node "$QMD_PROVER" doctor [--print]
 node "$QMD_PROVER" init [--adopt-existing|--append-contract|--sync-contract]
 node "$QMD_PROVER" inspect project [--print] [--graph]
@@ -166,11 +166,18 @@ by (2). Thus it is a counterexample to the universal conclusion.
 
 ## Install the skill from a source checkout
 
+Two scopes — a per-project install (the default) or a global one — for either host:
+
 ```bash
-npm run install:skill
+npm run install:skill                # Claude Code, in-project → ./.claude/skills/qmd-prover  (default)
+npm run install:skill:global         # Claude Code, global     → ${CLAUDE_CONFIG_DIR:-~/.claude}/skills/qmd-prover
+npm run install:skill:codex          # Codex, in-project       → ./.codex/skills/qmd-prover
+npm run install:skill:codex:global   # Codex, global           → ${CODEX_HOME:-~/.codex}/skills/qmd-prover
 ```
 
-This copies `skills/qmd-prover/` to `${CODEX_HOME:-~/.codex}/skills/qmd-prover`. The source checkout remains the source of truth.
+Each command copies the self-contained `skills/qmd-prover/` folder into the chosen skills directory; the source checkout remains the source of truth. The underlying script is `tsx tooling/install-skill.ts [--local|--global] [--codex|--claude] [--dir <project>]` (default `--local --claude`); a per-project install lands under the current directory unless `--dir <project>` names another.
+
+The dispatcher is then resolved through `QMD_PROVER_HOME` — the unified override set to the skill directory — or, when it is unset, per host: Claude Code uses the active skill directory (`${CLAUDE_SKILL_DIR}` in `SKILL.md`, global or in-project), and Codex uses `~/.codex/skills/qmd-prover` (global) or `./.codex/skills/qmd-prover` (in-project). No host needs any other environment variable.
 
 ## Test
 
