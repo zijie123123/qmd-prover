@@ -1,3 +1,95 @@
+# Issues
+
+## Command
+
+Write clear help text for every command.
+
+init did not create workspace folder
+
+The verifier should be able to refer to the previous historical version.
+
+## Config
+
+config.yml backend is wrong, should not be none
+
+default
+
+## format
+
+use `OPEN` not OPEN
+
+
+A `VERIFIED` marker is usable only when it matches the current cached statement, dependency snapshot, and verification record.
+
+A proof block must immediately follow its theorem.
+
+Provide a skill that helps the user create the main theorem.
+
+
+Do not over-design DISPROVED: it is just a label, and whatever it depends on can be written freely; a DISPROVED entry need not give a counterexample or a reverse proof, since a clear intuition is enough.
+
+explain `VERIFIED` for user
+
+
+
+## Workflow
+
+
+Tell the agent/user that using this is like learning a new programming language: `check` is the debugger, and writing proofs is like programming, where you write a little and then check.
+
+Clearly explain to the AI the rationale behind each change and how far a single change reaches, and remind it to watch the verifier cost.
+
+AGENTS.md what to do when something is wrong.
+
+decompose lemma if proof is long
+
+should only look at the local behavior, a lemma is rejected do not mean the theorem is open
+
+
+
+
+## Skill
+
+
+
+
+
+
+main theorem formulation
+
+skill emphasis to read AGENTS.md
+
+
+## Installation
+
+installation do not follow readme.md
+
+Decide whether to package this as a plugin installable from a marketplace.
+
+Use GitHub Actions to test each installation method on different systems.
+
+## readme.md and documentation
+
+In README.md, separate the human-facing content from the AI-facing content, and add prompts for automatic pushing and automatic updating.
+
+Improve the writing of readme.md
+
+Write documentation and review the skill's AGENTS.md.
+
+## Render
+
+Adjust the rendered graph and make it beautiful.
+
+tmp file of qmd path
+
+## Config
+
+Try to check if lenient citation check need local search tool.
+
+
+
+## Future
+
 Introduce the concepts of an "idea" and of type classes.
 
 Introduce a "trajectory" concept into the database, so that results produced from the same chat history belong to the same trajectory.
@@ -8,41 +100,6 @@ Introduce the progress note.
 
 Implement the ideation skill which is only triggered within a side task.
 
-A `VERIFIED` marker is usable only when it matches the current cached statement, dependency snapshot, and verification record.
-
-A proof block must immediately follow its theorem.
-
-Provide a skill that helps the user create the main theorem.
-
 Support conditional development, building on and writing a paper from certain assumed results.
 
-Write clear help text for every command.
-
-Do not over-design DISPROVED: it is just a label, and whatever it depends on can be written freely; a DISPROVED entry need not give a counterexample or a reverse proof, since a clear intuition is enough.
-
-In README.md, separate the human-facing content from the AI-facing content, and add prompts for automatic pushing and automatic updating.
-
-Decide whether to package this as a plugin installable from a marketplace.
-
-The verifier should be able to refer to the previous historical version.
-
 In the "paper" model, verifier check correctness while in the "notes" model check readability, so notes require each definition to cite enough examples beneath it.
-
-Use GitHub Actions to test each installation method on different systems.
-
-Write documentation and review the skill's AGENTS.md.
-
-Tell the agent/user that using this is like learning a new programming language: `check` is the debugger, and writing proofs is like programming, where you write a little and then check.
-
-Clearly explain to the AI the rationale behind each change and how far a single change reaches, and remind it to watch the verifier cost.
-
-Adjust the rendered graph and make it beautiful.
-
-
-Try to check if lenient citation check need local search tool.
-
-
-explain `VERIFIED` for user
-
-
-AGENTS.md what to do when something is wrong.
