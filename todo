@@ -37,3 +37,6 @@ Tell the agent/user that using this is like learning a new programming language:
 Clearly explain to the AI the rationale behind each change and how far a single change reaches, and remind it to watch the verifier cost.
 
 Adjust the rendered graph and make it beautiful.
+
+
+Try to check if lenient citation check need local search tool.

@@ -87,12 +87,16 @@ that points any host at the skill, so no other environment variables are needed.
 
 ### 2. Start a project and state your first goal
 
+If the first set up the project successfully, this step is done and you can skip it — you'll see
+a `.qmd-prover/` folder (and a `workspace/` folder for your development) appear in the project. If
+those don't show up, the agent likely ran into an issue; ask it to do the following.
+
 Go to the folder where your mathematics will live and say:
 
 > **"Initialize qmd-prover here, then state my main theorem: _every finite integral domain is a
 > field_."**
 
-The agent runs `init` (which writes a project contract into `AGENTS.md`), scaffolds
+The agent runs `init`, which writes an `AGENTS.md` and a
 `.qmd-prover/config.yml`, and records your goal as a **protected** result — something like:
 
 ```markdown
@@ -109,56 +113,97 @@ No proof is needed yet; a goal with no proof is simply *open*.
 > project and tell me what's verified and what's still blocked."**
 
 The agent writes definitions, lemmas, and the proof into files under `workspace/`, and after each
-coherent edit runs the narrowest check it needs:
+coherent edit it inspects the narrowest scope it needs — a single fact, a file, or the whole
+project. It repairs anything the mechanical layer flags and reports back in natural language: what is
+verified, what is still open, and what is blocked. You never touch the commands.
 
-```bash
-node "$QMD_PROVER" inspect fact @thm-main-finite-domain-field
-node "$QMD_PROVER" inspect project
-```
+### 4. See it rendered (optional)
 
-It repairs anything the mechanical layer flags and reports back in natural language. You never
-memorize the commands.
+> **"Render the project so I can browse it."**
 
-### 4. Turn on independent verification (optional)
+Rendering turns your development into something you can read and navigate. It happens in two stages,
+and the agent runs both:
 
-Machine checks run with no verifier — proofs just stay `not-run`. To have proofs independently
-reviewed, tell the agent which verifier you have:
+1. **qmd-prover builds the navigation.** It compiles your mathematics and writes fresh status data
+   and a **dependency-graph diagram** — an SVG in which every definition, lemma, and theorem is a
+   node, each citation is an edge, and each node is marked by state (verified, open, or blocked).
+   These go into `.qmd-prover/generated/`. If the project still has structural errors, this stage
+   stops first, so you never publish a broken graph.
+2. **Quarto produces the document.** Your `.qmd` files, together with that generated navigation, are
+   rendered by [Quarto](https://quarto.org/) into a polished website or PDF — theorem numbering,
+   cross-references, and the dependency graph included. This stage needs Quarto installed (see
+   [Requirements](#requirements)).
 
-> **"Use Codex as the verifier — I'm logged in — then re-inspect and show me what actually
-> verified."**
-
-The agent sets the backend in `.qmd-prover/config.yml`:
-
-```yaml
-verification:
-  backend: codex   # or: claude
-  effort: high     # low | medium | high | xhigh | max
-```
-
-Re-inspecting now runs the verifier, and each proof moves from `not-run` to `verified`, `blocked`,
-or `disproved`. **Heads up on cost:** every fresh check calls a real model, and higher `effort` or
-`strict` settings spend more tokens and time.
-
-### 5. Render (optional)
-
-> **"Render the theorem navigation."**
-
-The agent runs `render` to refresh generated status and a dependency-graph SVG. For final HTML or
-PDF, run ordinary `quarto render` (needs Quarto).
+The result is a browsable version of your project: each result linked to its proof and to everything
+it depends on, so a reader can see at a glance what is established and what still rests on open work.
+You just ask the agent to render — it runs both stages for you.
 
 ---
 
 ## How you actually use it, day to day
 
-- **Talk; don't type commands.** You describe intent; the agent inspects and translates the results
-  back into plain language.
-- **Small steps.** State → prove a little → inspect → repair → repeat. `inspect` is your debugger.
-- **Trust only what's globally verified.** A result is safe to build on only when its whole
-  dependency chain checks out. The agent will tell you when something is still blocked.
-- **Your statements are safe.** Main-goal statements are locked; the agent won't change them without
-  asking.
-- **Watch verifier cost.** Independent checks call a real model. Ask the agent to check narrowly
-  (one fact) while iterating, and do full-project verification when you want the whole picture.
+- **Talk; don't type commands.** You describe what you want in plain English — "prove this",
+  "where is it stuck?", "tighten that lemma" — and the agent picks the right operations, runs them,
+  and translates the results back into plain language. You never memorize a command or read raw JSON.
+- **Work in small, checkable steps.** The rhythm is: state something → prove a little → have it
+  inspected → fix what's flagged → repeat. Inspection is the debugger, and it's cheap, so lean on it
+  often instead of writing a whole development and checking only at the end. A "step" can be one
+  lemma or a whole file — size it to the argument, not to an arbitrary minimum.
+- **Ask for the state whenever you want.** At any point you can ask "what's proved, what's open,
+  what's blocked?" and the agent inspects the project and gives you the current picture: which goals
+  are done, which results are still on the frontier, and exactly what is holding each blocked result
+  back.
+- **Trust only what's globally verified.** A result is safe to build on only when its *entire*
+  dependency chain checks out — its own proof plus every result it cites, all the way down. A proof
+  that looks fine on its own but rests on an unproved lemma is *blocked*, not done, and the agent
+  will say so rather than let it quietly become a premise.
+- **Your statements are safe.** The statements of your main goals are locked: the agent can prove,
+  cite, and build on them, but it can't silently reword or weaken what you asked it to establish. If
+  it ever concludes a goal is actually false, it won't touch your statement — it shows you a specific
+  counterexample and lets you decide what to do.
+- **Dead ends are kept, not deleted.** A failed approach is marked as rejected and set aside — still
+  visible for later, but never silently reused as a premise. Nothing you explore is lost, and nothing
+  broken sneaks back into the argument.
+- **Watch verifier cost.** Independent verification calls a real model, so it spends tokens and time
+  — more at higher effort or stricter settings. While iterating, ask the agent to check narrowly (one
+  fact or file); run a full-project verification when you want the whole picture or before you rely
+  on a result.
+
+---
+
+## Configuration and commands
+
+**You normally never run a command or edit a config file yourself — you just ask the agent.** This
+section exists only so you know what it is doing on your behalf, and what you can ask it to change.
+
+**The commands.** Everything runs through a single tool the agent calls in the background: `init`
+prepares the project, `inspect` compiles and checks it, `render` builds the navigation, and a family
+of dependency queries explores the graph. You speak in English; the agent chooses and runs the right
+command and turns the result back into plain language. The complete list is in the
+[CLI reference](skills/qmd-prover/references/cli.md).
+
+**The configuration file.** Project settings live in `.qmd-prover/config.yml`, created on first use
+with safe defaults. The two things you might ask the agent to adjust:
+
+- **Independent verification.** Out of the box there is no AI verifier, so proofs are
+  structure-checked but stay unverified. To have each proof independently reviewed, tell the agent
+  which CLI you have logged in — Claude or Codex — and it sets the backend:
+
+  ```yaml
+  verification:
+    backend: codex   # or: claude   (none = structure checks only)
+    effort: high     # low | medium | high | xhigh | max
+  ```
+
+  Proofs then move from `not-run` to `verified`, `blocked`, or `disproved`. **Heads up on cost:**
+  every fresh check calls a real model, and higher `effort` (or stricter settings) spends more
+  tokens and time.
+- **Tool paths.** If Pandoc or Quarto is not on your `PATH`, the agent records its location here so
+  every command can find it.
+
+Every setting is documented in the
+[configuration reference](skills/qmd-prover/references/config.md) — but again, you ask the agent to
+change it rather than editing it yourself.
 
 ---
 
