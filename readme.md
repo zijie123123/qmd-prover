@@ -56,7 +56,7 @@ happening, but you type English, not shell.
 
 Open Codex or Claude Code in any folder and say:
 
-> **"Install the qmd-prover skill from `github.com/powergiant/qmd-prover`. Check that Node, Pandoc,
+> **"Install the qmd-prover skill from `github.com/powergiant/qmd-prover`. Before installation, please first read the `readme.md` carefully. Check that Node, Pandoc,
 > and Quarto are set up, then get it ready."**
 
 The agent follows the recipe in [For agents: installing from GitHub](#for-agents-installing-from-github)
