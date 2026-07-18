@@ -3,7 +3,6 @@ import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import test from 'node:test';
-import { HELP_COMMANDS } from '../skills/qmd-prover/src/lib/application/help.js';
 import { initializeProject } from '../skills/qmd-prover/src/lib/application/project.js';
 import { readExternalPolicy } from '../skills/qmd-prover/src/lib/infrastructure/external.js';
 import { bareProject, fakePandoc, here, must, proof, result, verifier } from './support.js';
@@ -199,14 +198,16 @@ test('dispatcher provides help for every command group and leaf', async () => {
   assert.equal(rootHelp.error, null);
   assert.match(rootHelp.stdout, /^Usage:\n/);
   assert.match(rootHelp.stdout, /Commands:\n  doctor[\s\S]*  init\n    Initialize or safely adopt a qmd-prover project\.\n  inspect\n  dependency/);
-  assert.ok(HELP_COMMANDS.every((item) => (['description', 'arguments', 'options', 'examples', 'notes'] as const).every((section) => Array.isArray(item.sections[section]))));
-  const leaves = HELP_COMMANDS.filter((item) => !HELP_COMMANDS.some((candidate) => candidate.path.startsWith(`${item.path} `)));
-  assert.ok(leaves.every((item) => item.path === '' || item.sections.description.length > 0), 'every leaf command needs a purpose in help');
+  // Every leaf command (one with no further sub-command) documents a purpose under Description;
+  // every group instead lists its sub-commands under Commands.
+  const leaves = commands.filter((item) => !commands.some((candidate) => candidate.startsWith(`${item} `)));
   for (const command of commands) {
     const result = await run([...command.split(' '), 'help']);
     assert.equal(result.error, null, `${command} help failed: ${result.stderr}`);
     assert.match(result.stdout, /^Usage:\n/);
     assert.match(result.stdout, new RegExp(`qmd-prover ${command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    if (leaves.includes(command)) assert.match(result.stdout, /\nDescription:\n/, `${command} help needs a purpose`);
+    else assert.match(result.stdout, /\nCommands:\n/, `${command} group help needs a command list`);
   }
   const inspectHelp = await run(['inspect', 'help']);
   assert.match(inspectHelp.stdout, /Commands:[\s\S]*  project[\s\S]*  fact[\s\S]*  path/);
