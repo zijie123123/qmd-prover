@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { atomicJson, atomicWrite, AUX } from '../../core/infrastructure/files.js';
+import { atomicJson, atomicWrite } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { quartoCommand } from '../../core/infrastructure/config.js';
 import { executableAvailable } from '../../core/infrastructure/executables.js';
 import { resolveProjectSnapshot } from '../../core/graph/snapshot.js';
@@ -80,13 +81,13 @@ export async function renderProject(root = process.cwd(), options = {}) {
             artifacts_written: false,
             remediation: 'Repair the diagnostics and rerun render, or explicitly use --allow-errors to generate diagnostic artifacts.'
         };
-    const output = path.join(root, AUX, 'generated');
-    const reportDir = path.join(root, AUX, 'reports');
-    await Promise.all([mkdir(output, { recursive: true }), mkdir(reportDir, { recursive: true })]);
+    const layout = auxLayout(root);
+    const output = layout.generated;
+    await Promise.all([mkdir(output, { recursive: true }), mkdir(layout.reports, { recursive: true })]);
     await Promise.all([
         atomicWrite(path.join(output, 'proof-status.qmd'), statusQmd(compilation)),
         atomicWrite(path.join(output, 'dependencies.svg'), graphSvg(compilation.graph)),
-        atomicJson(path.join(reportDir, 'status.json'), { summary: compilation.summary, diagnostics: compilation.diagnostics })
+        atomicJson(layout.reportStatus, { summary: compilation.summary, diagnostics: compilation.diagnostics })
     ]);
     const quartoCmd = quartoCommand(compiled.config);
     const quartoAvailable = await executableAvailable(quartoCmd);
@@ -97,7 +98,7 @@ export async function renderProject(root = process.cwd(), options = {}) {
         status: compilation.ok ? 'prepared' : 'prepared-with-errors',
         output: path.relative(root, path.join(output, 'proof-status.qmd')),
         graph_svg: path.relative(root, path.join(output, 'dependencies.svg')),
-        report: path.relative(root, path.join(reportDir, 'status.json')),
+        report: path.relative(root, layout.reportStatus),
         ...(quartoAvailable ? { render_command: `${quartoCmd} render` } : {}),
         quarto: {
             available: quartoAvailable,

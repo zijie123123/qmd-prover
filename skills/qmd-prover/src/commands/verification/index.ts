@@ -1,13 +1,14 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, readJson } from '../../core/infrastructure/files.js';
+import { readJson } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { SCHEMA_VERSION, hasErrorCode } from '../../core/shared/core.js';
 import type { Diagnostic, JsonObject, OperationResult } from '../../core/shared/types.js';
 
 async function verificationRecords(root: string): Promise<Array<{ file: string; record: JsonObject }>> {
-  const directory = path.join(path.resolve(root), AUX, 'verification');
+  const layout = auxLayout(path.resolve(root));
   const records: Array<{ file: string; record: JsonObject }> = [];
-  for (const selected of [directory, path.join(directory, 'checks')]) {
+  for (const selected of [layout.verification, layout.checks]) {
     let entries: string[] = [];
     try { entries = await readdir(selected); } catch (error) { if (!hasErrorCode(error, 'ENOENT')) throw error; }
     for (const name of entries.filter((entry) => entry.endsWith('.json') && entry !== 'index.json').sort()) {

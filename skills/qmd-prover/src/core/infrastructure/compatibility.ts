@@ -1,7 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { AUX, readJson } from './files.js';
+import { readJson } from './files.js';
+import { auxLayout } from './aux.js';
 import { readCanonicalContract, contractVersionIn } from './contract.js';
 import { SCHEMA_VERSION, asRecord, asString } from '../shared/core.js';
 import { VERIFIER_PROTOCOL_VERSION } from '../verification/protocol.js';
@@ -60,7 +61,7 @@ export async function engineVersions(): Promise<EngineVersions> {
 
 async function schemaOnDisk(root: string): Promise<number | null> {
   try {
-    const pointer = await readJson<{ schema_version?: number }>(path.join(root, AUX, 'graphs', 'latest.json'));
+    const pointer = await readJson<{ schema_version?: number }>(auxLayout(root).graphsLatest);
     return typeof pointer.schema_version === 'number' ? pointer.schema_version : null;
   } catch { return null; }
 }
@@ -73,7 +74,7 @@ async function contractInProject(root: string): Promise<number | null> {
 
 async function verifierProtocolOnDisk(root: string): Promise<number | null> {
   try {
-    const directory = path.join(root, AUX, 'verification', 'checks');
+    const directory = auxLayout(root).checks;
     const entry = (await readdir(directory)).find((name) => name.endsWith('.json'));
     if (!entry) return null;
     const record = await readJson<UnknownRecord>(path.join(directory, entry));

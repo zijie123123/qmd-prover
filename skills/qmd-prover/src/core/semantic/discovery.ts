@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, relativePosix } from '../infrastructure/files.js';
+import { relativePosix } from '../infrastructure/files.js';
+import { AUX } from '../infrastructure/aux.js';
 import { hasErrorCode, uniqueSorted } from '../shared/core.js';
 import type { QmdProverConfig } from '../infrastructure/config.js';
 

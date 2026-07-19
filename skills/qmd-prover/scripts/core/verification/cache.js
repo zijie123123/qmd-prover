@@ -1,10 +1,9 @@
-import path from 'node:path';
-import { AUX, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { auxLayout } from '../infrastructure/aux.js';
 import { verificationOutcome, verifierErrorDetails } from './protocol.js';
 import { asErrorLike, asRecord, asStringArray, hasErrorCode, isRecord } from '../shared/core.js';
 export function cacheLocation(root, key) {
-    const digest = key.replace(/^sha256:/, '');
-    const file = path.join(root, AUX, 'verification', 'checks', `${digest}.json`);
+    const file = auxLayout(root).check(key);
     return { relative: relativePosix(root, file), file };
 }
 function verifierReport(value) {

@@ -1,6 +1,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, cleanId, readJson, relativePosix } from '../../core/infrastructure/files.js';
+import { cleanId, readJson, relativePosix } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { SCHEMA_VERSION, byId, hasErrorCode } from '../../core/shared/core.js';
 import { adjacency, blockerPaths, subgraph, traverse } from '../../core/graph/algorithms.js';
 import { deriveGraphFindings } from '../../core/graph/findings.js';
@@ -55,10 +56,10 @@ function tally(facts, key) {
 }
 /** Past verifier decisions recorded for one fact, ordered oldest-first, for `inspect fact`. */
 async function history(root, id) {
-    const directory = path.join(root, AUX, 'verification');
+    const layout = auxLayout(root);
     try {
         const records = [];
-        for (const selected of [directory, path.join(directory, 'checks')]) {
+        for (const selected of [layout.verification, layout.checks]) {
             let entries = [];
             try {
                 entries = await readdir(selected);

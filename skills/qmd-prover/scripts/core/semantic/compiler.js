@@ -1,6 +1,7 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, atomicJson, atomicWrite, cleanId, exists, readJson, relativePosix, scaffoldAuxGitignore, sha256, stableJson } from '../infrastructure/files.js';
+import { atomicJson, cleanId, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { auxLayout, scaffoldAux } from '../infrastructure/aux.js';
 import { loadConfig, pandocCommand } from '../infrastructure/config.js';
 import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
@@ -141,65 +142,10 @@ export function factStatus(result, marker = result.marker) {
         return 'revoked';
     return result.kind === 'definition' || result.proof_present ? 'candidate' : 'open';
 }
-async function initializeAux(root) {
-    const directories = ['verification', 'reports', 'graphs', 'generated', 'cache'];
-    await Promise.all(directories.map((directory) => mkdir(path.join(root, AUX, directory), { recursive: true })));
-    const configFile = path.join(root, AUX, 'config.yml');
-    if (!await exists(configFile))
-        await atomicWrite(configFile, [
-            `# Comments must be on their own line, not after a value.`,
-            ``,
-            `project:`,
-            `  # exclude: extra path patterns to skip during discovery (.qmd-prover, .git, node_modules,`,
-            `  # the render output-dir, and .gitignore entries are always skipped).`,
-            `  exclude: [.qmd-prover]`,
-            ``,
-            `goals:`,
-            `  # id-prefix: explicit IDs starting with this become protected main goals — locked statement,`,
-            `  # and each must carry both .theorem and .goal.`,
-            `  id-prefix: thm-main-`,
-            `  protect-statements: true`,
-            ``,
-            `semantic:`,
-            `  # wildcard-imports: when false, use: ['*'] is a WILDCARD_IMPORT error; import each ID by name.`,
-            `  wildcard-imports: false`,
-            ``,
-            `tools:`,
-            `  # Optional explicit paths, used when the tool is not on PATH.`,
-            `  pandoc: ""`,
-            `  quarto: ""`,
-            ``,
-            `verification:`,
-            `  # backend selects the independent verifier: none | claude | codex | command.`,
-            `  # none = machine checks only; no proof is ever verified. Set claude or codex to check proofs.`,
-            `  backend: none`,
-            `  # executable: for claude/codex, path to the CLI (defaults to the backend name on PATH).`,
-            `  executable: ""`,
-            `  # model: concrete model id forwarded as --model, or "" to let the CLI use its own default.`,
-            `  model: ""`,
-            `  # effort: reasoning effort forwarded to the backend: low | medium | high | xhigh | max.`,
-            `  effort: high`,
-            `  # fresh-context: run each check in an isolated context. Changing it re-verifies every fact.`,
-            `  fresh-context: true`,
-            `  # citations: how strictly an uncited non-standard term is flagged: lenient | standard | strict.`,
-            `  citations: standard`,
-            `  # rigor: how completely a valid step must be spelled out (strict also makes gaps block): lenient | standard | strict.`,
-            `  rigor: standard`,
-            `  # tools: capabilities the verifier is TOLD (in the prompt) it may use; any of [file-read, web-search, code].`,
-            `  tools: []`,
-            ``,
-            `render:`,
-            `  graph-engine: builtin`,
-            `  # output-dir: where render writes generated inputs; created on demand, always excluded.`,
-            `  output-dir: .qmd-prover/generated`,
-            ``
-        ].join('\n'));
-    await scaffoldAuxGitignore(root);
-}
 export async function compileProject(root = process.cwd(), options = {}) {
     root = path.resolve(root);
     if (options.write !== false)
-        await initializeAux(root);
+        await scaffoldAux(root);
     const config = await loadConfig(root);
     const pandoc = pandocCommand(config, options.pandoc);
     const exclusions = await discoveryExclusions(root, config);
@@ -455,7 +401,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
     // errors elsewhere in the project must not delay protection — and any later divergence
     // from a locked baseline is a hard error. Runs after every diagnostic is known so the
     // per-goal clean check sees the complete error set.
-    const locksFile = path.join(root, AUX, 'statement-locks.json');
+    const locksFile = auxLayout(root).statementLocks;
     const locks = await readJson(locksFile, {});
     const protectStatements = options.protectStatements ?? !options.files;
     let locksChanged = false;
@@ -525,7 +471,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
     // Snapshot publishing is owned by the inspection layer; the compiler persists only
     // diagnostics and newly established statement locks when invoked in write mode.
     if (options.write !== false) {
-        await atomicJson(path.join(root, AUX, 'diagnostics.json'), diagnostics);
+        await atomicJson(auxLayout(root).diagnostics, diagnostics);
         if (complete && locksChanged)
             await atomicJson(locksFile, locks);
     }

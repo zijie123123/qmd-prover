@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { AUX, exists, relativePosix, sha256 } from './files.js';
+import { exists, relativePosix, sha256 } from './files.js';
+import { auxLayout } from './aux.js';
 import type { JsonObject } from '../shared/types.js';
 
 export interface ExternalPolicy extends JsonObject {
@@ -14,7 +14,7 @@ export function externalPolicyHash(policy: JsonObject): string {
 }
 
 export async function readExternalPolicy(root: string): Promise<ExternalPolicy> {
-  const file = path.join(root, AUX, '.external.qmd');
+  const file = auxLayout(root).external;
   if (!await exists(file)) return { path: relativePosix(root, file), mode: 'unrestricted', content: null };
   const content = await readFile(file, 'utf8');
   return { path: relativePosix(root, file), mode: content.trim() ? 'declared' : 'none', content };

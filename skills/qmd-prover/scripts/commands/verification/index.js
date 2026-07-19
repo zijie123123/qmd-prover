@@ -1,11 +1,12 @@
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, readJson } from '../../core/infrastructure/files.js';
+import { readJson } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { SCHEMA_VERSION, hasErrorCode } from '../../core/shared/core.js';
 async function verificationRecords(root) {
-    const directory = path.join(path.resolve(root), AUX, 'verification');
+    const layout = auxLayout(path.resolve(root));
     const records = [];
-    for (const selected of [directory, path.join(directory, 'checks')]) {
+    for (const selected of [layout.verification, layout.checks]) {
         let entries = [];
         try {
             entries = await readdir(selected);

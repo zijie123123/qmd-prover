@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { AUX, atomicJson, readJson, relativePosix, scaffoldAuxGitignore, sha256, stableJson } from '../infrastructure/files.js';
+import { atomicJson, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
+import { auxLayout, scaffoldAuxGitignore } from '../infrastructure/aux.js';
 import { SCHEMA_VERSION } from '../shared/core.js';
 import type { Diagnostic, RuntimeOptions } from '../shared/types.js';
 import type { Compilation } from '../semantic/compiler.js';
@@ -122,15 +123,15 @@ export async function publishProjectSnapshot(
   if (options.write === false || !compilation.complete) return false;
   const root = compilation.root;
   await scaffoldAuxGitignore(root);
-  const graphsRoot = path.join(root, AUX, 'graphs');
-  const snapshotFile = path.join(graphsRoot, `${snapshot.snapshot_id.replace(/^sha256:/, '')}.json`);
+  const layout = auxLayout(root);
+  const snapshotFile = layout.snapshot(snapshot.snapshot_id);
   await Promise.all([
     atomicJson(snapshotFile, snapshot),
-    atomicJson(path.join(root, AUX, 'manifest.json'), snapshot.manifest),
-    atomicJson(path.join(root, AUX, 'graph.json'), snapshot.graph),
-    atomicJson(path.join(root, AUX, 'diagnostics.json'), snapshot.diagnostics)
+    atomicJson(layout.manifest, snapshot.manifest),
+    atomicJson(layout.graph, snapshot.graph),
+    atomicJson(layout.diagnostics, snapshot.diagnostics)
   ]);
-  await atomicJson(path.join(graphsRoot, 'latest.json'), {
+  await atomicJson(layout.graphsLatest, {
     schema_version: SCHEMA_VERSION,
     snapshot_id: snapshot.snapshot_id,
     file: relativePosix(root, snapshotFile)
@@ -142,10 +143,9 @@ export async function publishProjectSnapshot(
 export async function readPublishedSnapshot(compilation: Compilation, contextHash: string): Promise<ProjectSnapshot | null> {
   try {
     const root = compilation.root;
-    const pointer = await readJson<{ schema_version: number; snapshot_id: string; file: string }>(
-      path.join(root, AUX, 'graphs', 'latest.json')
-    );
-    const graphsRoot = path.join(root, AUX, 'graphs');
+    const layout = auxLayout(root);
+    const pointer = await readJson<{ schema_version: number; snapshot_id: string; file: string }>(layout.graphsLatest);
+    const graphsRoot = layout.graphs;
     const snapshotFile = path.resolve(root, pointer.file);
     if (!snapshotFile.startsWith(`${graphsRoot}${path.sep}`)) return null;
     const saved = await readJson<ProjectSnapshot>(snapshotFile);

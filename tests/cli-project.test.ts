@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import test from 'node:test';
@@ -27,7 +27,15 @@ test('project initialization inventories external policy, adopts, preserves, app
   assert.equal(created.workspace_root, undefined);
   await assert.rejects(stat(path.join(fresh, '.qmd-prover', 'workspaces')), { code: 'ENOENT' });
   assert.match(await readFile(path.join(fresh, 'AGENTS.md'), 'utf8'), /## Project-specific additions/);
+  // init materializes the authored state files, but no derived folders yet.
+  assert.equal((await stat(path.join(fresh, '.qmd-prover', 'config.yml'))).isFile(), true);
+  assert.equal((await stat(path.join(fresh, '.qmd-prover', '.gitignore'))).isFile(), true);
+  await assert.rejects(stat(path.join(fresh, '.qmd-prover', 'graphs')), { code: 'ENOENT' });
+  // Re-initialization is idempotent, and self-heals a config.yml deleted from an
+  // already-initialized project even though AGENTS.md needs no change.
+  await rm(path.join(fresh, '.qmd-prover', 'config.yml'));
   assert.equal((await initializeProject(fresh)).status, 'already-initialized');
+  assert.equal((await stat(path.join(fresh, '.qmd-prover', 'config.yml'))).isFile(), true);
 
   const emptyPolicy = await bareProject();
   await writeFile(path.join(emptyPolicy, 'AGENTS.md'), '  \n');

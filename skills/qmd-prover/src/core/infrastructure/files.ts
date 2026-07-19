@@ -1,10 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { asRecord, AUX, hasErrorCode } from '../shared/core.js';
-import type { JsonObject } from '../shared/types.js';
-
-export { AUX } from '../shared/core.js';
+import { asRecord, hasErrorCode } from '../shared/core.js';
 
 export function sha256(value: string | NodeJS.ArrayBufferView): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
@@ -46,55 +43,6 @@ export async function atomicWrite(file: string, data: string | NodeJS.ArrayBuffe
 
 export async function atomicJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, stableJson(value));
-}
-
-/**
- * Write `.qmd-prover/.gitignore` once, the first time any tool state lands there.
- * It version-controls the authored inputs (config, external basis, statement-lock
- * baseline) and ignores everything qmd-prover regenerates. Never overwritten, so a
- * project may customize it (e.g. share the verifier cache).
- */
-export async function scaffoldAuxGitignore(root: string): Promise<void> {
-  const file = path.join(root, AUX, '.gitignore');
-  if (await exists(file)) return;
-  await atomicWrite(file, [
-    '# qmd-prover writes derived tool state here. Track only the authored inputs.',
-    '/*',
-    '!/.gitignore',
-    '!/config.yml',
-    '!/.external.qmd',
-    '!/statement-locks.json',
-    ''
-  ].join('\n'));
-}
-
-export async function appendEvent(root: string, event: JsonObject): Promise<void> {
-  const file = path.join(root, AUX, 'events.jsonl');
-  await mkdir(path.dirname(file), { recursive: true });
-  const handle = await open(file, 'a');
-  try {
-    await handle.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
-  } finally {
-    await handle.close();
-  }
-}
-
-export async function withWriteLock<T>(root: string, operation: () => Promise<T>, { timeoutMs = 5000 }: { timeoutMs?: number } = {}): Promise<T> {
-  const lock = path.join(root, AUX, 'cache', 'write.lock');
-  await mkdir(path.dirname(lock), { recursive: true });
-  const started = Date.now();
-  while (true) {
-    try {
-      await mkdir(lock);
-      await atomicJson(path.join(lock, 'owner.json'), { pid: process.pid, acquired_at: new Date().toISOString() });
-      break;
-    } catch (error) {
-      if (!hasErrorCode(error, 'EEXIST')) throw error;
-      if (Date.now() - started >= timeoutMs) throw new Error(`Timed out waiting for canonical write lock: ${lock}`);
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-  }
-  try { return await operation(); } finally { await rm(lock, { recursive: true, force: true }); }
 }
 
 export function relativePosix(root: string, file: string): string {

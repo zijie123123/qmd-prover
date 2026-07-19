@@ -1,7 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { readExternalPolicy } from '../../core/infrastructure/external.js';
-import { atomicWrite, exists, relativePosix, withWriteLock } from '../../core/infrastructure/files.js';
+import { atomicWrite, exists, relativePosix } from '../../core/infrastructure/files.js';
+import { scaffoldAux, withWriteLock } from '../../core/infrastructure/aux.js';
 import { readCanonicalContract } from '../../core/infrastructure/contract.js';
 import { SCHEMA_VERSION } from '../../core/shared/core.js';
 const START = '<!-- qmd-prover-contract:start version=';
@@ -77,21 +78,27 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
         }
     }
     return withWriteLock(root, async () => {
+        const outcome = await resolveContract();
+        // Materialize the state directory for any initialized project, decoupled from
+        // whether AGENTS.md needed a write: `ok` covers created/adopted/appended/
+        // synchronized *and* already-initialized, so a project missing config.yml gets
+        // it back here even when the contract was already current. The gated -required
+        // and malformed outcomes are not ok, so a project awaiting the user's decision
+        // is never mutated.
+        if (outcome.ok)
+            await scaffoldAux(root);
+        return outcome;
+    });
+    async function resolveContract() {
         const policyExists = await exists(policyFile);
         if (!policyExists) {
             await atomicWrite(policyFile, projectPolicy(canonical.block));
-            if (projectMaterialExists) {
-                return result(root, canonical.version, 'adopted', { existing });
-            }
-            return result(root, canonical.version, 'created', { existing });
+            return result(root, canonical.version, projectMaterialExists ? 'adopted' : 'created', { existing });
         }
         const source = await readFile(policyFile, 'utf8');
         if (!source.trim()) {
             await atomicWrite(policyFile, projectPolicy(canonical.block));
-            if (projectMaterialExists) {
-                return result(root, canonical.version, 'adopted', { existing });
-            }
-            return result(root, canonical.version, 'created', { existing });
+            return result(root, canonical.version, projectMaterialExists ? 'adopted' : 'created', { existing });
         }
         const matches = [...source.matchAll(BLOCK)];
         const starts = source.split(START).length - 1;
@@ -129,5 +136,5 @@ export async function initializeProject(root, { adoptExisting = false, appendCon
             message: 'AGENTS.md contains a different qmd-prover managed block.',
             suggested_command: 'qmd-prover init --sync-contract'
         });
-    });
+    }
 }

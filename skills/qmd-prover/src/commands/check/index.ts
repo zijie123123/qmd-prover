@@ -3,7 +3,8 @@ import path from 'node:path';
 import { compileProject } from '../../core/semantic/compiler.js';
 import { resolveProjectSnapshot } from '../../core/graph/snapshot.js';
 import { externalPolicyHash } from '../../core/infrastructure/external.js';
-import { AUX, readJson, stableJson } from '../../core/infrastructure/files.js';
+import { readJson, stableJson } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { SCHEMA_VERSION, hasErrorCode, isRecord } from '../../core/shared/core.js';
 import { checkerContract, verificationContext, verificationOutcome } from '../../core/verification/protocol.js';
 import type { JsonObject, RuntimeOptions } from '../../core/shared/types.js';
@@ -61,7 +62,7 @@ export async function checkStaleness(root = process.cwd(), options: RuntimeOptio
     candidatesByTarget.set(target, list);
   };
 
-  for (const file of await jsonFiles(path.join(root, AUX, 'verification', 'checks'))) {
+  for (const file of await jsonFiles(auxLayout(root).checks)) {
     let record: JsonObject;
     try { record = await readJson<JsonObject>(file); }
     catch { addCandidate(path.basename(file, '.json'), { reasons: new Set(['cache-invalid']), matchesSource: false, verifiedAt: '' }); continue; }

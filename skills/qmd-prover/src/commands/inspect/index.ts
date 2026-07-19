@@ -1,6 +1,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { AUX, cleanId, readJson, relativePosix } from '../../core/infrastructure/files.js';
+import { cleanId, readJson, relativePosix } from '../../core/infrastructure/files.js';
+import { auxLayout } from '../../core/infrastructure/aux.js';
 import { SCHEMA_VERSION, byId, hasErrorCode } from '../../core/shared/core.js';
 import { adjacency, blockerPaths, subgraph, traverse } from '../../core/graph/algorithms.js';
 import { deriveGraphFindings } from '../../core/graph/findings.js';
@@ -101,10 +102,10 @@ function tally(facts: Array<{ kind?: string; status?: string }>, key: 'kind' | '
 
 /** Past verifier decisions recorded for one fact, ordered oldest-first, for `inspect fact`. */
 async function history(root: string, id: string): Promise<JsonObject[]> {
-  const directory = path.join(root, AUX, 'verification');
+  const layout = auxLayout(root);
   try {
     const records: JsonObject[] = [];
-    for (const selected of [directory, path.join(directory, 'checks')]) {
+    for (const selected of [layout.verification, layout.checks]) {
       let entries: string[] = [];
       try { entries = await readdir(selected); } catch (error) { if (!hasErrorCode(error, 'ENOENT')) throw error; }
       for (const name of entries.filter((entry) => entry.endsWith('.json')).sort()) {
