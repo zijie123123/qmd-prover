@@ -162,6 +162,32 @@ export function factStatus(result: SemanticResult, marker = result.marker): stri
 }
 
 export async function compileProject(root = process.cwd(), options: CompilerOptions = {}): Promise<Compilation> {
+  // Data-flow overview. Each stage is an IIFE that returns its complete result plus its own
+  // diagnostics; the larger stages use the same trick internally (sub-stages in brackets).
+  //
+  //   project                                             { root, config, pandoc, discovered }
+  //     |
+  //     v
+  //   parsed         [ parsedProof | parsedResult ]       { files, results, proofs, diagnostics }
+  //     |
+  //     v
+  //   indexed                                             { byId, idCounts, byExport, proofsByTarget, diagnostics }
+  //     |
+  //     v
+  //   linked         [ overlay | imports ]             --.  { availableByFile, importAdjacency, diagnostics }
+  //     |                                                |  overlay + analyzed enrich the
+  //     v                                                |  parse-ordered `results` in place
+  //   analyzed       [ references | cycles | statuses ]--'  { dependencyCycles, diagnostics }
+  //     |
+  //     v
+  //   resolvedDiagnostics = parsed + indexed + linked + analyzed diagnostics (execution order)
+  //     |
+  //     v
+  //   locked         (reads resolvedDiagnostics for the per-goal clean check)  { locks, locksChanged, diagnostics }
+  //     |
+  //     v
+  //   output         [ graph -> manifest ], on sorted copies of results/files  -> Compilation
+  //
   // Resolve the environment: where we are, how we read sources, and which files are in scope.
   const project = await (async () => {
     const resolvedRoot = path.resolve(root);
