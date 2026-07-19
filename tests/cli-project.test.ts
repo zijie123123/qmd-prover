@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { initializeProject } from '../skills/qmd-prover/src/commands/init/index.js';
 import { readExternalPolicy } from '../skills/qmd-prover/src/core/infrastructure/external.js';
+import { DEPENDENCY_OPERATIONS } from '../skills/qmd-prover/src/cli/parse.js';
 import { bareProject, fakePandoc, here, must, proof, result, verifier } from './support.js';
 
 interface CliError extends Error { code?: string | number | null }
@@ -189,15 +190,18 @@ test('dispatcher preserves JSON commands over the unified project', async () => 
 test('dispatcher provides help for every command group and leaf', async () => {
   const cli = path.join(here, '..', 'skills', 'qmd-prover', 'scripts', 'qmd-prover.js');
   const run = (args: string[]) => new Promise<CliProcessResult>((resolve) => execFile(process.execPath, [cli, ...args], (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+  // Derive every `dependency …` command path from the parser's operation table so
+  // a new operation cannot be added without a matching help node; each multi-word
+  // operation also contributes its intermediate group (e.g. `dependency unused`).
+  const dependencyLeaves = DEPENDENCY_OPERATIONS.map((sequence) => ['dependency', ...sequence].join(' '));
+  const dependencyGroups = ['dependency', ...new Set(
+    DEPENDENCY_OPERATIONS.filter((sequence) => sequence.length > 1).map((sequence) => `dependency ${sequence[0]}`)
+  )];
   const commands = [
     'doctor',
     'init',
     'inspect', 'inspect project', 'inspect fact', 'inspect path',
-    'dependency', 'dependency dependencies', 'dependency reverse', 'dependency reverse dependencies',
-    'dependency impact', 'dependency frontier', 'dependency path', 'dependency alternative', 'dependency alternative paths',
-    'dependency cycles', 'dependency findings', 'dependency unused', 'dependency unused imports', 'dependency unused exports',
-    'dependency isolated', 'dependency unreachable', 'dependency ready',
-    'dependency reused', 'dependency search',
+    ...dependencyGroups, ...dependencyLeaves,
     'check', 'check staleness',
     'verification', 'verification list', 'verification show',
     'render'

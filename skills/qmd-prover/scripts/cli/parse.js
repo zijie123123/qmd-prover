@@ -54,7 +54,10 @@ function optionValues(args, names, flags = new Set()) {
 // longest matching token sequence wins, and a directly typed hyphenated form
 // (e.g. `reverse-dependencies`) is rejected as retired.
 // ---------------------------------------------------------------------------
-const DEPENDENCY_OPERATIONS = [
+// The command-name tokens for every `dependency` operation, longest sequence
+// winning during resolution. Exported so the help-coverage test can derive the
+// documented command surface from this single source rather than restating it.
+export const DEPENDENCY_OPERATIONS = [
     ['dependencies'], ['reverse', 'dependencies'], ['impact'], ['frontier'], ['path'],
     ['alternative', 'paths'], ['cycles'], ['findings'], ['unused', 'imports'], ['unused', 'exports'],
     ['isolated'], ['unreachable'], ['ready'], ['reused'], ['search']

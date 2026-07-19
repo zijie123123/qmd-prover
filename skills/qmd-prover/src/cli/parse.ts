@@ -125,12 +125,30 @@ function optionValues(args: string[], names: Set<string>, flags = new Set<string
 // (e.g. `reverse-dependencies`) is rejected as retired.
 // ---------------------------------------------------------------------------
 
-const DEPENDENCY_OPERATIONS: readonly (readonly string[])[] = [
+// The command-name tokens for every `dependency` operation, longest sequence
+// winning during resolution. Exported so the help-coverage test can derive the
+// documented command surface from this single source rather than restating it.
+export const DEPENDENCY_OPERATIONS = [
   ['dependencies'], ['reverse', 'dependencies'], ['impact'], ['frontier'], ['path'],
   ['alternative', 'paths'], ['cycles'], ['findings'], ['unused', 'imports'], ['unused', 'exports'],
   ['isolated'], ['unreachable'], ['ready'], ['reused'], ['search']
-];
-const OPERATION_NAMES = new Set(DEPENDENCY_OPERATIONS.map((sequence) => sequence.join('-')));
+] as const;
+const OPERATION_NAMES = new Set<string>(DEPENDENCY_OPERATIONS.map((sequence) => sequence.join('-')));
+
+// Compile-time guarantee that DEPENDENCY_OPERATIONS and the `Command` union list
+// exactly the same operations. If they drift, one assertion below stops compiling
+// — otherwise `resolveOperation`'s cast to DependencyOperation would silently lie,
+// and the help-coverage test (which derives from this table) could miss the gap.
+type Join<T extends readonly string[], D extends string> =
+  T extends readonly [infer Head extends string]
+    ? Head
+    : T extends readonly [infer Head extends string, ...infer Rest extends readonly string[]]
+      ? `${Head}${D}${Join<Rest, D>}`
+      : never;
+type TableOperation = Join<(typeof DEPENDENCY_OPERATIONS)[number], '-'>;
+type AssertAssignable<Super, Sub extends Super> = Sub;
+type _CommandCoversTable = AssertAssignable<DependencyOperation, TableOperation>;
+type _TableCoversCommand = AssertAssignable<TableOperation, DependencyOperation>;
 
 function resolveOperation(tokens: string[]): { operation?: string; tail: string[]; retired?: boolean } {
   const compound = DEPENDENCY_OPERATIONS.filter((sequence) => sequence.length > 1).sort((left, right) => right.length - left.length);
