@@ -9,7 +9,14 @@ export interface PandocNode extends Record<string, unknown> {
 
 export interface PandocDocument extends JsonObject {
   meta: JsonObject;
-  blocks: unknown[];
+  blocks: PandocNode[];
+}
+
+/** The parsed form of a Pandoc attribute tuple `[id, classes, [[key, value], ...]]`. */
+export interface PandocAttributes {
+  id: string;
+  classes: string[];
+  values: Record<string, unknown>;
 }
 
 function collect(child: ReturnType<typeof spawn>, input?: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -41,7 +48,7 @@ export async function readAst(file: string, { pandoc = process.env.QMD_PROVER_PA
   try {
     const parsed: unknown = JSON.parse(result.stdout);
     if (!isRecord(parsed) || !Array.isArray(parsed.blocks)) throw new Error('invalid Pandoc document');
-    return { ...parsed, meta: asRecord(parsed.meta), blocks: parsed.blocks };
+    return { ...parsed, meta: asRecord(parsed.meta), blocks: parsed.blocks as PandocNode[] };
   } catch {
     throw new Error(`Pandoc returned invalid JSON for ${file}`);
   }
@@ -87,4 +94,42 @@ export function normalizedAst(value: unknown): unknown {
   const output: Record<string, unknown> = {};
   for (const key of Object.keys(record).sort()) output[key] = normalizedAst(record[key]);
   return output;
+}
+
+/** Parse a Pandoc attribute tuple `[id, classes, [[key, value], ...]]` into named fields. */
+export function attrs(value: unknown = ['', [], []]): PandocAttributes {
+  const tuple = asArray(value);
+  const pairs = asArray(tuple[2]).filter((item): item is [unknown, unknown] => Array.isArray(item) && item.length >= 2);
+  return {
+    id: asString(tuple[0]),
+    classes: asArray(tuple[1]).map(String),
+    values: Object.fromEntries(pairs.map(([key, item]) => [String(key), item]))
+  };
+}
+
+/** Unpack a `Div` node into its attributes and its child block nodes. */
+export function divContent(node: PandocNode): { attr: PandocAttributes; blocks: PandocNode[] } {
+  const content = asArray(node.c);
+  return {
+    attr: attrs(content[0]),
+    blocks: asArray(content[1]).filter((block): block is PandocNode => isRecord(block) && typeof block.t === 'string')
+  };
+}
+
+/** The inline text of a `Para`/`Plain` block, or `null` for any other block. */
+export function paragraphText(block: PandocNode | undefined): string | null {
+  if (!block || (block.t !== 'Para' && block.t !== 'Plain')) return null;
+  return inlineText(block.c ?? []);
+}
+
+/** Flatten a Pandoc `Meta*` value into plain JS strings, arrays, and maps. */
+export function metaValue(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const record = asRecord(value);
+  if (record.t === 'MetaMap') return Object.fromEntries(Object.entries(asRecord(record.c)).map(([key, item]) => [key, metaValue(item)]));
+  if (record.t === 'MetaList') return asArray(record.c).map(metaValue);
+  if (record.t === 'MetaString' || record.t === 'MetaBool') return record.c;
+  if (record.t === 'MetaInlines') return inlineText(record.c);
+  if (record.t === 'MetaBlocks') return inlineText(record.c);
+  return record.c ?? value;
 }

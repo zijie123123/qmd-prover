@@ -3,40 +3,15 @@ import path from 'node:path';
 import { atomicJson, cleanId, readJson, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
 import { auxLayout, scaffoldAux } from '../infrastructure/aux.js';
 import { loadConfig, pandocCommand } from '../infrastructure/config.js';
-import { inlineText, normalizedAst, readAst, references, walk } from './pandoc.js';
+import { divContent, inlineText, metaValue, normalizedAst, paragraphText, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
 import { KIND_BY_PREFIX, RESULT_KINDS, SCHEMA_VERSION, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN, isControlMarker } from '../shared/core.js';
-import { asArray, asRecord, asString, errorMessage, isRecord, uniqueSorted } from '../shared/core.js';
+import { asArray, asRecord, errorMessage, uniqueSorted } from '../shared/core.js';
 import { discover, discoveryExclusions } from './discovery.js';
 import { findCycles } from './dependency-graph.js';
 export { findCycles } from './dependency-graph.js';
 function diagnostic(severity, code, message, file, line, id) {
     return { severity, code, message, ...(file ? { file } : {}), ...(line ? { line } : {}), ...(id ? { id } : {}) };
-}
-function attrs(value = ['', [], []]) {
-    const tuple = asArray(value);
-    const pairs = asArray(tuple[2]).filter((item) => Array.isArray(item) && item.length >= 2);
-    return {
-        id: asString(tuple[0]),
-        classes: asArray(tuple[1]).map(String),
-        values: Object.fromEntries(pairs.map(([key, item]) => [String(key), item]))
-    };
-}
-function metaValue(value) {
-    if (!value || typeof value !== 'object')
-        return value;
-    const record = asRecord(value);
-    if (record.t === 'MetaMap')
-        return Object.fromEntries(Object.entries(asRecord(record.c)).map(([key, item]) => [key, metaValue(item)]));
-    if (record.t === 'MetaList')
-        return asArray(record.c).map(metaValue);
-    if (record.t === 'MetaString' || record.t === 'MetaBool')
-        return record.c;
-    if (record.t === 'MetaInlines')
-        return inlineText(record.c);
-    if (record.t === 'MetaBlocks')
-        return inlineText(record.c);
-    return record.c ?? value;
 }
 function importsFromMeta(ast, file, diagnostics) {
     const metadata = metaValue(ast.meta?.['qmd-prover']);
@@ -68,25 +43,21 @@ function importsFromMeta(ast, file, diagnostics) {
 }
 function semanticDivs(ast) {
     const entries = [];
-    walk(ast.blocks ?? [], (node) => {
+    walk(ast.blocks, (node) => {
         if (node.t !== 'Div')
             return;
-        const content = asArray(node.c);
-        const attribute = attrs(content[0]);
-        const blocks = asArray(content[1]).filter((block) => isRecord(block) && typeof block.t === 'string');
-        const kind = RESULT_KINDS.find((candidate) => attribute.classes.includes(candidate));
-        if (attribute.classes.includes('proof'))
-            entries.push({ type: 'proof', attribute, blocks });
-        else if (attribute.id && (SEMANTIC_PREFIX_PATTERN.test(attribute.id) || kind))
-            entries.push({ type: 'result', attribute, blocks, kind });
+        const { attr, blocks } = divContent(node);
+        const kind = RESULT_KINDS.find((candidate) => attr.classes.includes(candidate));
+        if (attr.classes.includes('proof'))
+            entries.push({ type: 'proof', attribute: attr, blocks });
+        else if (attr.id && (SEMANTIC_PREFIX_PATTERN.test(attr.id) || kind))
+            entries.push({ type: 'result', attribute: attr, blocks, kind });
     });
     return entries;
 }
 function markerParagraph(block) {
-    if (!block || !['Para', 'Plain'].includes(block.t))
-        return null;
-    const marker = inlineText(block.c ?? []);
-    return isControlMarker(marker) ? marker : null;
+    const text = paragraphText(block);
+    return text !== null && isControlMarker(text) ? text : null;
 }
 function proofContent(blocks) {
     const index = blocks.findIndex((block) => block.t !== 'Null');

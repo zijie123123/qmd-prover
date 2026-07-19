@@ -91,3 +91,44 @@ export function normalizedAst(value) {
         output[key] = normalizedAst(record[key]);
     return output;
 }
+/** Parse a Pandoc attribute tuple `[id, classes, [[key, value], ...]]` into named fields. */
+export function attrs(value = ['', [], []]) {
+    const tuple = asArray(value);
+    const pairs = asArray(tuple[2]).filter((item) => Array.isArray(item) && item.length >= 2);
+    return {
+        id: asString(tuple[0]),
+        classes: asArray(tuple[1]).map(String),
+        values: Object.fromEntries(pairs.map(([key, item]) => [String(key), item]))
+    };
+}
+/** Unpack a `Div` node into its attributes and its child block nodes. */
+export function divContent(node) {
+    const content = asArray(node.c);
+    return {
+        attr: attrs(content[0]),
+        blocks: asArray(content[1]).filter((block) => isRecord(block) && typeof block.t === 'string')
+    };
+}
+/** The inline text of a `Para`/`Plain` block, or `null` for any other block. */
+export function paragraphText(block) {
+    if (!block || (block.t !== 'Para' && block.t !== 'Plain'))
+        return null;
+    return inlineText(block.c ?? []);
+}
+/** Flatten a Pandoc `Meta*` value into plain JS strings, arrays, and maps. */
+export function metaValue(value) {
+    if (!value || typeof value !== 'object')
+        return value;
+    const record = asRecord(value);
+    if (record.t === 'MetaMap')
+        return Object.fromEntries(Object.entries(asRecord(record.c)).map(([key, item]) => [key, metaValue(item)]));
+    if (record.t === 'MetaList')
+        return asArray(record.c).map(metaValue);
+    if (record.t === 'MetaString' || record.t === 'MetaBool')
+        return record.c;
+    if (record.t === 'MetaInlines')
+        return inlineText(record.c);
+    if (record.t === 'MetaBlocks')
+        return inlineText(record.c);
+    return record.c ?? value;
+}
