@@ -23,10 +23,15 @@ npm install -g .        # users — installs the `qmd-prover` command globally
 npm link                # developers — same command, backed by your working checkout
 ```
 
-The engine also installs this skill: `qmd-prover install --global` places the skill docs under
-`~/.claude/skills/qmd-prover` (add `--codex` for Codex; a bare `qmd-prover install` scopes it to the
-current project). A skill installed mid-session is not auto-registered by the host — read the printed
-`SKILL.md` path to use qmd-prover now, and start a new session for automatic discovery.
+Installing the skill is a separate, docs-only step. Once the `qmd-prover` command is on your `PATH`,
+you never reinstall the engine — `qmd-prover install --global` only **copies the skill documentation**
+(`SKILL.md`, the canonical `AGENTS.md` contract and the other files under `references/`, and `agents/`)
+into `~/.claude/skills/qmd-prover`. It deliberately excludes the engine itself (`src/` and `scripts/`),
+so running it again just refreshes the docs in place. Add `--codex` for Codex; a bare
+`qmd-prover install` scopes the copy to the current project instead of the host.
+
+A skill installed mid-session is not auto-registered by the host — read the printed `SKILL.md` path to
+use qmd-prover now, and start a new session for automatic discovery.
 
 Run `qmd-prover version` to confirm the install and see the tool, schema, verifier-protocol, and
 contract versions it implements. `qmd-prover doctor` additionally reports any version drift between
@@ -76,16 +81,23 @@ Run the tool from the project root:
 qmd-prover <subcommand> [arguments]
 ```
 
-Requirements: Node.js 20 or later and Pandoc on `PATH` (or `QMD_PROVER_PANDOC`, or `tools.pandoc` in config). Decide the verifier up front: to have proofs independently checked, set `verification.backend` to `claude` or `codex` before your first inspection (see "Environment and verifier setup" below) — with `backend: none` every proof stays unverified. Quarto is optional unless final rendered output is requested. Run `doctor` first when availability is uncertain, and see "Environment and verifier setup" below to configure any missing tool. JSON is the default output; commands marked below accept `--print` for a concise human report. Semantic IDs accept either `@ID` or bare `ID`, and output normalizes them as `@ID`.
+Requirements and conventions:
+
+- **Node.js 20+ and Pandoc are required.** Point qmd-prover at Pandoc through `PATH`, `QMD_PROVER_PANDOC`, or `tools.pandoc` in config.
+- **Decide the verifier up front.** To have proofs independently checked, set `verification.backend` to `claude` or `codex` before your first inspection (see "Environment and verifier setup" below); under `backend: none` every proof stays unverified.
+- **Quarto is optional**, needed only when final rendered output is requested.
+- Run `doctor` first when tool availability is uncertain.
+- JSON is the default output; the commands marked below also accept `--print` for a concise human report.
+- Semantic IDs accept either `@ID` or bare `ID`; output normalizes them to `@ID`.
 
 Complete leaf-command map:
 
 ```text
 doctor [--print]
 init [--adopt-existing|--append-contract|--sync-contract]
-inspect project [--print]
-inspect fact @ID [--print]
-inspect path FILE_OR_FOLDER [--print]
+inspect project [--print] [--graph]
+inspect fact @ID [--print] [--graph]
+inspect path FILE_OR_FOLDER [--print] [--graph]
 dependency dependencies @ID [--print]
 dependency reverse dependencies x@ID [--print]
 dependency impact @ID [--print]
@@ -107,7 +119,7 @@ verification show SUBMISSION_ID
 render [--allow-errors]
 ```
 
-Use `help COMMAND...` for exact filters, status values, ranges, side effects, and failure semantics. Only the commands shown with `[--print]` accept it; `init`, `verification list`, `verification show`, and `render` emit JSON only. `dependency search` matches every fact when `QUERY` is omitted, so its filters can be used on their own. A dependency query returns only its own answer (target, dependencies, path, matches, and so on) as compact fact references; run `inspect project --graph` when the whole graph is wanted. `render` writes nothing when project errors exist unless `--allow-errors` is explicit.
+Use `help COMMAND...` for exact filters, status values, ranges, side effects, and failure semantics. Only the commands shown with `[--print]` accept it; `init`, `verification list`, `verification show`, and `render` emit JSON only. `dependency search` matches every fact when `QUERY` is omitted, so its filters can be used on their own. A dependency query returns only its own answer (target, dependencies, path, matches, and so on) as compact fact references; add `--graph` to any `inspect` command when the whole dependency graph is wanted. `render` writes nothing when project errors exist unless `--allow-errors` is explicit.
 
 Read [references/cli.md](references/cli.md) when configuring Pandoc or the verifier, troubleshooting command behavior, installing the skill, or needing the full command inventory.
 
@@ -164,7 +176,7 @@ qmd-prover inspect project
 
 Fact and path inspection check only selected facts and their transitive local dependencies. Use `inspect project` for deliberate whole-project audits: it compiles every project QMD into one graph and checks every fact.
 
-Repair every mechanical diagnostic and every local-verifier critical error or gap. Set up the verifier before relying on global results: run `doctor`, and if you intend to verify, configure `verification.backend` (`claude`/`codex` with an optional `executable` path, a custom `verification.command`, or `QMD_PROVER_VERIFIER`) until `doctor` reports it available. Machine-only mode (no verifier) is a deliberate choice, not a default to drift into: the graph remains available, local checks are `not-run`, and global results remain unverified. Never declare your own work verified.
+Repair every mechanical diagnostic and every local-verifier critical error or gap. Set up the verifier before relying on global results (see "Environment and verifier setup"): until one is configured, the graph is still built but local checks stay `not-run` and every global result stays unverified. Machine-only mode is a supported, deliberate choice — not a default to drift into, and never work you may call verified.
 
 Use dependency operations to inspect the project graph, search facts, show paths and cycles, calculate impact, and locate proof frontiers. A duplicate explicit ID is a structural error and must be renamed before dependency analysis can proceed.
 

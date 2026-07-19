@@ -1,0 +1,1 @@
+The godel completeness say that the free first order logic is complete.
