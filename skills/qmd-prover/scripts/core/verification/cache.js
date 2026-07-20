@@ -57,7 +57,8 @@ export function verifierFailure(error, target, inherited = false) {
     const failure = asErrorLike(error);
     const details = inherited ? failure.details : verifierErrorDetails(error);
     return {
-        status: 'error',
+        status: 'not-run',
+        reason: 'verifier-error',
         code: String(failure.code ?? 'VERIFIER_FAILED'),
         error: inherited
             ? `Local conditional verification stopped after the verifier command failed while checking @${target}`

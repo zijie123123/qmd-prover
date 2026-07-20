@@ -122,9 +122,9 @@ test('local verification checks dependents conditionally and global verification
     assert.equal(rejected.verification.verifier_calls, 2);
     const premise = must(rejected.graph.nodes.find((node) => node.id === 'lem-conditional-premise'));
     const targetNode = must(rejected.graph.nodes.find((node) => node.id === 'thm-main-conditional'));
-    assert.equal(premise.local_verification?.outcome, 'rejected');
+    assert.equal(premise.local_verification?.status, 'rejected');
     assert.equal(premise.global_verification?.status, 'rejected');
-    assert.equal(targetNode.local_verification?.outcome, 'verified');
+    assert.equal(targetNode.local_verification?.status, 'verified');
     assert.equal(targetNode.global_verification?.status, 'blocked');
     assert.deepEqual(targetNode.global_verification?.blockers, ['lem-conditional-premise']);
     const checksRoot = path.join(root, '.qmd-prover', 'verification', 'checks');
@@ -167,12 +167,15 @@ test('machine cycles invalidate global results without suppressing local conditi
 
     const inspected = await inspectProject(root, options);
     assert.equal(inspected.ok, false);
-    assert.equal(inspected.verification.verifier_calls, 3);
-    assert.equal(inspected.verification.local_verified, 3);
-    assert.equal(inspected.verification.global_invalid, 2);
+    // Cycle participants are broken, so they are never sent: only the fact citing into the
+    // cycle reaches the verifier.
+    assert.equal(inspected.verification.verifier_calls, 1);
+    assert.equal(inspected.verification.local_verified, 1);
+    assert.equal(inspected.verification.global_broken, 2);
     assert.equal(inspected.verification.global_blocked, 1);
     assert.ok(inspected.facts.filter((fact) => fact.id.startsWith('lem-cycle-')).every((fact) => (
-      fact.local_verification.outcome === 'verified' && fact.global_verification.status === 'invalid'
+      fact.local_verification.status === 'not-run' && fact.local_verification.reason === 'not-eligible'
+      && fact.global_verification.status === 'broken'
     )));
     assert.equal(must(inspected.facts.find((fact) => fact.id === 'thm-main-cycle-layers')).global_verification.status, 'blocked');
   } finally {
@@ -203,7 +206,7 @@ test('disproof-flagged refutations are independently verified, exposed, cached, 
     assert.equal(refutation.fact.status, 'disproved');
     assert.equal(refutation.fact.disproof?.status, 'global');
     assert.match(refutation.fact.disproof?.refutation ?? '', /integer 1/);
-    assert.equal(refutation.check.local_verification.outcome, 'disproved');
+    assert.equal(refutation.check.local_verification.status, 'disproved');
     assert.equal(refutation.check.global_verification.status, 'disproved');
     assert.equal(refutation.verification.local_disproved, 1);
     assert.equal(refutation.verification.global_disproved, 1);
@@ -212,14 +215,21 @@ test('disproof-flagged refutations are independently verified, exposed, cached, 
     assert.match(refutationNode.disproof?.refutation ?? '', /integer 1/);
     assert.match(printReport(refutation), /global=disproved/);
     assert.match(printReport(refutation), /refutation:.*integer 1/);
-    // The author's .disproof attribute is retained; the engine only adds a display status attribute.
+    // The author's .disproof attribute is retained; the engine only adds a display status attribute,
+    // and an accepted refutation writes `disproved` rather than `verified` beside a false statement.
     assert.match(await readFile(route, 'utf8'), /\.disproof\b/);
+    assert.match(await readFile(route, 'utf8'), /status="disproved"/);
+    // --set names groupings that cut across status and cannot be status values themselves.
+    const disproofSet = await analyzeDependencies(root, 'search', [''], { ...options, set: 'disproof-candidate' });
+    assert.deepEqual(disproofSet.matches?.map((node) => node.id), ['lem-false-premise']);
+    const readySet = await analyzeDependencies(root, 'search', [''], { ...options, set: 'ready' });
+    assert.deepEqual(readySet.matches?.map((node) => node.id).sort(), ['def-parity-witness', 'lem-false-premise', 'thm-main-disproof']);
     const impact = await analyzeDependencies(root, 'impact', ['@def-parity-witness'], options);
     assert.equal(impact.ok, true, JSON.stringify(impact.diagnostics));
     const affected = impact.affected ?? [];
     assert.deepEqual(affected.map(({ id, status }) => ({ id, status })), [
       { id: 'lem-false-premise', status: 'disproved' },
-      { id: 'thm-main-disproof', status: 'candidate' }
+      { id: 'thm-main-disproof', status: 'unverified' }
     ]);
     const search = await analyzeDependencies(root, 'search', ['false'], { ...options, status: 'disproved' });
     assert.deepEqual(search.matches?.map((node) => node.id), ['lem-false-premise']);
@@ -234,7 +244,7 @@ test('disproof-flagged refutations are independently verified, exposed, cached, 
     assert.equal(blocked.verification.cache_hits, 2);
     assert.equal(blocked.verification.local_disproved, 1);
     assert.equal(blocked.verification.global_disproved, 1);
-    assert.equal(blocked.check.local_verification.outcome, 'verified');
+    assert.equal(blocked.check.local_verification.status, 'verified');
     assert.equal(blocked.check.global_verification.status, 'blocked');
     assert.equal(blocked.graph.nodes.find((node) => node.id === 'lem-false-premise')?.status, 'disproved');
     const blockers = blocked.blockers as unknown as Array<{ blocker: { status: string } }>;
@@ -248,7 +258,7 @@ test('disproof-flagged refutations are independently verified, exposed, cached, 
     assert.equal(rejectedRefutation.ok, true);
     assert.equal(rejectedRefutation.fact.status, 'rejected');
     assert.equal(rejectedRefutation.fact.disproof, undefined);
-    assert.equal(rejectedRefutation.check.local_verification.outcome, 'rejected');
+    assert.equal(rejectedRefutation.check.local_verification.status, 'rejected');
     assert.equal(rejectedRefutation.check.global_verification.status, 'rejected');
     assert.ok(rejectedRefutation.diagnostics.some((item) => item.code === 'AI_DISPROOF_REJECTED'));
   } finally {
@@ -270,7 +280,7 @@ test('a verifier-discovered counterexample produces disproved without editing th
     assert.equal(inspected.ok, true, JSON.stringify(inspected.diagnostics));
     assert.equal(inspected.fact.refutation, false);
     assert.equal(inspected.fact.status, 'disproved');
-    assert.equal(inspected.check.local_verification.outcome, 'disproved');
+    assert.equal(inspected.check.local_verification.status, 'disproved');
     assert.match(inspected.fact.disproof?.refutation ?? '', /verifier-discovered counterexample/);
     assert.equal(inspected.graph.nodes.find((node) => node.id === 'thm-main-verifier-disproof')?.disproof?.status, 'global');
     // The mathematical proof body is untouched; the submitted proof was not confirmed, so its div gains status="rejected".
@@ -302,7 +312,8 @@ test('a disproved verifier verdict without refutation evidence fails closed', as
     assert.equal(inspected.ok, false);
     assert.equal(inspected.fact.status, 'unverified');
     assert.equal(inspected.fact.disproof, undefined);
-    assert.equal(inspected.check.local_verification.status, 'error');
+    assert.equal(inspected.check.local_verification.status, 'not-run');
+    assert.equal(inspected.check.local_verification.reason, 'verifier-error');
     assert.match(inspected.check.local_verification.error ?? '', /requires a nonempty refutation/);
     assert.equal(inspected.verification.local_disproved, 0);
   } finally {
@@ -341,12 +352,12 @@ test('staleness ignores superseded cache files left behind after a proof is re-v
   try {
     const goal = path.join(root, 'goal.qmd');
     await writeFile(goal, result('thm-main-resettled', 'The resettled conclusion holds.', { proofText: 'A first valid argument.' }));
-    assert.equal((await inspectFact(root, '@thm-main-resettled', options)).check.local_verification.outcome, 'verified');
+    assert.equal((await inspectFact(root, '@thm-main-resettled', options)).check.local_verification.status, 'verified');
 
     // Re-verify a changed proof. The cache is keyed by verification digest, so this writes
     // a second file and leaves the first (naming the old proof) on disk.
     await writeFile(goal, result('thm-main-resettled', 'The resettled conclusion holds.', { proofText: 'A second, equally valid argument.' }));
-    assert.equal((await inspectFact(root, '@thm-main-resettled', options)).check.local_verification.outcome, 'verified');
+    assert.equal((await inspectFact(root, '@thm-main-resettled', options)).check.local_verification.status, 'verified');
     const checks = path.join(root, '.qmd-prover', 'verification', 'checks');
     assert.equal((await readdir(checks)).length, 2, 'the superseded cache file should still be on disk');
 
@@ -376,14 +387,14 @@ test('rigor gates whether reported gaps block acceptance; strict blocks, standar
     await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  citations: standard\n  rigor: standard\n');
     const standard = await inspectFact(root, '@lem-has-gap', options);
     assert.equal(standard.check.local_verification.report?.gaps.length, 1);
-    assert.equal(standard.check.local_verification.outcome, 'verified');
+    assert.equal(standard.check.local_verification.status, 'verified');
     assert.equal(standard.check.global_verification.status, 'verified');
 
     // rigor: strict — the identical report now blocks, because gaps must be empty.
     await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  citations: standard\n  rigor: strict\n');
     const strict = await inspectFact(root, '@lem-has-gap', options);
     assert.equal(strict.check.local_verification.report?.gaps.length, 1);
-    assert.equal(strict.check.local_verification.status, 'fail');
+    assert.equal(strict.check.local_verification.status, 'rejected');
     assert.equal(strict.check.global_verification.status, 'rejected');
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
@@ -400,13 +411,13 @@ test('rigor-disprove gates whether a refutation gap blocks; strict blocks, stand
     await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  rigor-disprove: standard\n');
     const standard = await inspectFact(root, '@lem-refute-gap', options);
     assert.equal(standard.check.local_verification.report?.gaps.length, 1);
-    assert.equal(standard.check.local_verification.outcome, 'disproved');
+    assert.equal(standard.check.local_verification.status, 'disproved');
     assert.equal(standard.check.global_verification.status, 'disproved');
 
     // rigor-disprove: strict — the identical refutation now blocks, because its gaps must be empty.
     await writeFile(path.join(root, '.qmd-prover', 'config.yml'), 'verification:\n  rigor-disprove: strict\n');
     const strict = await inspectFact(root, '@lem-refute-gap', options);
-    assert.equal(strict.check.local_verification.status, 'fail');
+    assert.equal(strict.check.local_verification.status, 'rejected');
     assert.equal(strict.check.global_verification.status, 'rejected');
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;

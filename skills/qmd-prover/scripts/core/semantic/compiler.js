@@ -5,7 +5,7 @@ import { auxLayout, scaffoldAux } from '../infrastructure/aux.js';
 import { loadConfig, pandocCommand } from '../infrastructure/config.js';
 import { divContent, inlineText, metaValue, normalizedAst, readAst, references, walk } from './pandoc.js';
 import { locateDiv, locateProof } from './source.js';
-import { ABANDON_CLASS, DISPROOF_CLASS, KIND_BY_PREFIX, RESULT_KINDS, SCHEMA_VERSION, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN } from '../shared/core.js';
+import { ABANDON_CLASS, DISPROOF_CLASS, DRAFT_CLASS, KIND_BY_PREFIX, RESULT_KINDS, SCHEMA_VERSION, SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN } from '../shared/core.js';
 import { asArray, asRecord, errorMessage, uniqueSorted } from '../shared/core.js';
 import { discover, discoveryExclusions } from './discovery.js';
 import { findCycles } from './dependency-graph.js';
@@ -72,15 +72,51 @@ function resolveImport(importer, imported) {
     const candidate = path.posix.normalize(path.posix.join(path.posix.dirname(importer), imported));
     return candidate.startsWith('../') || path.posix.isAbsolute(candidate) ? null : candidate;
 }
-/** Attribute- and proof-derived status before any verification overlay. */
-export function factStatus(result) {
+/**
+ * The `intent` field of the status model: what the author declared, read off the div attributes
+ * and nothing else. Never computed from proof content and never overwritten by the engine.
+ * `.abandon` outranks `.draft`, which outranks `.disproof`, so a drafted refutation is a draft —
+ * it is not sent either way, and the refutation reading does not matter until it is.
+ */
+export function factIntent(result) {
     if (result.abandon)
         return 'abandoned';
-    if (result.kind === 'definition')
-        return 'candidate';
-    if (!result.proof_present)
+    if (result.draft)
+        return 'draft';
+    return result.refutation ? 'disproof' : 'normal';
+}
+/** True when the fact has proof content to check. A definition is discharged by its own body. */
+export function hasCheckableContent(result) {
+    return result.kind === 'definition' || result.proof_present;
+}
+/** The error-severity diagnostics that speak about one fact: by ID, else by the file it lives in. */
+export function factErrors(result, diagnostics) {
+    return diagnostics.filter((item) => item.severity === 'error' && (item.id
+        ? item.id === result.id
+        : item.file === result.file || (result.proof_file && item.file === result.proof_file)));
+}
+/**
+ * The `mechanical` field: is this fact well formed? Shape, ID, date, references, and cycles —
+ * never proof content, and never anything upstream. A fact with no proof written is well formed;
+ * a fact citing a broken lemma is well formed. Both are questions for `global`, not for this.
+ */
+export function isBroken(result, errors) {
+    if (factErrors(result, errors).length)
+        return true;
+    return (result.reference_checks ?? []).some((check) => (check.existence !== 'pass' || check.scope !== 'pass' || (check.cycle ?? 'pass') !== 'pass'));
+}
+/**
+ * Rules 1-5 of the global composition, for a fact with no local verdict on record. `verifyFacts`
+ * re-runs all seven rules once verdicts exist. See docs/design-status.md.
+ */
+export function preVerificationStatus(result, broken) {
+    if (result.abandon)
+        return 'abandoned';
+    if (broken)
+        return 'broken';
+    if (result.draft || !hasCheckableContent(result))
         return 'open';
-    return result.refutation ? 'disproof-candidate' : 'candidate';
+    return 'unverified';
 }
 export async function compileProject(root = process.cwd(), options = {}) {
     // Data-flow overview. Each stage is an IIFE that returns its complete result plus its own
@@ -154,6 +190,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
                             const proof = {
                                 target, file: file.relative, line,
                                 refutation: classes.includes(DISPROOF_CLASS),
+                                draft: classes.includes(DRAFT_CLASS),
                                 abandon,
                                 proof_hash: sha256(stableJson(normalizedAst(blocks), 0)),
                                 proof_present: inlineText(blocks).length > 0 || blocks.some((block) => block.t !== 'Null'),
@@ -163,9 +200,11 @@ export async function compileProject(root = process.cwd(), options = {}) {
                             };
                             if (!target)
                                 diagnostics.push(diagnostic('error', 'PROOF_TARGET_MISSING', 'A .proof block requires an of attribute', file.relative, line));
-                            // An abandoned proof is detached memory: never linked, never checked, so it need not be complete.
-                            if (!abandon && !proof.proof_present)
-                                diagnostics.push(diagnostic('error', 'PROOF_EMPTY', `Proof of @${target || '?'} is empty`, file.relative, line, target));
+                            // An empty proof block says the same thing as no proof block: the fact is open. That is a
+                            // legitimate state, so this is a warning — it exists only so a block emptied by a bad edit
+                            // stays visible. An abandoned or drafted proof is expected to be incomplete, so it is silent.
+                            if (!abandon && !proof.draft && !proof.proof_present)
+                                diagnostics.push(diagnostic('warning', 'PROOF_EMPTY', `Proof of @${target || '?'} is empty; @${target || '?'} is open`, file.relative, line, target));
                             return { proof, diagnostics };
                         })();
                         fileProofs.push(parsedProof.proof);
@@ -189,7 +228,9 @@ export async function compileProject(root = process.cwd(), options = {}) {
                         const result = {
                             id, file: file.relative, line, kind, classes: [...classes].sort(), title, date,
                             origin: id.startsWith(config.goals['id-prefix']) ? 'user' : 'agent',
-                            status: 'candidate',
+                            intent: 'normal',
+                            mechanical: 'ok',
+                            status: 'open',
                             export: values.export == null ? null : String(values.export),
                             statement_text: statementText,
                             statement_hash: statementHash,
@@ -198,6 +239,8 @@ export async function compileProject(root = process.cwd(), options = {}) {
                             proof_present: false,
                             proof_text: '',
                             refutation: false,
+                            // A definition carries its own `.draft`; a theorem-like inherits it from its linked proof.
+                            draft: kind === 'definition' && classes.includes(DRAFT_CLASS),
                             abandon: classes.includes(ABANDON_CLASS),
                             construction_dependencies: constructionDependencies,
                             dependencies: constructionDependencies
@@ -311,8 +354,10 @@ export async function compileProject(root = process.cwd(), options = {}) {
                 result.proof_hash = proof.proof_hash;
                 result.proof_present = proof.proof_present;
                 result.proof_text = proof.proof_text;
-                if (result.kind !== 'definition')
+                if (result.kind !== 'definition') {
                     result.refutation = proof.refutation;
+                    result.draft = proof.draft;
+                }
                 result.dependencies = uniqueSorted([...result.construction_dependencies, ...proof.dependencies]);
                 result.proof_file = proof.file;
                 result.proof_line = proof.line;
@@ -368,6 +413,13 @@ export async function compileProject(root = process.cwd(), options = {}) {
             for (const result of parsed.results) {
                 if (byId.get(result.id) !== result)
                     continue;
+                // An abandoned fact is kept for memory only: never checked, never usable as a premise, so
+                // what it cites is nobody's problem. It keeps its ID and its shape checks (an ID hidden in
+                // an abandoned block would still collide with a live one) but resolves no references.
+                if (result.abandon) {
+                    result.reference_checks = [];
+                    continue;
+                }
                 const declared = availableByFile.get(result.file) ?? new Set();
                 // Proof-contributed dependencies resolve in the proof's file scope; this only differs
                 // from the declaration scope for a main-goal proof overlay living in another file.
@@ -398,7 +450,10 @@ export async function compileProject(root = process.cwd(), options = {}) {
             const importCycles = findCycles(importAdjacency);
             for (const cycle of importCycles)
                 diagnostics.push(diagnostic('error', 'IMPORT_CYCLE', `Import cycle: ${cycle.join(' -> ')}`, cycle[0]));
-            const dependencyAdjacency = new Map(parsed.results.map((result) => [result.id, result.dependencies.filter((id) => byId.has(id))]));
+            // Abandoned facts contribute no edges, so a dead attempt can never put a live fact in a cycle.
+            const dependencyAdjacency = new Map(parsed.results.map((result) => [
+                result.id, result.abandon ? [] : result.dependencies.filter((id) => byId.has(id))
+            ]));
             const dependencyCycles = findCycles(dependencyAdjacency);
             const cycleEdges = new Set();
             for (const cycle of dependencyCycles) {
@@ -409,13 +464,21 @@ export async function compileProject(root = process.cwd(), options = {}) {
             }
             return { dependencyCycles, cycleEdges, diagnostics };
         })();
-        // Final attribute-derived status and cycle flags, over every result (duplicates included).
+        // Cycle flags, then the pre-verification status, over every result (duplicates included).
+        // `verifyFacts` recomputes the status once local verdicts exist; this keeps a manifest
+        // produced without any verifier truthful on its own.
         const statuses = (() => {
+            const errors = [
+                ...parsed.diagnostics, ...indexed.diagnostics, ...linked.diagnostics,
+                ...references.diagnostics, ...cycles.diagnostics
+            ].filter((item) => item.severity === 'error');
             for (const result of parsed.results) {
-                result.status = factStatus(result);
                 for (const check of result.reference_checks ?? []) {
                     check.cycle = cycles.cycleEdges.has(`${result.id}\0${check.dependency}`) ? 'fail' : 'pass';
                 }
+                result.intent = factIntent(result);
+                result.mechanical = isBroken(result, errors) ? 'broken' : 'ok';
+                result.status = preVerificationStatus(result, result.mechanical === 'broken');
             }
             return { diagnostics: [] };
         })();
@@ -471,18 +534,21 @@ export async function compileProject(root = process.cwd(), options = {}) {
         // The dependency graph is a self-contained derived structure; its hash also identifies
         // the manifest snapshot, so build it first and reuse the id.
         const graph = (() => {
-            const missingIds = uniqueSorted(results.flatMap((result) => result.dependencies).filter((id) => !byId.has(id)));
+            // An abandoned fact is kept for memory only: it resolves no references and contributes no
+            // edges, so a dead attempt can neither create a dangling node nor be walked as a dependency.
+            const live = results.filter((result) => !result.abandon);
+            const missingIds = uniqueSorted(live.flatMap((result) => result.dependencies).filter((id) => !byId.has(id)));
             const value = {
                 schema_version: SCHEMA_VERSION,
                 nodes: [
-                    ...results.map(({ id, title, kind, status, file, line, origin }) => ({
-                        id, title, kind, status, file, line,
+                    ...results.map(({ id, title, kind, intent, mechanical, status, file, line, origin }) => ({
+                        id, title, kind, intent, mechanical, status, file, line,
                         origin: origin === 'user' ? 'main-goal' : 'fact',
                         ownership: origin
                     })),
                     ...missingIds.map((id) => ({ id, title: '', kind: 'unknown', status: 'missing', origin: 'unresolved' }))
                 ],
-                edges: results.flatMap((result) => result.dependencies.map((dependency) => {
+                edges: live.flatMap((result) => result.dependencies.map((dependency) => {
                     const check = result.reference_checks?.find((item) => item.dependency === dependency);
                     return {
                         from: result.id,

@@ -16,7 +16,7 @@ qmd-prover:
         - lem-complete-theory-boolean
 ---
 
-::: {#def-fol-structure .definition name="Structures and assignments" date="2026-07-12"}
+::: {#def-fol-structure .definition name="Structures and assignments" date="2026-07-12" status="verified"}
 For a signature \(L\) from @def-fol-signature, an \(L\)-structure
 \(\mathcal M\) has a nonempty domain \(M\), interprets every
 \(f\in\mathcal F_n\) as a function \(M^n\to M\), and every
@@ -27,7 +27,7 @@ for \(x\in\mathrm{Var}\) and \(a\in M\) write \(s[x\mapsto a]\) for the
 assignment agreeing with \(s\) except that it sends \(x\) to \(a\).
 :::
 
-::: {#def-term-value .definition name="Value of a term" date="2026-07-12"}
+::: {#def-term-value .definition name="Value of a term" date="2026-07-12" status="verified"}
 For @def-fol-structure and the terms of @def-fol-terms, the value
 \(\llbracket t\rrbracket^{\mathcal M}_s\in M\) is defined by recursion on the
 structure of \(t\): \(\llbracket x\rrbracket^{\mathcal M}_s=s(x)\) for a variable
@@ -42,7 +42,7 @@ Since @def-fol-terms presents terms as an inductive structure, this recursion
 assigns a unique value to every term under every assignment.
 :::
 
-::: {#def-satisfaction .definition name="Satisfaction" date="2026-07-12" export="def-satisfaction"}
+::: {#def-satisfaction .definition name="Satisfaction" date="2026-07-12" export="def-satisfaction" status="verified"}
 For @def-fol-formulas, @def-fol-structure, and @def-term-value, the relation
 \(\mathcal M,s\models A\) between a structure with an assignment and a formula is
 defined by recursion on \(A\):
@@ -76,7 +76,7 @@ term has the same value under every assignment, and the truth of a sentence is
 the same under every assignment.
 :::
 
-::: {.proof of="lem-coincidence"}
+::: {.proof of="lem-coincidence" status="verified"}
 The term statement is a structural induction on @def-fol-terms using the
 evaluation clauses of @def-term-value: a variable \(x\in\mathrm{Var}(t)\) has
 value \(s(x)=s'(x)\); a constant's value \(c^{\mathcal M}\) does not mention the
@@ -108,7 +108,7 @@ If \(t\) is free for \(x\) in \(A\), then
 The corresponding term-value identity also holds.
 :::
 
-::: {.proof of="lem-semantic-substitution"}
+::: {.proof of="lem-semantic-substitution" status="verified"}
 First the term identity: for every term \(w\),
 \(\llbracket w[t/x]\rrbracket_s^{\mathcal M}=\llbracket w\rrbracket_{s'}^{\mathcal M}\)
 with \(s'=s[x\mapsto\llbracket t\rrbracket_s^{\mathcal M}]\), by induction on
@@ -136,7 +136,7 @@ B\).  Quantifying over \(a\) and using @def-satisfaction yields the equivalence
 for \(\exists yB\).
 :::
 
-::: {#def-henkin-theory .definition name="Henkin theory" date="2026-07-12" export="def-henkin-theory"}
+::: {#def-henkin-theory .definition name="Henkin theory" date="2026-07-12" export="def-henkin-theory" status="verified"}
 A set \(T\) of sentences in a language with at least one constant is a
 *Henkin theory* if, for every sentence \(\exists xA(x)\), there is a closed
 term \(t\) such that
@@ -150,7 +150,7 @@ is preserved by every function symbol, and replacement of \(\sim_T\)-equal
 arguments preserves membership in \(T\) of every atomic relation formula.
 :::
 
-::: {.proof of="lem-equality-congruence"}
+::: {.proof of="lem-equality-congruence" status="verified"}
 The equality axioms in @def-hilbert-calculus give \(t=t\) and, by taking
 appropriate instances of the replacement schema, symmetry
 \(t=u\to u=t\), transitivity
@@ -161,7 +161,7 @@ for all finite arities.  Thus the relation and interpretations below do not
 depend on representatives.
 :::
 
-::: {#def-canonical-term-model .definition name="Canonical term model" date="2026-07-12" export="def-canonical-term-model"}
+::: {#def-canonical-term-model .definition name="Canonical term model" date="2026-07-12" export="def-canonical-term-model" status="verified"}
 Let \(T\) be a deductively closed consistent theory in a language \(L^*\)
 with a constant.  Its canonical term model \(\mathcal M_T\) has as domain the
 \(\sim_T\)-classes \([t]\) of closed \(L^*\)-terms, using
@@ -188,7 +188,7 @@ assignment \(s(x)=[r_x]\) in @def-canonical-term-model.  For every term
 \]
 :::
 
-::: {.proof of="lem-term-model-evaluation"}
+::: {.proof of="lem-term-model-evaluation" status="verified"}
 Structural induction on @def-fol-terms.  For a variable \(x\), @def-term-value
 gives \(\llbracket x\rrbracket_s^{\mathcal M_T}=s(x)=[r_x]\), which is
 \([x[r_{x_1}/x_1,\ldots,r_{x_k}/x_k]]\) because that substitution sends \(x\) to
@@ -215,7 +215,7 @@ then for every formula \(A(x)\) whose free variables are among \(\{x\}\),
 \]
 :::
 
-::: {.proof of="lem-existential-membership"}
+::: {.proof of="lem-existential-membership" status="verified"}
 For left-to-right, choose the witness term supplied by @def-henkin-theory and
 use modus ponens plus deductive closure from @def-consistency.  Conversely,
 quantifier axiom 5 in @def-hilbert-calculus directly gives
@@ -237,7 +237,7 @@ In particular, for every sentence \(A\),
 \(\mathcal M_T\models A\) iff \(A\in T\).
 :::
 
-::: {.proof of="lem-canonical-truth"}
+::: {.proof of="lem-canonical-truth" status="verified"}
 Induct on the formula \(A\) generated by @def-fol-formulas, proving the
 biconditional *uniformly in the closed representatives*: the induction
 hypothesis for a subformula is that the biconditional holds for every family of
@@ -280,7 +280,7 @@ interpretations, then every \(L\)-formula has the same truth value in
 \(\mathcal N\) and in its reduct under the same assignment.
 :::
 
-::: {.proof of="lem-reduct-satisfaction"}
+::: {.proof of="lem-reduct-satisfaction" status="verified"}
 Term induction using @def-term-value shows equal values because all symbols of
 an \(L\)-term retain their interpretations.  Formula induction using
 @def-satisfaction then gives the claim: atomic cases use those term values and

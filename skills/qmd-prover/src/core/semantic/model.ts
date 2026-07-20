@@ -1,11 +1,13 @@
 /**
  * The semantic data model produced by the compiler: the manifest of source files,
  * results, and proofs discovered across a project's QMD documents. Verification
- * verdicts ({@link AiCheck}, {@link GlobalVerification}, {@link DisproofEvidence})
+ * verdicts ({@link LocalVerification}, {@link GlobalVerification}, {@link DisproofEvidence})
  * are overlaid onto results by the inspection layer.
  */
 import type { ResultKind } from '../shared/core.js';
-import type { AiCheck, DisproofEvidence, GlobalVerification } from '../shared/verdicts.js';
+import type {
+  DisproofEvidence, FactIntent, FactListStatus, GlobalVerification, LocalVerification, MechanicalStatus
+} from '../shared/verdicts.js';
 
 /** Whether a result was authored by the user (a protected goal) or by an agent. */
 export type ResultOrigin = 'user' | 'agent';
@@ -44,6 +46,8 @@ export interface ProofRecord {
   proof_text: string;
   /** Author flag: this proof is a proposed refutation (`.disproof` class on the proof div). */
   refutation: boolean;
+  /** Author flag: this proof is deliberately unfinished (`.draft` class) — never sent to the verifier. */
+  draft: boolean;
   /** Author flag: this proof is detached (`.abandon` class) — kept for memory, not linked or checked. */
   abandon: boolean;
 }
@@ -56,7 +60,14 @@ export interface SemanticResult {
   classes: string[];
   title: string;
   date: string;
-  status: string;
+  // The four fields of the status model, plus the single string they project to.
+  // See docs/design-status.md.
+  /** What the author declared, read off the div attributes alone. */
+  intent: FactIntent;
+  /** Whether the fact is well formed: shape, ID, date, references, cycles. */
+  mechanical: MechanicalStatus;
+  /** The composed `global` status: the one string list contexts show. */
+  status: FactListStatus;
   statement_text: string;
   statement_hash: string;
   title_hash: string;
@@ -67,6 +78,8 @@ export interface SemanticResult {
   proof_line?: number;
   /** Author flag: the active proof is a proposed refutation (checked in refutation mode). */
   refutation: boolean;
+  /** Author flag: the proof is deliberately unfinished — never checked, and the fact stays open. */
+  draft: boolean;
   /** Author flag: this fact is detached — kept for memory, skipped by inspection. */
   abandon: boolean;
   export?: string | null;
@@ -74,7 +87,7 @@ export interface SemanticResult {
   dependencies: string[];
   reference_checks?: ReferenceCheck[];
   disproof?: DisproofEvidence;
-  local_verification?: AiCheck;
+  local_verification?: LocalVerification;
   global_verification?: GlobalVerification;
   origin: ResultOrigin;
 }

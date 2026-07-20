@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { compileProject, factStatus } from '../semantic/compiler.js';
+import { compileProject, factErrors, factIntent, hasCheckableContent } from '../semantic/compiler.js';
 import type { Compilation } from '../semantic/compiler.js';
 import { externalPolicyHash } from '../infrastructure/external.js';
 import { atomicJson, atomicWrite, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
@@ -15,7 +15,8 @@ import type { Diagnostic, JsonObject, CompilerOptions, SelectionOptions } from '
 import type { FactStatusValue, ResultKind } from '../shared/core.js';
 import type { VerificationContext, VerifierPacket } from '../verification/protocol.js';
 import type {
-  AiCheck, GlobalVerification, VerificationMode, VerifierMetrics, VerifierReport
+  FactListStatus, GlobalVerification, GlobalVerificationStatus, LocalNotRunReason, LocalVerification,
+  LocalVerificationStatus, VerificationMode, VerifierMetrics, VerifierReport
 } from '../shared/verdicts.js';
 import type { ReferenceCheck, SemanticResult } from '../semantic/model.js';
 import { projectSourceSignature, readPublishedSnapshot } from './snapshot.js';
@@ -26,7 +27,7 @@ export interface InspectionVerificationSummary {
   verifier_calls: number;
   cache_hits: number;
   cache_misses: number;
-  invalid_cache_entries: number;
+  unusable_cache_entries: number;
   /** Wall-clock time spent in fresh verifier calls this run (cache hits do no work). */
   verifier_duration_ms: number;
   /** Total tokens reported across fresh verifier calls this run, when the backend reports them. */
@@ -34,20 +35,21 @@ export interface InspectionVerificationSummary {
   local_verified: number;
   local_disproved: number;
   local_rejected: number;
-  local_errors: number;
   local_not_run: number;
   global_verified: number;
   global_disproved: number;
+  global_rejected: number;
   global_blocked: number;
   global_unverified: number;
-  global_rejected: number;
-  global_invalid: number;
+  global_open: number;
+  global_broken: number;
+  global_abandoned: number;
   stopped_after?: string | null;
 }
 
 export interface FactInspectionCheck {
   id: string;
-  status: string;
+  status: FactListStatus;
   kind?: ResultKind;
   file?: string;
   line?: number;
@@ -58,7 +60,7 @@ export interface FactInspectionCheck {
     diagnostics?: string[];
     reason?: string;
   };
-  local_verification: AiCheck;
+  local_verification: LocalVerification;
   global_verification: GlobalVerification;
   diagnostics: Diagnostic[];
 }
@@ -74,7 +76,7 @@ export interface FactMechanicalCheck {
 export interface VerifiedFact {
   id: string;
   kind: SemanticResult['kind'];
-  status: string;
+  status: GlobalVerificationStatus;
   file: string;
   line?: number;
   mechanical: FactMechanicalCheck;
@@ -222,12 +224,56 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
   // this run are appended only to the final diagnostics, never to this base.
   const mechanicalDiagnostics = [...compilation.diagnostics, ...baseline.diagnostics];
   function relevantErrors(result: SemanticResult): Diagnostic[] {
-    return mechanicalDiagnostics.filter((item) => item.severity === 'error' && (
-      item.id
-        ? item.id === result.id
-        : item.file === result.file || (result.proof_file && item.file === result.proof_file)
-    ));
+    return factErrors(result, mechanicalDiagnostics);
   }
+
+  // Stage: the `mechanical` field for every fact — is it well formed? Computed before any verifier
+  // runs, because it decides what may be sent: only unbroken facts are checked at all.
+  const mechanicalByFact = new Map<string, FactMechanicalCheck>(results.map((result) => {
+    const checks = references(result);
+    const errors = relevantErrors(result);
+    const reason = !compilation.complete
+      ? 'semantic-parse-incomplete'
+      : errors.length
+        ? 'mechanical-check-failed'
+        : checks.some((check) => check.existence !== 'pass' || check.scope !== 'pass' || check.cycle !== 'pass')
+          ? 'reference-check-failed'
+          : null;
+    return [result.id, {
+      status: reason ? 'fail' : 'pass',
+      verification_mode: result.kind === 'definition'
+        ? 'definition-construction'
+        : result.refutation ? 'refutation' : 'proof',
+      references: checks,
+      diagnostics: errors.map((item) => item.code).sort(),
+      ...(reason ? { reason } : {})
+    }];
+  }));
+  const mechanicalOf = (result: SemanticResult): FactMechanicalCheck =>
+    mechanicalByFact.get(result.id) ?? { status: 'pass', verification_mode: 'proof', references: [], diagnostics: [] };
+
+  /**
+   * Why this fact carries no verifier verdict, or null when it is ready to be sent. This is the
+   * `ready` set of docs/design-status.md: unbroken, not abandoned, not draft, and with content to
+   * check. The returned reason is what the global composition reads to pick `open` vs `unverified`.
+   */
+  function notRunReason(result: SemanticResult): LocalNotRunReason | null {
+    if (result.abandon || mechanicalOf(result).status !== 'pass') return 'not-eligible';
+    if (result.draft) return 'draft';
+    if (!hasCheckableContent(result)) return 'nothing-to-check';
+    return null;
+  }
+
+  /** The human sentence shown beside a `not-run` reason code. */
+  const NOT_RUN_DETAIL: Record<LocalNotRunReason, string> = {
+    'nothing-to-check': 'No proof content is present, so there is nothing to check yet.',
+    draft: 'The proof is marked .draft: deliberately unfinished, so it is not sent to the verifier.',
+    'not-eligible': 'The fact is broken or abandoned, so it is not sent to the verifier.',
+    'out-of-scope': 'The proof is ready but fell outside the selected fact or path closure.',
+    'no-backend': 'No verifier is configured; the machine dependency analysis remains available.',
+    'verifier-error': 'The verifier failed, timed out, or returned an unusable report.'
+  };
+  const notRun = (reason: LocalNotRunReason): LocalOutcome => ({ status: 'not-run', reason, detail: NOT_RUN_DETAIL[reason] });
 
   // Stage: local conditional verification. Walks the graph in dependency order,
   // producing one LocalOutcome per fact plus the run-cost tally. Verifier cache
@@ -241,7 +287,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
       verifier_calls: 0,
       cache_hits: 0,
       cache_misses: 0,
-      invalid_cache_entries: 0,
+      unusable_cache_entries: 0,
       verifier_duration_ms: 0,
       verifier_tokens: 0,
       stopped_after: null as string | null
@@ -262,51 +308,19 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     };
 
     for (const result of topologicalOrder(results)) {
+      // A fact the author has not made checkable, or that is malformed, never reaches the verifier —
+      // whether or not this run selected it. Its reason decides `open` vs `broken` vs `abandoned`.
+      const blocked = notRunReason(result);
+      if (blocked) { outcomes.set(result.id, notRun(blocked)); continue; }
+
       if (!verificationIds.has(result.id)) {
         const previous = previousById.get(result.id);
-        if (previous?.local_verification) {
-          outcomes.set(result.id, previous.local_verification);
-        } else {
-          outcomes.set(result.id, {
-            status: 'not-run',
-            reason: 'Local verification was outside the selected fact/path dependency closure.'
-          });
-        }
-        continue;
-      }
-      const eligibility = ((): { ready: boolean; reason?: string } => {
-        if (!compilation.complete) return { ready: false, reason: 'semantic-parse-incomplete' };
-        if (result.abandon) return { ready: false, reason: 'abandoned' };
-        if (result.kind !== 'definition' && !result.proof_present) return { ready: false, reason: 'proof-missing' };
-        if (references(result).some((check) => check.existence !== 'pass')) {
-          return { ready: false, reason: 'dependency-context-unavailable' };
-        }
-        const blockingErrors = relevantErrors(result).filter((item) => ![
-          'DEPENDENCY_UNAVAILABLE', 'DEPENDENCY_CYCLE', 'IMPORT_CYCLE'
-        ].includes(item.code));
-        if (blockingErrors.length) return { ready: false, reason: 'local-context-invalid' };
-        return { ready: true };
-      })();
-      if (!eligibility.ready) {
-        outcomes.set(result.id, {
-          status: 'not-run',
-          reason: eligibility.reason === 'proof-missing'
-            ? 'No complete proof is present.'
-            : eligibility.reason === 'abandoned'
-              ? 'The proof is abandoned: detached from its result and kept only for memory.'
-              : `Local conditional verification did not run because ${eligibility.reason}.`
-        });
+        outcomes.set(result.id, previous?.local_verification ?? notRun('out-of-scope'));
         continue;
       }
       tally.eligible += 1;
 
-      if (!verifierAvailable) {
-        outcomes.set(result.id, {
-          status: 'not-run',
-          reason: 'No verifier is configured; the machine dependency analysis remains available and this local result is unverified.'
-        });
-        continue;
-      }
+      if (!verifierAvailable) { outcomes.set(result.id, notRun('no-backend')); continue; }
 
       let packet;
       try {
@@ -380,7 +394,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
       }
       const key = verificationKey(packet);
       const cached = await cachedDecision(root, result.id, key, packet);
-      if (cached.invalid) tally.invalid_cache_entries += 1;
+      if (cached.invalid) tally.unusable_cache_entries += 1;
       let report: VerifierReport;
       let source: string;
       let cachedResult = false;
@@ -478,10 +492,8 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
       }
 
       const decision = verificationOutcome(report, packet);
-      const pass = decision !== 'rejected';
       const outcome: LocalOutcome = {
-        status: pass ? 'pass' : 'fail',
-        outcome: decision,
+        status: decision,
         source,
         cached: cachedResult,
         verification_key: key,
@@ -511,7 +523,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     for (const result of results) {
       const outcome = outcomes.get(result.id);
       if (!outcome) throw new Error(`Verification outcome for @${result.id} was not recorded`);
-      if (outcome.status === 'fail') items.push({
+      if (outcome.status === 'rejected') items.push({
         severity: 'warning', code: result.refutation ? 'AI_DISPROOF_REJECTED' : 'AI_CHECK_REJECTED',
         message: result.refutation
           ? `Local conditional verification did not confirm the proposed refutation of @${result.id}: ${outcome.report?.summary || 'critical errors or gaps remain'}`
@@ -519,7 +531,7 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
         file: result.file, line: result.proof_line ?? result.line, id: result.id,
         repair_hints: outcome.report?.repair_hints ?? ''
       });
-      if (outcome.status === 'error') items.push({
+      if (outcome.reason === 'verifier-error') items.push({
         severity: 'error', code: outcome.code ?? 'AI_CHECK_FAILED',
         message: `Local conditional verification could not check @${result.id}: ${outcome.error}`,
         file: result.file, line: result.proof_line ?? result.line, id: result.id,
@@ -537,65 +549,47 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
     const globalById = new Map<string, GlobalVerification>();
     const facts: VerifiedFact[] = [];
     for (const result of topologicalOrder(results)) {
-      const mechanical = ((): FactMechanicalCheck => {
-        const checks = references(result);
-        const errors = relevantErrors(result);
-        const reason = !compilation.complete
-          ? 'semantic-parse-incomplete'
-          : errors.length
-            ? 'mechanical-check-failed'
-            : checks.some((check) => check.existence !== 'pass' || check.scope !== 'pass' || check.cycle !== 'pass')
-              ? 'reference-check-failed'
-              : null;
-        return {
-          status: reason ? 'fail' : 'pass',
-          verification_mode: result.kind === 'definition'
-            ? 'definition-construction'
-            : result.refutation ? 'refutation' : 'proof',
-          references: checks,
-          diagnostics: errors.map((item) => item.code).sort(),
-          ...(reason ? { reason } : {})
-        };
-      })();
-      const local = outcomes.get(result.id) ?? { status: 'not-run' as const };
+      const mechanical = mechanicalOf(result);
+      const local = outcomes.get(result.id) ?? notRun('out-of-scope');
+      // The seven rules of docs/design-status.md, in order. First match wins, the values are
+      // disjoint, and rule 2 keeps cycles out of rules 6-7 so this always terminates.
       const global = ((): GlobalVerification => {
+        if (result.abandon) return { status: 'abandoned', blockers: [], reason: 'author-abandoned' };
         if (mechanical.status !== 'pass') {
           const blockers = references(result)
             .filter((check) => check.existence !== 'pass' || check.scope !== 'pass' || check.cycle !== 'pass')
             .map((check) => check.dependency).sort();
-          return { status: 'invalid', blockers, reason: mechanical.reason ?? 'mechanical-check-failed' };
+          return { status: 'broken', blockers, reason: mechanical.reason ?? 'mechanical-check-failed' };
         }
-        if (local.status === 'fail') {
-          return { status: 'rejected', blockers: [], reason: 'local-verification-rejected' };
+        if (local.status === 'not-run') {
+          const reason = local.reason ?? 'out-of-scope';
+          return reason === 'nothing-to-check' || reason === 'draft'
+            ? { status: 'open', blockers: [], reason }
+            : { status: 'unverified', blockers: [], reason };
         }
-        if (local.status !== 'pass' || !local.outcome || local.outcome === 'rejected') {
-          return { status: 'unverified', blockers: [], reason: local.reason ?? local.error ?? 'local-verification-unavailable' };
-        }
+        if (local.status === 'rejected') return { status: 'rejected', blockers: [], reason: 'local-verification-rejected' };
         const blockers = result.dependencies.filter((dependency) => (
           resultById.has(dependency) && globalById.get(dependency)?.status !== 'verified'
         )).sort();
         return blockers.length
           ? { status: 'blocked', blockers, reason: 'dependency-closure-not-verified' }
-          : { status: local.outcome === 'disproved' ? 'disproved' : 'verified', blockers: [] };
+          : { status: local.status, blockers: [] };
       })();
       globalById.set(result.id, global);
+      result.intent = factIntent(result);
+      result.mechanical = mechanical.status === 'pass' ? 'ok' : 'broken';
       result.global_verification = global;
-      result.local_verification = local.status === 'pass' || local.status === 'fail'
-        ? {
+      result.local_verification = local.status === 'not-run'
+        ? local
+        : {
             status: local.status,
-            outcome: local.outcome,
             source: 'local-verifier-evidence',
             verification_key: local.verification_key,
             report: local.report,
             ...(local.metrics ? { metrics: local.metrics } : {})
-          }
-        : local;
-      // A fact whose local check simply has not run keeps its marker- and
-      // proof-derived machine status (open, candidate, rejected, ...).
-      result.status = local.status === 'not-run' && mechanical.status === 'pass'
-        ? factStatus(result)
-        : global.status;
-      if (verificationIds.has(result.id) && !(local.status === 'pass' && local.outcome === 'disproved')) delete result.disproof;
+          };
+      result.status = global.status;
+      if (verificationIds.has(result.id) && local.status !== 'disproved') delete result.disproof;
       if (result.disproof) result.disproof.status = global.status === 'disproved' ? 'global' : 'conditional';
       facts.push({
         id: result.id,
@@ -615,18 +609,23 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
   // Stage: the per-status counts over the facts inside the current selection.
   const counts = (() => {
     const scopedFacts = composition.facts.filter((fact) => verificationIds.has(fact.id));
+    const countLocal = (status: LocalVerificationStatus): number =>
+      scopedFacts.filter((fact) => fact.local_verification.status === status).length;
+    const countGlobal = (status: GlobalVerificationStatus): number =>
+      scopedFacts.filter((fact) => fact.global_verification.status === status).length;
     return {
-      local_verified: scopedFacts.filter((fact) => fact.local_verification.status === 'pass' && fact.local_verification.outcome === 'verified').length,
-      local_disproved: scopedFacts.filter((fact) => fact.local_verification.status === 'pass' && fact.local_verification.outcome === 'disproved').length,
-      local_rejected: scopedFacts.filter((fact) => fact.local_verification.status === 'fail').length,
-      local_errors: scopedFacts.filter((fact) => fact.local_verification.status === 'error').length,
-      local_not_run: scopedFacts.filter((fact) => fact.local_verification.status === 'not-run').length,
-      global_verified: scopedFacts.filter((fact) => fact.global_verification.status === 'verified').length,
-      global_disproved: scopedFacts.filter((fact) => fact.global_verification.status === 'disproved').length,
-      global_blocked: scopedFacts.filter((fact) => fact.global_verification.status === 'blocked').length,
-      global_unverified: scopedFacts.filter((fact) => fact.global_verification.status === 'unverified').length,
-      global_rejected: scopedFacts.filter((fact) => fact.global_verification.status === 'rejected').length,
-      global_invalid: scopedFacts.filter((fact) => fact.global_verification.status === 'invalid').length
+      local_verified: countLocal('verified'),
+      local_disproved: countLocal('disproved'),
+      local_rejected: countLocal('rejected'),
+      local_not_run: countLocal('not-run'),
+      global_verified: countGlobal('verified'),
+      global_disproved: countGlobal('disproved'),
+      global_rejected: countGlobal('rejected'),
+      global_blocked: countGlobal('blocked'),
+      global_unverified: countGlobal('unverified'),
+      global_open: countGlobal('open'),
+      global_broken: countGlobal('broken'),
+      global_abandoned: countGlobal('abandoned')
     };
   })();
 
@@ -637,14 +636,12 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
 }
 
 /**
- * The `status` value a checked fact's local outcome projects to, or null to clear it. A proof claims
- * "the statement holds", a refutation claims "the statement is false"; `verified` means that claim
- * was confirmed, `rejected` that it was not. A fact that was not conclusively checked carries no status.
+ * The `status` value a checked fact's local verdict projects to, or null to clear it. It carries
+ * the verdict itself — what the verifier concluded about the statement — so an accepted refutation
+ * writes `disproved`, never `verified`. A fact not conclusively checked carries no status.
  */
-function projectedStatus(result: SemanticResult, outcome: LocalOutcome): FactStatusValue | null {
-  if (outcome.status !== 'pass' && outcome.status !== 'fail') return null;
-  const confirmed = result.refutation ? outcome.outcome === 'disproved' : outcome.outcome === 'verified';
-  return confirmed ? 'verified' : 'rejected';
+function projectedStatus(outcome: LocalOutcome): FactStatusValue | null {
+  return outcome.status === 'not-run' ? null : outcome.status;
 }
 
 /**
@@ -668,7 +665,7 @@ export async function writeStatusProjection(compilation: Compilation, run: Verif
     if (!result || !fact) continue;
     // A theorem-like carries status on its proof div (wherever it lives); a definition on its own div.
     const file = result.kind === 'definition' ? result.file : result.proof_file ?? result.file;
-    perFact.push({ file, kind: result.kind, id, proofLine: result.proof_line, status: projectedStatus(result, fact.local_verification) });
+    perFact.push({ file, kind: result.kind, id, proofLine: result.proof_line, status: projectedStatus(fact.local_verification) });
   }
   for (const file of new Set(perFact.map((entry) => entry.file))) {
     const absolute = path.join(root, file);

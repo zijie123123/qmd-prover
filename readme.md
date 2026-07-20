@@ -72,8 +72,12 @@ become possible:
   *dependency graph* — a map of which result relies on which, across every file. Nothing is hidden.
 - **Progress you can see at any time.** Because the graph records what each result needs, you can ask
   "what is proved, what is open, what is stuck?" and get an honest answer for the whole project. Each
-  result is in one plain state: **open** (stated, not proved yet), **verified** (proved, and
-  everything underneath it is proved too), or **disproved** (shown false by a counterexample).
+  result is in exactly one plain state, and each state tells you what to do next: **open** (stated,
+  nothing written yet), **unverified** (a proof is written but nobody has checked it), **rejected**
+  (the checker found the proof wrong), **blocked** (this proof is fine, but something underneath it
+  is not proved), **broken** (the file itself has a mistake, such as a pointer to a result that does
+  not exist), **verified** (proved, and everything underneath it is proved too), or **disproved**
+  (shown false by a counterexample).
 - **Nothing rests on unproved work.** Following the graph to the bottom, a result is called *verified*
   only when its own proof passes *and* every result beneath it is verified too — so you never build on
   an unproved step by accident.

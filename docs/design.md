@@ -24,7 +24,7 @@ semantic mathematics, compiled in one pass into one dependency graph with one
 ID namespace. Folders are organizational only, never a semantic boundary. By
 convention, agents place new proof QMD under a plain `workspace/` folder in
 the project root; the tooling attaches no meaning to that location.
-qmd-prover never promotes proof text or status markers into QMD sources.
+qmd-prover never promotes proof text into QMD sources.
 
 ## Components
 
@@ -127,9 +127,9 @@ Derived state under `.qmd-prover/` includes:
 - generated Quarto observability inputs.
 
 `.qmd-prover/` holds derived tool state only and is excluded from source
-discovery. `VERIFIED` and `REVOKED` source markers are recognized nowhere:
-writing either marker in any file is the structural error
-`PROTECTED_MARKER_FORBIDDEN`.
+discovery. QMD source has no body markers: no word in a declaration or proof
+body carries workflow meaning. Author intent lives only in the `.disproof`,
+`.draft`, and `.abandon` div attributes.
 
 ### Example: one theorem after prolonged work
 
@@ -164,7 +164,7 @@ uniform-index-project/
 └── .qmd-prover/
     ├── config.yml
     ├── statement-locks.json
-    ├── manifest.json                      # published schema-v6 manifest
+    ├── manifest.json                      # published schema-v7 manifest
     ├── graph.json                         # published project graph
     ├── diagnostics.json
     ├── graphs/
@@ -192,9 +192,10 @@ inspection.
 
 The subject files contain ordinary semantic QMD. A declaration normally stays
 beside its linked proof. Attempts and counterexamples need no special file
-type. `OPEN` and `REJECTED` distinguish incomplete and inactive proof blocks.
-`DISPROVED` begins a proposed counterexample or refutation in a theorem-like
-linked proof; it remains a candidate until independently checked.
+type. A proof block carries `.draft` while it is deliberately unfinished and
+`.abandon` once it is set aside. `.disproof` marks a proposed counterexample or
+refutation of a theorem-like statement; it stays a proposal until independently
+checked.
 
 ### Project dependency model
 
@@ -204,8 +205,8 @@ one graph. That graph may contain:
 - verified definitions and results;
 - independently confirmed disproved statements with their
   refutation evidence;
-- candidates that are mechanically ready but await verification;
-- open dependencies with incomplete proofs;
+- facts that are ready to check but carry no verdict;
+- open dependencies with no proof content yet;
 - retained rejected attempts;
 - unresolved references needed to explain a failure; and
 - protected main goals with their proof overlays.
@@ -254,8 +255,7 @@ state, and adds explicit retained disproof evidence:
 6. The published project graph exposes all three layers for search, dependency
    analysis, progress reporting, and future paper selection.
 
-`submit proof` and `verification revoke` have been removed entirely. The
-dispatcher no longer recognizes them, and no command writes proof text.
+No command writes proof text.
 
 Statement locks, exact dependency edges, external basis, checker contract,
 source freshness, rejection safety, and atomic writes are still checked. The
@@ -370,12 +370,12 @@ scope. The proof block is an overlay, not a second theorem
 declaration. Neither inspection nor successful verification copies this proof
 into the user-owned QMD file.
 
-If the exact theorem-like statement is false, its linked proof instead begins
-with `DISPROVED` and supplies the counterexample or refutation after that
-marker. This changes the independent review mode; it does not itself establish
-falsity. Definitions cannot use the marker. A verifier may also discover a
-counterexample while checking an unmarked proof, and derived state records that
-outcome without editing the QMD source.
+If the exact theorem-like statement is false, its linked proof div carries the
+`.disproof` attribute and supplies the counterexample or refutation. This
+changes the independent review mode; it does not itself establish falsity. A
+definition cannot carry `.disproof`. A verifier may also discover a
+counterexample while checking an ordinary proof, and derived state records that
+outcome without changing the mathematics in the QMD source.
 
 ### Inspection scopes
 
@@ -388,7 +388,7 @@ The public scopes are:
 - `inspect project` for one unified compile, machine analysis, optional local
   conditional verification, and global composition over every fact; and
 - `dependency ...` for analysis and search over the current published
-  schema-v6 snapshot.
+  schema-v7 snapshot.
 
 Narrow scopes verify the selected facts plus their transitive dependency
 closure, and unchanged facts inherit their results from the last published
@@ -414,52 +414,64 @@ exact imports and exports, reference existence and scope, cycles, protected
 goal freshness, and source freshness. It is computed without an AI verifier.
 
 Local verification checks the exact submitted proof or refutation while
-assuming the exact conclusions of only its direct dependencies. A rejected,
-unverified, or cyclic upstream proof does not prevent this local check when
-the dependency statements can be materialized. Without a configured verifier,
-local state is `not-run` rather than a machine failure.
+assuming the exact conclusions of only its direct dependencies. A rejected or
+unverified upstream proof does not prevent this local check when the dependency
+statements can be materialized, and neither does citing a fact that sits in a
+dependency cycle. A fact inside the cycle is itself `broken` and is never sent.
+Without a configured verifier, local state is `not-run` rather than a machine
+failure.
 
 Global verification is deterministic. A result is globally `verified` only if
 its machine state passes, its local proof is accepted, and every direct
-dependency is globally `verified`. Otherwise it is `blocked`, `unverified`,
-`rejected`, `invalid`, or `disproved` as appropriate. Operational `ok` says
-whether inspection and configured verifier execution completed; it is not the
-mathematical answer.
+dependency is globally `verified`. Otherwise it is `open`, `unverified`,
+`rejected`, `blocked`, `broken`, `abandoned`, or `disproved` as appropriate.
+Operational `ok` says whether inspection and configured verifier execution
+completed; it is not the mathematical answer.
 
-While local verification has not run, a fact keeps its machine status, which
-is derived from markers and proof shape alone:
+Author intent is the fourth field alongside those three. It records what the
+author declared through the `.disproof`, `.draft`, and `.abandon` div
+attributes, and the engine never computes or overwrites it. `inspect fact @ID`
+exposes all four.
 
-- `open`: a required proof is absent or begins with `OPEN`;
-- `candidate`: complete unmarked mathematics awaits checking;
-- `disproof-candidate`: a `DISPROVED` proof proposes a counterexample
-  or refutation and awaits checking;
-- `rejected`: the active proof begins with `REJECTED`; and
-- `revoked`: a retained prior decision is no longer usable.
+Mechanical state is `ok` or `broken`. Local verification is one field holding
+`not-run`, `verified`, `disproved`, or `rejected`, and `not-run` always carries
+a reason: `nothing-to-check`, `draft`, `not-eligible`, `out-of-scope`,
+`no-backend`, or `verifier-error`.
 
-Once local verification has run, the composed verification status is one of:
+List output shows one string, and that string is always the global field. Its
+values are `open`, `unverified`, `rejected`, `blocked`, `broken`, `abandoned`,
+`verified`, and `disproved`. A cited ID that resolves to nothing appears as
+`missing`, which is a placeholder node rather than a fact state.
 
-- `verified`: the exact current candidate has an accepted local
-  verifier record and every direct dependency is globally verified;
-- `disproved`: local verification established a refutation and every
-  direct dependency is globally verified, so the exact theorem-like statement
-  is globally false with retained structured evidence;
-- `blocked`: a cited dependency is not globally verified;
-- `unverified` or `rejected`: the local check did not run for this candidate
-  or rejected it, including a rejected proposed refutation; and
-- `invalid`: mechanical, source, or cache checks prevent use.
+`open` means there is nothing to check yet: no proof block, an empty one, or one
+marked `.draft`. `unverified` means a proof exists but carries no verdict. The
+two are disjoint. `candidate`, `disproof-candidate`, `ready`, and `unbroken` are
+not statuses; they are named sets selected with `--set`, and `ready` is the set
+that is eligible to be sent to the verifier.
+
+[Status model design](design-status.md) is the single reference for these four
+fields and this vocabulary. The composition rules are not repeated here.
 
 `verified` is informal globally composed AI evidence, not formal
 proof and not human review. It is never inferred from the agent's confidence
 and never written as a source marker.
 
-`disproved` has the same freshness requirement. It is conclusive
-evidence about a false statement, not an available premise. Global composition
-blocks any dependent fact that cites it, and frontier queries expose it as an
-obstruction. The machine edge remains present and independent of the verdict.
+`disproved` rests on the same exact-cache freshness requirement. It is
+conclusive evidence about a false statement, not an available premise. Global
+composition blocks any dependent fact that cites it, and frontier queries expose
+it as an obstruction. The machine edge remains present and independent of the
+verdict.
 
-`VERIFIED` and `REVOKED` are recognized nowhere. Writing either marker in any
-file is the structural error `PROTECTED_MARKER_FORBIDDEN`; no legacy-marker
-compatibility remains.
+An abandoned fact resolves no references, contributes no dependency edges, and
+is never checked. It still owns its ID, so an ID hidden inside an abandoned
+block still collides with a live one.
+
+Inspection writes a display-only `status` attribute onto the div of each
+freshly checked fact, carrying the local verdict: `verified`, `disproved`, or
+`rejected`. An accepted refutation is written as `disproved`, never as
+`verified`. The attribute is excluded from every content hash, the verifier
+packet, the cache key, and the snapshot identity, and is never read back, so
+writing it cannot change what is checked.
 
 ### Dependency analysis and search
 
@@ -479,8 +491,8 @@ provides:
 - text and graph-aware search.
 
 Queries without a target cover the entire project graph. Search can filter
-by ID, title, text, kind, status, source path, origin, graph relationship,
-frontier membership, stale impact, directness, or cycle participation.
+by ID, title, text, kind, status, named set, source path, origin, graph
+relationship, frontier membership, directness, or cycle participation.
 
 Every ID is globally unique in one project-wide namespace. A duplicate
 anywhere is the project-wide diagnostic `DUPLICATE_ID`: it stops all inspect
@@ -505,8 +517,8 @@ previous outcomes for unchanged facts so unrelated nodes are not downgraded.
 `check staleness` is read-only. It audits the project-level cache records and
 reports each stale entry with a reason: `cache-invalid`,
 `external-basis-changed`, `checker-contract-changed`, `source-changed`, or
-`dependency-context-changed`. It does not remove or add markers,
-rewrite QMD, or overwrite progress notes.
+`dependency-context-changed`. It does not rewrite QMD or overwrite progress
+notes.
 
 ## How agents use the infrastructure
 
@@ -708,6 +720,8 @@ a source-rewriting operation.
 
 ## Further design documents
 
+- [Status model design](design-status.md) defines the four state fields, the
+  status vocabulary, and the filter sets.
 - [Discipline design](design-discipline.md) explains policy ownership,
   semantic regimes, rule categories, block types, and contract evolution.
 - [Inspector design](design-inspector.md) explains fact, path,

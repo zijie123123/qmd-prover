@@ -2,7 +2,7 @@
 title: "First-order syntax and substitution"
 ---
 
-::: {#def-fol-signature .definition name="First-order signature" date="2026-07-12" export="def-fol-signature"}
+::: {#def-fol-signature .definition name="First-order signature" date="2026-07-12" export="def-fol-signature" status="verified"}
 A first-order signature \(L\) consists of sets \(\mathcal F_n\) of \(n\)-ary
 function symbols and sets \(\mathcal R_n\) of \(n\)-ary relation symbols for
 each \(n\in\mathbb N\).  Constants are the members of \(\mathcal F_0\).
@@ -11,7 +11,7 @@ Equality is a distinguished logical binary predicate, not a member of
 arities and adds new ones.
 :::
 
-::: {#def-fol-terms .definition name="Terms and variables" date="2026-07-12" export="def-fol-terms"}
+::: {#def-fol-terms .definition name="Terms and variables" date="2026-07-12" export="def-fol-terms" status="verified"}
 Fix a countably infinite set \(\mathrm{Var}\) of variables.  For a signature
 \(L\) as in @def-fol-signature, the \(L\)-terms are the least set containing
 every variable and every constant and closed under
@@ -20,7 +20,7 @@ has no variable.  The finite set of variables occurring in \(t\) is
 \(\mathrm{Var}(t)\).
 :::
 
-::: {#def-fol-formulas .definition name="Formulas and sentences" date="2026-07-12" export="def-fol-formulas"}
+::: {#def-fol-formulas .definition name="Formulas and sentences" date="2026-07-12" export="def-fol-formulas" status="verified"}
 For @def-fol-signature and @def-fol-terms, the \(L\)-formulas are the finite
 syntax trees generated inductively by two clauses: the atomic formulas are
 \(R(t_1,\ldots,t_n)\) with \(R\in\mathcal R_n\) and each \(t_i\) an \(L\)-term,
@@ -43,7 +43,7 @@ the set of variables with a free occurrence.  A *sentence* is a formula \(A\)
 with \(\mathrm{FV}(A)=\varnothing\).
 :::
 
-::: {#def-fol-substitution .definition name="Capture-free substitution" date="2026-07-12" export="def-fol-substitution"}
+::: {#def-fol-substitution .definition name="Capture-free substitution" date="2026-07-12" export="def-fol-substitution" status="verified"}
 For @def-fol-terms and @def-fol-formulas, term substitution \(t[u/x]\) replaces
 every occurrence of the variable \(x\) in the term \(t\) by the term \(u\), by
 recursion on \(t\): \(x[u/x]=u\); \(y[u/x]=y\) for a variable \(y\ne x\);
@@ -70,7 +70,7 @@ For every finite collection of terms and formulas there is a variable that
 does not occur in any member of the collection.
 :::
 
-::: {.proof of="lem-fresh-variable"}
+::: {.proof of="lem-fresh-variable" status="verified"}
 By @def-fol-terms every term is a finite tree and so contains finitely many
 variables; by @def-fol-formulas every formula is a finite syntax tree, so the
 set of variables occurring in it, whether bound or free, is finite.  A finite
@@ -94,7 +94,7 @@ further closed term \(r\) and a variable \(x\notin\{x_1,\ldots,x_k\}\),
 The analogous identity holds for terms.
 :::
 
-::: {.proof of="lem-substitution-composition"}
+::: {.proof of="lem-substitution-composition" status="verified"}
 By @def-fol-terms the terms \(r,r_1,\ldots,r_k\) are closed, hence contain no
 variables, so by @def-fol-substitution each is free for every variable in every
 formula, every displayed substitution is defined, and none of them renames a
@@ -114,7 +114,7 @@ one, and the displayed identity holds because \(x\) differs from each \(x_i\)
 and all substituted terms are closed.
 :::
 
-::: {#def-language-translation .definition name="Constant-to-variable translation" date="2026-07-12" export="def-language-translation"}
+::: {#def-language-translation .definition name="Constant-to-variable translation" date="2026-07-12" export="def-language-translation" status="verified"}
 For @def-fol-terms and @def-fol-formulas, let \(c_1,\ldots,c_n\) be distinct
 constants and \(y_1,\ldots,y_n\) distinct variables.  The *translation*
 replacing each \(c_i\) by \(y_i\) is defined by recursion on syntax: on a term

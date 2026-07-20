@@ -1,12 +1,17 @@
 import type { ResultKind } from '../shared/core.js';
 import type { CheckStatus } from './model.js';
-import type { AiCheck, DisproofEvidence, GlobalVerification } from '../shared/verdicts.js';
+import type {
+  DisproofEvidence, FactIntent, FactListStatus, GlobalVerification, LocalVerification, MechanicalStatus
+} from '../shared/verdicts.js';
 
 export type GraphNodeOrigin = 'main-goal' | 'fact' | 'unresolved';
 
 export interface GraphNode {
   id: string;
-  status: string;
+  /** The four status fields, so `--status` and `--set` can both be answered from the graph alone. */
+  intent?: FactIntent;
+  mechanical?: MechanicalStatus;
+  status: FactListStatus;
   kind?: ResultKind;
   title?: string;
   file?: string;
@@ -14,7 +19,7 @@ export interface GraphNode {
   origin?: GraphNodeOrigin;
   ownership?: string;
   scope?: 'selected' | 'external';
-  local_verification?: AiCheck;
+  local_verification?: LocalVerification;
   global_verification?: GlobalVerification;
   disproof?: DisproofEvidence;
 }
@@ -29,6 +34,33 @@ export interface GraphEdge {
   from: string;
   to: string;
   checks?: GraphEdgeChecks;
+}
+
+/**
+ * The named fact sets. They cut across `status` and overlap each other, so they cannot be status
+ * values; they are the groupings a query asks for by name. See docs/design-status.md.
+ */
+export const SETS = ['candidate', 'disproof-candidate', 'ready', 'unbroken'] as const;
+export type FactSet = typeof SETS[number];
+
+/** The statuses that say a fact was never eligible to be sent: `ready` is everything else. */
+const NOT_READY: readonly FactListStatus[] = ['open', 'broken', 'abandoned', 'missing'];
+
+/**
+ * Whether a graph node belongs to a named set.
+ *
+ * `ready` is read off `status` rather than recomputed, because the four not-ready statuses are
+ * exactly the four reasons a fact is never sent: nothing written (`open`, which also covers
+ * `.draft`), malformed (`broken`), kept for memory (`abandoned`), or not a fact at all (`missing`).
+ * That keeps the set answerable on a graph compiled without any verification run.
+ */
+export function inSet(node: GraphNode, set: FactSet): boolean {
+  switch (set) {
+    case 'candidate': return node.intent !== 'abandoned';
+    case 'disproof-candidate': return node.intent === 'disproof';
+    case 'unbroken': return node.mechanical !== 'broken';
+    case 'ready': return !NOT_READY.includes(node.status);
+  }
 }
 
 export interface DependencyGraph {

@@ -34,7 +34,7 @@ tooling import the owning module directly, so the filesystem layout matches the
 actual dependency graph and makes it clear which layer owns a safety decision.
 
 Each `commands/*` module is a thin orchestrator: it composes `core/` mechanisms
-over the selected scope and returns a stable schema-v6 result. Command modules
+over the selected scope and returns a stable schema-v7 result. Command modules
 never import one another; anything shared between two commands — a helper or a
 result type such as the staleness report — lives in `core/`, so the command
 surface stays legible and independent.
@@ -65,7 +65,7 @@ Within `core`, the layering is `semantic → verification → graph`, all restin
 a higher layer. `infrastructure` owns unsafe boundary operations such as JSON
 reads, path containment checks, locks, and atomic writes. `semantic` owns the
 Pandoc representation and produces typed manifests and dependency graphs;
-because the verdict vocabulary (`AiCheck`, `GlobalVerification`,
+because the verdict vocabulary (`LocalVerification`, `GlobalVerification`,
 `DisproofEvidence`, …) lives in `core/shared/verdicts`, a semantic result carries
 overlaid verification status without depending on the verifier. `verification`
 owns the external protocol and exact decision identity. `graph` owns the
@@ -92,9 +92,10 @@ Large workflows keep orchestration separate from reusable mechanics:
   and exact source reading and fingerprints.
 - `core/semantic/dependency-graph.ts` owns cycle normalization and detection.
 - `core/graph/verify.ts` drives local conditional verification over a selected
-  dependency closure and deterministically composes global status.
+  dependency closure, deterministically composes global status, and projects
+  each fresh local verdict into the display-only source `status` attribute.
 - `core/graph/snapshot.ts` normalizes project-relative locations, computes the
-  schema-v6 total graph with its `source_signature`, and publishes it
+  schema-v7 total graph with its `source_signature`, and publishes it
   atomically when publication is safe.
 - `core/graph/algorithms.ts` owns traversal, subgraphs, shortest paths,
   alternative paths, and proof-frontier mechanics.
@@ -102,7 +103,7 @@ Large workflows keep orchestration separate from reusable mechanics:
 - `commands/inspect/index.ts` composes project, fact, and path inspection over
   the verification driver and published snapshot.
 - `commands/dependency/index.ts` composes the dependency queries and converts
-  domain failures into stable schema-v6 results.
+  domain failures into stable schema-v7 results.
 - `commands/check/index.ts` audits current cache records against sources,
   external basis, and checker contract without mutating QMD.
 - `commands/verification/index.ts` reads retained verifier submissions and
@@ -135,11 +136,12 @@ following invariants are architectural, not merely test conveniences:
 - Inspection never scaffolds proof QMD and never overwrites `progress.qmd`.
 - Mechanical compilation and graph analysis never read AI verdicts, proof
   acceptance, or upstream verification state.
-- A local verifier call requires a materializable target and exact direct
-  dependency statements, but it does not require those dependencies to have
-  accepted proofs. Scope and cycle errors remain machine diagnostics and can
-  invalidate global composition without becoming claims about the local
-  mathematical implication.
+- A local verifier call requires an unbroken, materializable target and exact
+  direct dependency statements, but it does not require those dependencies to
+  have accepted proofs. Scope and cycle errors are machine diagnostics that make
+  the fact itself broken, so it is not sent; a fact that merely cites a broken
+  one is still checked locally and composes as blocked, without either outcome
+  becoming a claim about the other.
 - Exact locally verified, disproved, and rejected decisions are
   content-addressed at `.qmd-prover/verification/checks/<sha256>.json`, keyed
   by the target statement or construction, submitted proof or refutation,
@@ -151,10 +153,11 @@ following invariants are architectural, not merely test conveniences:
   rather than cached.
 - A cache write failure is fatal. `CACHE_WRITE_FAILED` fails the operation
   instead of reporting an acceptance that was never durably recorded.
-- Global verification is a deterministic graph fold. A fact is globally
-  verified only when it is mechanically valid, locally accepted, and every
-  direct dependency is globally verified.
-- A source `DISPROVED` marker selects refutation review but never establishes
+- Global verification is a deterministic graph fold over the state fields
+  defined in [Status model design](design-status.md). A fact is globally
+  verified only when it is mechanically ok, locally accepted, and every direct
+  dependency is globally verified.
+- The `.disproof` attribute selects refutation review but never establishes
   falsity by itself. Only a current independent decision may publish structured
   disproof evidence, and a disproved node is never a usable premise.
 - Narrow inspection never verifies unrelated facts; unchanged facts inherit
@@ -163,8 +166,11 @@ following invariants are architectural, not merely test conveniences:
   before verifier invocation and leaves the last published pointer unchanged.
 - Citing a protected main goal is a legal edge that stays globally blocked
   until the goal itself verifies.
-- Writing a `VERIFIED` or `REVOKED` marker anywhere is the structural error
-  `PROTECTED_MARKER_FORBIDDEN`; no legacy-marker compatibility remains.
+- The display-only `status` attribute written back onto a checked div is
+  excluded from every content hash, the verifier packet, the cache key, and the
+  snapshot identity, and is never read back, so writing it cannot change what is
+  checked. The engine writes only that attribute and never edits an author
+  attribute.
 - Parse failure remains a parse diagnostic; it is never converted to an
   unknown-ID error.
 - Staleness auditing never modifies sources, caches, or published snapshots.

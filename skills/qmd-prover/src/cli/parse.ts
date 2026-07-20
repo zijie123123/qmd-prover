@@ -1,5 +1,5 @@
 import { resolveHelpPath } from './help.js';
-import { KINDS, ORIGINS, STATUSES } from './filters.js';
+import { KINDS, ORIGINS, SETS, STATUSES } from './filters.js';
 import { boundedInteger } from '../core/graph/algorithms.js';
 
 // ---------------------------------------------------------------------------
@@ -8,7 +8,7 @@ import { boundedInteger } from '../core/graph/algorithms.js';
 // exit 1 by the entry script) and never touching the process or the disk. The
 // CLI runtime (run.ts) consumes a `Command` and runs it; help prose (help.ts) is
 // rendered from a command. This module is the single representation of the CLI
-// surface. The filter vocabulary (KINDS/STATUSES/ORIGINS) lives in filters.js.
+// surface. The filter vocabulary (KINDS/STATUSES/SETS/ORIGINS) lives in filters.js.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,7 @@ import { boundedInteger } from '../core/graph/algorithms.js';
 export interface SearchFilters {
   kind?: string;
   status?: string;
+  set?: string;
   origin?: string;
   path?: string;
   relatedTo?: string;
@@ -31,7 +32,6 @@ export interface SearchFilters {
   usedBy?: string;
   dependsOn?: string;
   affectedBy?: string;
-  staleAffectedBy?: string;
   reverse: boolean;
   direct: boolean;
   cycleParticipant: boolean;
@@ -243,13 +243,14 @@ function parseInspect(rest: string[]): Command {
 }
 
 function parseDependencySearch(tail: string[], print: boolean): Command {
-  const valueOptions = new Set(['kind', 'status', 'origin', 'path', 'related-to', 'frontier-of', 'used-by', 'depends-on', 'affected-by', 'stale-affected-by']);
+  const valueOptions = new Set(['kind', 'status', 'set', 'origin', 'path', 'related-to', 'frontier-of', 'used-by', 'depends-on', 'affected-by']);
   const flags = new Set(['reverse', 'direct', 'cycle-participant']);
   const extracted = optionValues(tail, valueOptions, flags);
   if (extracted.positionals.length > 1) throw new Error('dependency search accepts at most one query');
   const filters: SearchFilters = {
     kind: enumOption('kind', optionString(extracted.options.kind), KINDS),
     status: enumOption('status', optionString(extracted.options.status), STATUSES),
+    set: enumOption('set', optionString(extracted.options.set), SETS),
     origin: enumOption('origin', optionString(extracted.options.origin), ORIGINS),
     path: optionString(extracted.options.path),
     relatedTo: optionString(extracted.options.relatedto),
@@ -257,7 +258,6 @@ function parseDependencySearch(tail: string[], print: boolean): Command {
     usedBy: optionString(extracted.options.usedby),
     dependsOn: optionString(extracted.options.dependson),
     affectedBy: optionString(extracted.options.affectedby),
-    staleAffectedBy: optionString(extracted.options.staleaffectedby),
     reverse: extracted.options.reverse === true,
     direct: extracted.options.direct === true,
     cycleParticipant: extracted.options.cycleparticipant === true

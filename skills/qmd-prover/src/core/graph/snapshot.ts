@@ -6,16 +6,16 @@ import type { Diagnostic, CompilerOptions } from '../shared/types.js';
 import type { Compilation } from '../semantic/compiler.js';
 import type { DependencyGraph, GraphNode } from '../semantic/dependency-graph.js';
 import type { Manifest } from '../semantic/model.js';
-import type { AiCheck, GlobalVerification } from '../shared/verdicts.js';
+import type { GlobalVerification, LocalVerification } from '../shared/verdicts.js';
 
 // A graph node is a topology-plus-status view. The verbose per-fact detail
 // (verifier reasons/reports, statement and proof hashes) lives in the manifest
 // results and each operation's `facts[]`/`check`, so nodes carry only the
 // compact status an agent needs to reason about the graph. This keeps whole-graph
 // payloads small instead of repeating the same reason string on every node.
-function nodeLocalVerification(check: AiCheck | undefined): AiCheck {
+function nodeLocalVerification(check: LocalVerification | undefined): LocalVerification {
   if (!check) return { status: 'not-run' };
-  return check.outcome ? { status: check.status, outcome: check.outcome } : { status: check.status };
+  return check.reason ? { status: check.status, reason: check.reason } : { status: check.status };
 }
 
 function nodeGlobalVerification(global: GlobalVerification | undefined): GlobalVerification {
@@ -56,7 +56,7 @@ function compilationSource(compilation: Compilation): unknown {
       proof_present: result.proof_present, dependencies: result.dependencies, export: result.export,
       // The author's checking intent is part of the source identity; the engine-written `status`
       // attribute is deliberately excluded, so projecting a verdict back never re-keys the snapshot.
-      refutation: result.refutation, abandon: result.abandon
+      refutation: result.refutation, draft: result.draft, abandon: result.abandon
     })),
     proofs: compilation.manifest.proofs,
     diagnostics: compilation.diagnostics
@@ -75,6 +75,8 @@ export function buildProjectSnapshot(compilation: Compilation, contextHash: stri
       id: result.id,
       title: result.title,
       kind: result.kind,
+      intent: result.intent,
+      mechanical: result.mechanical,
       status: result.status,
       file: result.file,
       line: result.line,

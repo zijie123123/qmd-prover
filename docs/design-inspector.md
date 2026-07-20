@@ -20,11 +20,15 @@ layers:
 - `global_verification` deterministically composes machine validity, the local
   verdict, and the complete upstream dependency closure.
 
+Author intent is a fourth field carried alongside these. It is declared by the
+`.disproof`, `.draft`, and `.abandon` div attributes and is never computed or
+overwritten by the inspector.
+
 The inspector uses Pandoc JSON as its semantic parser. It extracts dependency
 edges only from `@id` references in a definition construction or linked proof.
 Ordinary expository prose and bibliographic citations do not enter the graph.
 
-Inspection returns stable schema-v6 JSON by default. The default JSON is lean:
+Inspection returns stable schema-v7 JSON by default. The default JSON is lean:
 every fact is a compact reference (`id`, `kind`, `status`, `file`, `line`) and
 the full dependency graph is emitted only with `--graph`; it is always persisted
 to `.qmd-prover/graph.json` regardless. `--print` selects a human-readable report
@@ -39,15 +43,19 @@ duplicate ID anywhere in the project is fatal for every inspection and
 dependency operation: no verifier call occurs and no snapshot replacement is
 published. Other failures remain local to their facts.
 
-Local verification runs for selected facts whose exact target and direct
-dependency statements can be materialized. It is not gated by upstream AI
-verdicts, and machine scope or cycle findings remain separate diagnostics. The
-exact local key covers the target statement or construction, submitted proof
-or refutation, exact direct dependency statements, semantic context, external
-basis, checker contract, and protocol. It excludes dependency proof text,
-dependency verdicts, and the transitive proof closure. Verified, disproved,
-and rejected local decisions are reusable. Without a verifier, machine
-inspection remains operational and local checks are `not-run`.
+Local verification runs for a selected fact when its mechanical state is `ok`,
+it is neither abandoned nor drafted, and it has content to check. It is not
+gated by upstream AI verdicts: a rejected, unverified, or broken dependency
+does not suppress the local check when the dependency statements can be
+materialized. A fact that is itself in a dependency cycle is `broken` and is
+never sent, while a fact that merely cites a cycle participant is checked
+normally. The exact local key covers the target statement or construction,
+submitted proof or refutation, exact direct dependency statements, semantic
+context, external basis, checker contract, and protocol. It excludes dependency
+proof text, dependency verdicts, and the transitive proof closure. Verified,
+disproved, and rejected local decisions are reusable. Without a verifier,
+machine inspection remains operational and local checks are `not-run` with the
+reason `no-backend`.
 
 ### Diagnostics versus QMD source
 
@@ -69,16 +77,15 @@ The project-level codes introduced by unified inspection are:
 | `VERIFIER_FAILED` | A configured verifier failed to launch, timed out, or returned malformed output. A structured failure record is written under `.qmd-prover/verification/failures/` and the remaining uncached checks in the run are skipped. |
 | `AI_CHECK_FAILED` | One fact's local conditional check ended in an infrastructure error rather than a verdict. The fact keeps its machine status and composes as `unverified`. |
 | `AI_CHECK_REJECTED` | Independent review rejected a submitted proof. The diagnostic carries the verifier's explanation and repair hints. |
-| `AI_DISPROOF_REJECTED` | Independent review did not confirm a source-marked refutation. The diagnostic carries the verifier's explanation and repair hints. |
-| `PROTECTED_MARKER_FORBIDDEN` | A `VERIFIED` or `REVOKED` marker appears somewhere in QMD source. Those strings belong only to tool records; their presence in source is a structural error with no compatibility interpretation. |
-| `DEFINITION_DISPROVED_FORBIDDEN` | A definition uses a marker reserved for refuting theorem-like statements. |
+| `AI_DISPROOF_REJECTED` | Independent review did not confirm a refutation marked `.disproof`. The diagnostic carries the verifier's explanation and repair hints. |
+| `DEFINITION_DISPROVED_FORBIDDEN` | A definition carries `.disproof`, which is reserved for refuting theorem-like statements. |
 | `PARSE_ERROR` | Pandoc could not launch or could not parse a relevant QMD file. This remains distinct from lookup failure. |
 | `FACT_UNKNOWN` | Parsing and project indexing completed, but the requested ID does not name a protected goal or explicit declaration. |
 
 More specific compiler and verifier diagnostics follow the same rule: the
 code is a stable machine identifier, while the adjacent message, source
 location, remediation, and repair hints explain what the user or agent should
-do. QMD workflow markers are a separate concept described by the project
+do. QMD workflow attributes are a separate concept described by the project
 contract.
 
 ## 1. Inspect a theorem, lemma, or definition
@@ -122,7 +129,9 @@ For every selected construction or proof, check that:
 - the target declaration exists and is unique in the project namespace;
 - the block kind, ID, class, name, date, and body satisfy the project
   contract;
-- a theorem-like candidate has one nonempty linked proof;
+- a theorem-like result has at most one active linked proof; a missing proof
+  leaves the fact `open` rather than broken, and an empty proof block is the
+  warning `PROOF_EMPTY` and also leaves it `open`;
 - each referenced ID resolves in the import scope of the file that cites it;
   for a protected goal, proof-contributed dependencies resolve in the proof
   file's import scope while the statement is still read from the user's note;
@@ -163,7 +172,7 @@ For a theorem-like result, ask whether:
 - the proof establishes the exact declaration, especially the protected
   main-goal statement.
 
-If the proof begins with `DISPROVED`, change the verification mode from proof
+If the proof div carries `.disproof`, change the verification mode from proof
 to refutation. Ask whether the proposed counterexample satisfies every
 hypothesis and actually falsifies the exact statement, rather than merely
 showing that one proof attempt has a gap. An ordinary proof review may also
@@ -172,11 +181,12 @@ discover that the statement itself is false.
 The verifier returns a verdict, summary, critical errors, gaps, nonblocking
 comments, repair hints, and a refutation field. `correct` with no critical
 errors or gaps verifies an ordinary proof. `disproved` with a nonempty
-refutation and no critical errors or gaps establishes a disproof. A
-source-marked refutation must receive that same conclusive verdict. Missing
-configuration produces `not-run`, not an error. A configured verifier that
-fails, times out, or returns malformed output produces a structured
-infrastructure error and no local conclusion.
+refutation and no critical errors or gaps establishes a disproof. A refutation
+marked `.disproof` must receive that same conclusive verdict. Missing
+configuration produces `not-run` with the reason `no-backend`, not an error. A
+configured verifier that fails, times out, or returns malformed output produces
+a structured infrastructure error and `not-run` with the reason
+`verifier-error`.
 
 ### Compose global state and record evidence
 
@@ -185,10 +195,11 @@ checks. A fact is globally `verified` exactly when its mechanical state
 passes, its local proof is accepted, and every in-graph dependency is globally
 verified; a conclusive local refutation composes to `disproved` under the same
 dependency condition. A locally accepted fact with an unconcluded upstream
-dependency is `blocked`; a fact whose local check did not run or ended in an
-infrastructure error is `unverified`; a locally rejected fact is `rejected`;
-a machine-invalid fact is `invalid`. This fold is deterministic and makes no
-AI calls.
+dependency is `blocked`; a fact with nothing to check is `open`; a fact that is
+ready but carries no verdict is `unverified`; a locally rejected fact is
+`rejected`; a malformed fact is `broken`; and a fact marked `.abandon` is
+`abandoned`. This fold is deterministic and makes no AI calls. The complete
+rules are in [Status model design](design-status.md).
 
 For current local evidence, qmd-prover:
 
@@ -203,26 +214,32 @@ For current local evidence, qmd-prover:
 
 For a conclusive refutation, the same safe publication path reports
 `disproved` and stores structured evidence with the verifier summary,
-refutation, source, and exact verification key. The verifier never inserts or
-removes `DISPROVED` in QMD.
+refutation, source, and exact verification key. The verifier never adds or
+removes the `.disproof` attribute in QMD.
 
 Verification summaries count local outcomes (`local_verified`,
-`local_disproved`, `local_rejected`, `local_errors`, `local_not_run`) separately
-from globally composed outcomes (`global_verified`, `global_disproved`,
-`global_blocked`, `global_unverified`, `global_rejected`, `global_invalid`).
-`ok` reports operational success, not the truth of the selected theorem.
+`local_disproved`, `local_rejected`, `local_not_run`) separately from globally
+composed outcomes (`global_verified`, `global_disproved`, `global_rejected`,
+`global_blocked`, `global_unverified`, `global_open`, `global_broken`,
+`global_abandoned`). A check that ended in an infrastructure error is counted in
+`local_not_run` under the reason `verifier-error`. Cache auditing counts
+`unusable_cache_entries`. `ok` reports operational success, not the truth of the
+selected theorem.
 
 If the verifier rejects the proof, qmd-prover caches the exact rejection and
 reports the fact as `rejected` with an `AI_CHECK_REJECTED` diagnostic carrying
-the complete repair information. Rejection never changes user QMD. A rejected
-source-marked refutation receives `AI_DISPROOF_REJECTED` so it cannot be
-confused with either a false statement or an ordinary failed proof.
+the complete repair information. Rejection never changes the mathematics in
+user QMD. A rejected refutation marked `.disproof` receives
+`AI_DISPROOF_REJECTED` so it cannot be confused with either a false statement or
+an ordinary failed proof.
 
-Inspection writes no `VERIFIED` or `REVOKED` marker, and it accepts none: such
-a marker anywhere in source is a structural `PROTECTED_MARKER_FORBIDDEN`
-error, with no compatibility reading of older files. The former submission and
-revocation command surfaces are removed entirely rather than retained as
-aliases; verification state lives only in tool records and snapshots.
+Inspection writes no proof text into QMD. Its only source write is a
+display-only `status` attribute on each freshly checked fact's div, carrying the
+local verdict `verified`, `disproved`, or `rejected`; a fact that was not
+conclusively checked has any prior attribute cleared. The attribute is excluded
+from every content hash, the verifier packet, the cache key, and the snapshot
+identity, and is never read back. QMD source has no body markers, so
+verification state lives only in tool records and snapshots.
 
 ### Construct the related dependency graph
 
@@ -366,7 +383,7 @@ A full project inspection:
   upstream AI outcomes;
 - reuses exact current local verified, disproved, or rejected decisions;
 - computes global status over the complete project graph; and
-- publishes a schema-v6 project snapshot when compilation is complete.
+- publishes a schema-v7 project snapshot when compilation is complete.
 
 A malformed source file does not prevent healthy facts elsewhere from being
 inspected or included with full results. The top-level result is nevertheless
@@ -396,7 +413,7 @@ contains:
 
 Snapshots are content-addressed at `.qmd-prover/graphs/<sha>.json`, with
 `graphs/latest.json` naming the current one and `manifest.json`, `graph.json`,
-and `diagnostics.json` exposing the same schema-v6 state.
+and `diagnostics.json` exposing the same schema-v7 state.
 
 The source signature allows dependency analysis to reuse a saved graph only
 while sources and context remain current. Local evidence has its own exact
@@ -416,7 +433,7 @@ For project inspection, show:
 
 ## 4. Analyze and search the dependency graph
 
-Dependency operations use the latest current schema-v6 aggregate snapshot.
+Dependency operations use the latest current schema-v7 aggregate snapshot.
 They never analyze a snapshot whose `source_signature` no longer matches
 current sources; a stale or missing snapshot requires a fresh inspection.
 
@@ -432,9 +449,9 @@ For selected facts, support:
 - graph-aware search filters.
 
 Without a target, support complete-project cycles, findings, unused imports and
-exports, isolated facts, unreachable facts, ready-for-AI candidates, and
-heavily reused facts. Protected main goals anchor the unreachable and frontier
-analyses.
+exports, isolated facts, unreachable facts, the `ready` facts awaiting a
+verdict, and heavily reused facts. Protected main goals anchor the unreachable
+and frontier analyses.
 
 Every target ID is validated against the aggregate graph. Unknown IDs return a
 structured lookup diagnostic. A duplicate ID prevents graph analysis
@@ -451,7 +468,7 @@ as a globally established premise.
 For a selected fact:
 
 1. Traverse its aggregate dependency closure.
-2. Find open, candidate, rejected, disproved, stale, missing, malformed, or
+2. Find open, ready, rejected, disproved, broken, abandoned, missing, or
    otherwise unusable facts.
 3. Remove a blocked fact from the frontier when a lower unresolved dependency
    already explains the block.
@@ -465,8 +482,8 @@ The inspector derives:
 
 - unused imports and exports;
 - isolated and unreachable facts;
-- unresolved or invalid dependency edges;
-- candidates whose dependency closure is otherwise ready for AI;
+- unresolved dependency edges;
+- `ready` facts that carry no verdict and can be handed to the AI now;
 - heavily reused facts whose change has broad impact; and
 - alternative dependency paths to the same target.
 
@@ -537,10 +554,9 @@ only deterministic global composition changes. The audit reports the affected
 sources and cache reasons, and subsequent inspection reuses every unaffected
 local decision.
 
-This is logical invalidation, not source mutation. A `VERIFIED` or `REVOKED`
-string anywhere in QMD source is a structural `PROTECTED_MARKER_FORBIDDEN`
-error, never evidence of status; there is no compatibility mode that reads
-old markers as state.
+This is logical invalidation, not source mutation. QMD source has no body
+markers, so no word in a declaration or proof body is ever evidence of status.
+The engine reads status from its own records only, never from the source.
 
 ### Atomicity and failure behavior
 
@@ -566,7 +582,7 @@ With `--print`, display:
 - each changed protected goal, source, basis, checker, or cache;
 - previous and current identities when available;
 - invalidation entries grouped by structured reason;
-- invalid or missing cache records; and
+- unusable or missing cache records; and
 - the facts that require another inspection.
 
 ### Agent contract requirement
@@ -578,7 +594,7 @@ The project contract requires agents to:
 - never use a disproved statement as a dependency;
 - treat missing, corrupt, or stale caches as unverified;
 - rerun the narrowest affected inspection after a source or context change;
-- never write `VERIFIED` or `REVOKED` into any QMD source;
+- never hand-write the engine-owned `status` attribute into any QMD source;
 - never hand-edit derived tool state under `.qmd-prover/`; and
 - never confuse a local conditional AI pass with global verification, and
   never bypass mechanical checks or global composition.

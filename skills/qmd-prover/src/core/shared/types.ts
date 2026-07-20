@@ -77,13 +77,13 @@ export interface DependencyQuery {
   limit?: number | string;
   kind?: string;
   status?: string;
+  set?: string;
   origin?: string;
   path?: string;
   relatedTo?: string;
   usedBy?: string;
   dependsOn?: string;
   affectedBy?: string;
-  staleAffectedBy?: string;
   frontierOf?: string;
   direct?: boolean;
   reverse?: boolean;

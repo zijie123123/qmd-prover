@@ -123,11 +123,12 @@ that the others passed.
 
 The mechanical layer is deliberately conservative. When it cannot establish a
 required invariant from Pandoc JSON and protected state, it emits a diagnostic
-rather than guessing. The local verifier is separately eligible when the exact
-target and direct dependency statements can be materialized; an upstream AI
-rejection does not suppress it. Machine errors still make global composition
-invalid even if a local conditional judgment is available. Host conduct
-remains necessary because not all bad actions are recoverable from final files.
+rather than guessing. The local verifier is separately eligible when the fact
+itself is unbroken and the exact target and direct dependency statements can be
+materialized; an upstream AI rejection does not suppress it. An upstream machine
+error still blocks global composition even when the local conditional judgment
+is available. Host conduct remains necessary because not all bad actions are
+recoverable from final files.
 
 ### Mechanically enforceable rules
 
@@ -146,10 +147,11 @@ Mechanically enforceable rules include:
 - dependency cycles, missing references, malformed imports, and unavailable
   proof premises;
 - exact selection of a fact or path and its transitive dependency closure;
-- placement of `DISPROVED` only as the first paragraph of a theorem-like
-  linked proof, never as a definition marker;
-- absence of `VERIFIED` and `REVOKED` markers anywhere in source
-  (`PROTECTED_MARKER_FORBIDDEN`);
+- placement of `.disproof` only on the linked proof of a theorem-like result,
+  never on a definition;
+- an abandoned fact still owns its ID and is still checked for shape, ID, and
+  date, but resolves no references, contributes no dependency edges, and is
+  never sent to the verifier;
 - current project source, protected goal, external basis, checker contract,
   and cache signatures; and
 - safe atomic publication of project snapshots under `.qmd-prover/graphs/`.
@@ -247,10 +249,12 @@ The skill instructs the host agent to:
 - distinguish an external theorem from a project semantic fact;
 - respond to every verifier critical error and gap;
 - keep search notes, confidence claims, and verifier metadata out of proofs;
-- retain useful failed routes as `REJECTED` rather than presenting them as
+- mark a proof that is still being written `.draft` so it is not sent to the
+  verifier, and remove the mark when it is ready;
+- retain useful failed routes under `.abandon` rather than presenting them as
   premises;
-- mark a precise `DISPROVED` refutation when a protected goal appears false,
-  while treating it as a disproof candidate until independent checking;
+- mark a precise refutation with `.disproof` when a protected goal appears
+  false, while treating it as a disproof candidate until independent checking;
 - leave verified proof development in agent-authored files rather than
   copying it into user notes.
 
@@ -270,10 +274,10 @@ Every prime number is odd.
 
 The agent must not silently change the statement to “Every prime greater than
 \(2\) is odd.” It preserves the goal and puts the counterexample \(2\) in the
-goal's linked proof overlay, conventionally `workspace/main-proof.qmd`, after
-a first-paragraph `DISPROVED` marker. It reports the goal as established
-false only when verification records `disproved`, and may offer the corrected
-statement as a suggestion requiring explicit approval.
+goal's linked proof overlay, conventionally `workspace/main-proof.qmd`, on a
+proof block marked `.disproof`. It reports the goal as established false only
+when verification records `disproved`, and may offer the corrected statement as
+a suggestion requiring explicit approval.
 
 ## Semantic scope
 
@@ -401,21 +405,26 @@ By @def-even-integer, write \(a=2k\). Then \(ab=2(kb)\), so
 :::
 ```
 
-The first nonempty proof paragraph may be `OPEN` for an incomplete active
-attempt, `REJECTED` for an inactive failed attempt, or `DISPROVED` for a
-proposed counterexample or refutation of the exact theorem-like statement. No
-marker means a proof candidate. A definition may use `OPEN` or `REJECTED` at
-the end of its declaration, but it may not use `DISPROVED`; any challenge to
-existence, uniqueness, or well-definedness belongs in a theorem-like claim.
-`VERIFIED` and `REVOKED` are forbidden everywhere in source; the compiler
-reports them as `PROTECTED_MARKER_FORBIDDEN` structural errors. A source
-marker alone does not establish verification or disproof.
+Author intent lives in the proof block's attributes. `.disproof` says the block
+is a proposed counterexample or refutation of the exact theorem-like statement.
+`.draft` says the proof is deliberately unfinished, so it is never sent to the
+verifier and the fact stays `open`. `.abandon` detaches the attempt and keeps it
+for history. A proof block with none of these is a proof candidate. A definition
+carries `.draft` or `.abandon` on its own declaration, but it may not use
+`.disproof`; any challenge to existence, uniqueness, or well-definedness belongs
+in a theorem-like claim. An attribute alone does not establish verification or
+disproof. There are no body markers: `OPEN`, `REJECTED`, `DISPROVED`, and
+`VERIFIED` are ordinary words with no meaning in source.
 
-When `DISPROVED` is present, the remaining proof body is the proposed
-refutation. Inspection verifies it independently and records either a
-confirmed `disproved` outcome or a rejected-refutation outcome. The
-verifier may also discover a counterexample while reviewing an unmarked proof;
-that decision is retained in derived state without modifying QMD.
+When `.disproof` is present, the whole proof body is the proposed refutation.
+Inspection verifies it independently and records either a confirmed `disproved`
+outcome or a rejected-refutation outcome. The verifier may also discover a
+counterexample while reviewing an unmarked proof; that decision is retained in
+derived state. Inspection then writes the local verdict into a display-only
+`status` attribute on the checked div; authors never write that attribute, and
+the engine never edits an author attribute.
+[Status model design](design-status.md) is the single reference for these
+attributes and the status vocabulary.
 
 ### Example: semantic and nonsemantic references
 

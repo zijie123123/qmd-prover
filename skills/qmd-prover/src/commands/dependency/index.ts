@@ -1,7 +1,9 @@
 import { cleanId } from '../../core/infrastructure/files.js';
+import { inSet } from '../../core/semantic/dependency-graph.js';
+import type { FactSet } from '../../core/semantic/dependency-graph.js';
 import { SCHEMA_VERSION, byId } from '../../core/shared/core.js';
 import { adjacency, allSimplePaths, boundedInteger, frontier, requireNode, shortestPath, traverse } from '../../core/graph/algorithms.js';
-import { deriveGraphFindings, staleFactIds } from '../../core/graph/findings.js';
+import { deriveGraphFindings } from '../../core/graph/findings.js';
 import { resolveProjectSnapshot } from '../../core/graph/snapshot.js';
 import type { ProjectSnapshot } from '../../core/graph/snapshot.js';
 import { compileProject } from '../../core/semantic/compiler.js';
@@ -71,7 +73,7 @@ export async function analyzeDependencies(root: string, operation: string, args:
   const requiredIds = [
     ...(['dependencies', 'reverse-dependencies', 'impact', 'frontier'].includes(operation) ? [requested] : []),
     ...(['path', 'alternative-paths'].includes(operation) ? [requested, args[1]] : []),
-    ...(operation === 'search' ? [options.relatedTo, options.usedBy, options.dependsOn, options.affectedBy, options.staleAffectedBy, options.frontierOf] : [])
+    ...(operation === 'search' ? [options.relatedTo, options.usedBy, options.dependsOn, options.affectedBy, options.frontierOf] : [])
   ].filter((value): value is string => typeof value === 'string' && value.length > 0);
   const missing = [...new Set(requiredIds.map(cleanId).filter((id) => !graph.nodes.some((node) => node.id === id)))];
   if (missing.length) return {
@@ -129,13 +131,13 @@ export async function analyzeDependencies(root: string, operation: string, args:
   } else if (operation === 'search') {
     const query = String(requested ?? '').toLowerCase();
     const manifestById = byId(snapshot.manifest.results);
-    const staleIds = staleFactIds(snapshot);
     let matches = graph.nodes.filter((node) => {
       const fact = manifestById.get(node.id);
       const haystack = [node.id, node.title, node.file, fact?.statement_text, fact?.proof_text].filter(Boolean).join('\n').toLowerCase();
       return haystack.includes(query)
         && (!options.kind || node.kind === options.kind)
         && (!options.status || node.status === options.status)
+        && (!options.set || inSet(node, options.set as FactSet))
         && (!options.origin || node.origin === options.origin)
         && (!options.path || node.file === options.path || node.file?.startsWith(`${options.path}/`));
     });
@@ -161,10 +163,6 @@ export async function analyzeDependencies(root: string, operation: string, args:
       const related = relatedIds(options.affectedBy, true);
       matches = matches.filter((node) => related.has(node.id));
     }
-    if (options.staleAffectedBy) {
-      const related = relatedIds(options.staleAffectedBy, true);
-      matches = matches.filter((node) => related.has(node.id) && staleIds.has(node.id));
-    }
     if (options.frontierOf) {
       const ids = new Set(frontier(graph, options.frontierOf).map((item) => item.fact.id));
       matches = matches.filter((node) => ids.has(node.id));
@@ -178,13 +176,13 @@ export async function analyzeDependencies(root: string, operation: string, args:
       filters: {
         ...(options.kind ? { kind: options.kind } : {}),
         ...(options.status ? { status: options.status } : {}),
+        ...(options.set ? { set: options.set } : {}),
         ...(options.origin ? { origin: options.origin } : {}),
         ...(options.path ? { path: options.path } : {}),
         ...(options.relatedTo ? { related_to: cleanId(options.relatedTo), reverse: options.reverse === true } : {}),
         ...(options.usedBy ? { used_by: cleanId(options.usedBy) } : {}),
         ...(options.dependsOn ? { depends_on: cleanId(options.dependsOn) } : {}),
         ...(options.affectedBy ? { affected_by: cleanId(options.affectedBy) } : {}),
-        ...(options.staleAffectedBy ? { stale_affected_by: cleanId(options.staleAffectedBy) } : {}),
         ...(options.frontierOf ? { frontier_of: cleanId(options.frontierOf) } : {}),
         ...(options.direct === true ? { direct: true } : {}),
         ...(options.cycleParticipant === true ? { cycle_participant: true } : {})

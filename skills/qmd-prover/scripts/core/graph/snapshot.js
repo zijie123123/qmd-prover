@@ -10,7 +10,7 @@ import { SCHEMA_VERSION } from '../shared/core.js';
 function nodeLocalVerification(check) {
     if (!check)
         return { status: 'not-run' };
-    return check.outcome ? { status: check.status, outcome: check.outcome } : { status: check.status };
+    return check.reason ? { status: check.status, reason: check.reason } : { status: check.status };
 }
 function nodeGlobalVerification(global) {
     if (!global)
@@ -37,7 +37,7 @@ function compilationSource(compilation) {
             proof_present: result.proof_present, dependencies: result.dependencies, export: result.export,
             // The author's checking intent is part of the source identity; the engine-written `status`
             // attribute is deliberately excluded, so projecting a verdict back never re-keys the snapshot.
-            refutation: result.refutation, abandon: result.abandon
+            refutation: result.refutation, draft: result.draft, abandon: result.abandon
         })),
         proofs: compilation.manifest.proofs,
         diagnostics: compilation.diagnostics
@@ -54,6 +54,8 @@ export function buildProjectSnapshot(compilation, contextHash, diagnostics = com
             id: result.id,
             title: result.title,
             kind: result.kind,
+            intent: result.intent,
+            mechanical: result.mechanical,
             status: result.status,
             file: result.file,
             line: result.line,

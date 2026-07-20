@@ -146,8 +146,8 @@ test('inspect fact locates a large-project fact and verifies only its dependency
     assert.deepEqual((await verifierCalls(countFile)).sort(), inspected.graph.nodes.map((node) => node.id).sort());
     const latest = await readJson<{ schema_version: number; file: string }>(path.join(root, '.qmd-prover', 'graphs', 'latest.json'));
     const snapshot = await readJson<{ schema_version: number; goals: unknown[]; notes: unknown[]; graph: { nodes: unknown[] } }>(path.join(root, latest.file));
-    assert.equal(latest.schema_version, 6);
-    assert.equal(snapshot.schema_version, 6);
+    assert.equal(latest.schema_version, 7);
+    assert.equal(snapshot.schema_version, 7);
     assert.equal(snapshot.goals.length, 1);
     assert.equal(snapshot.notes.length, 7);
     assert.equal(snapshot.graph.nodes.length, 32);
@@ -168,7 +168,7 @@ test('inspect fact uses the main-goal proof overlay without changing user notes'
     assert.equal(inspected.fact.id, target);
     assert.equal(inspected.fact.status, 'verified');
     assert.equal(inspected.fact.proof_file, 'workspace/main-proof.qmd');
-    assert.equal(inspected.check.local_verification.status, 'pass');
+    assert.equal(inspected.check.local_verification.status, 'verified');
     assert.equal(inspected.check.global_verification.status, 'verified');
     assert.deepEqual(await readFile(userFile), before);
   } finally {
@@ -242,7 +242,7 @@ test('large project locally checks every fact and globally blocks the reverse cl
     assert.equal(inspected.verification.global_verified, 24);
     assert.equal(inspected.verification.global_rejected, 1);
     assert.equal(inspected.verification.global_blocked, 7);
-    assert.equal(must(inspected.facts.find((fact) => fact.id === rejectedId)).local_verification.status, 'fail');
+    assert.equal(must(inspected.facts.find((fact) => fact.id === rejectedId)).local_verification.status, 'rejected');
     assert.deepEqual(inspected.facts.filter((fact) => fact.global_verification.status === 'blocked').map((fact) => fact.id).sort(), blocked);
     assert.equal(must(inspected.facts.find((fact) => fact.id === target)).mechanical.status, 'pass');
     assert.ok(inspected.diagnostics.some((item) => item.code === 'AI_CHECK_REJECTED' && item.id === rejectedId));
@@ -263,9 +263,10 @@ test('large project fixture exposes a missing cross-file import as a mechanical 
     assert.equal(inspected.ok, false);
     const codes = new Set(inspected.diagnostics.map((item) => item.code));
     assert.ok(codes.has('DEPENDENCY_UNAVAILABLE'));
-    assert.equal(inspected.verification.local_not_run, 0);
-    assert.equal(inspected.verification.verifier_calls, 32);
-    assert.ok(inspected.verification.global_invalid > 0);
+    // The fact whose import went missing is broken, so it is not sent; everything else still is.
+    assert.equal(inspected.verification.local_not_run, 1);
+    assert.equal(inspected.verification.verifier_calls, 31);
+    assert.ok(inspected.verification.global_broken > 0);
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
   }
@@ -291,7 +292,7 @@ test('large project never verifies a protected goal against a mutated statement'
     assert.ok(mutated.diagnostics.some((item) => item.code === 'MAIN_STATEMENT_MUTATED' && item.id === target));
     const goal = must(mutated.facts.find((fact) => fact.id === target));
     assert.equal(goal.local_verification.status, 'not-run');
-    assert.equal(goal.global_verification.status, 'invalid');
+    assert.equal(goal.global_verification.status, 'broken');
     assert.deepEqual((await verifierCalls(countFile)).slice(32), []);
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;

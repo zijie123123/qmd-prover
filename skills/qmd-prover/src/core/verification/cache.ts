@@ -4,9 +4,9 @@ import { verificationOutcome, verifierErrorDetails } from './protocol.js';
 import { asErrorLike, asRecord, asStringArray, hasErrorCode, isRecord } from '../shared/core.js';
 import type { JsonObject, UnknownRecord } from '../shared/types.js';
 import type { VerifierPacket } from './protocol.js';
-import type { AiCheck, VerificationOutcome, VerifierReport } from '../shared/verdicts.js';
+import type { LocalVerification, VerificationOutcome, VerifierReport } from '../shared/verdicts.js';
 
-export interface LocalOutcome extends AiCheck {
+export interface LocalOutcome extends LocalVerification {
   verification_key?: string;
   failed_target?: string;
   failure_report?: string;
@@ -80,7 +80,8 @@ export function verifierFailure(error: unknown, target: string, inherited = fals
   const failure = asErrorLike(error);
   const details = inherited ? failure.details : verifierErrorDetails(error);
   return {
-    status: 'error',
+    status: 'not-run',
+    reason: 'verifier-error',
     code: String(failure.code ?? 'VERIFIER_FAILED'),
     error: inherited
       ? `Local conditional verification stopped after the verifier command failed while checking @${target}`

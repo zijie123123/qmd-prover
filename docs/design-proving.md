@@ -8,7 +8,8 @@ ordinary project QMD, then submit each materializable candidate to an optional
 local AI verifier. Globally composed mathematics is recorded in tool state as
 `verified`; independently confirmed counterexamples and refutations are
 recorded as `disproved` evidence. Both live in `.qmd-prover/` records and
-snapshots, never in the QMD source itself.
+snapshots. The only thing written back into QMD is a display-only `status`
+attribute that repeats the last local verdict.
 
 They do not form a proving agent. The host decides how to reason, which lemmas
 to introduce, when to explore examples, and how to repair a proof. The runtime
@@ -102,15 +103,18 @@ linked proof. A definition's construction lives in its declaration body and
 may have a linked proof for existence, uniqueness, or well-definedness. The
 protected main-goal candidate contains only the linked proof.
 
-A partial theorem-like proof begins with `OPEN`. A failed attempt retained for
-history begins with `REJECTED`. A proposed counterexample or refutation begins
-with `DISPROVED`; it is still a candidate until independently checked. An
-unmarked complete proof is a proof candidate. Definitions cannot use
-`DISPROVED`.
+Author intent lives in the attributes of the proof block, not in its body.
+`.draft` marks a deliberately unfinished proof: it is never sent to the
+verifier and the fact stays `open`. `.disproof` marks a proposed counterexample
+or refutation; it is still a candidate until independently checked. `.abandon`
+on a proof block detaches that attempt and keeps it for history; on a result it
+retires the whole fact. A proof block with none of these is a proof candidate.
+Definitions cannot use `.disproof`.
 
-Current verification does not write `VERIFIED` or `REVOKED` markers. Those
-strings are structural errors wherever they appear in source
-(`PROTECTED_MARKER_FORBIDDEN`); there is no legacy-marker compatibility.
+There are no body markers. `OPEN`, `REJECTED`, `DISPROVED`, and `VERIFIED` are
+ordinary words with no meaning in QMD source.
+[Status model design](design-status.md) is the single reference for author
+intent, the status vocabulary, and the filter sets.
 
 Useful preparation assistance includes:
 
@@ -153,9 +157,8 @@ Before independent verification, the inspector confirms that:
 - an intermediate result has exactly one appropriate linked proof;
 - the protected target is supplied only through a proof overlay and was not
   redeclared;
-- the proof is either an unmarked proof candidate or a theorem-like
-  `DISPROVED` refutation candidate, and is not `OPEN` or `REJECTED`;
-- no `VERIFIED` or `REVOKED` marker appears anywhere in the sources;
+- the fact is unbroken, is not abandoned, is not marked `.draft`, and has
+  proof content to check;
 - every dependency exists, is unique, and is in scope;
 - every cross-file dependency has an exact producer export and consumer import;
 - cycle membership is recorded as a machine finding; and
@@ -163,9 +166,14 @@ Before independent verification, the inspector confirms that:
   materialized exactly.
 
 Preflight establishes machine validity and packet availability, not
-mathematical correctness. A scope error or cycle can make global state invalid
-while a separately materializable local conditional check still runs; the two
-outcomes remain visibly separate.
+mathematical correctness. A fact with a scope error, an unresolved citation, or
+membership in a dependency cycle is broken, so it is never sent to the
+verifier. A fact that merely cites such a fact is not itself broken: its local
+conditional check still runs and its global status stays blocked until the
+upstream fact is repaired. The two outcomes remain visibly separate. An empty
+proof block is the warning `PROOF_EMPTY` and leaves the fact `open`; it is not
+an error. An abandoned fact is exempt from the reference, scope, and cycle
+checks and is never sent, but it still owns its ID.
 
 ### Example preflight failure
 
@@ -178,7 +186,7 @@ Let \(n=2k\). Then \(n^2=4k^2\).
 ```
 
 the inspector does not guess the nearby ID. It reports that the proof target is
-unknown or invalid. The host repairs `of` to name the exact protected target.
+unknown or malformed. The host repairs `of` to name the exact protected target.
 
 Similarly, a proof that cites `@lem-square-of-double` from a file that never
 exports it is not repaired by inventing an import. The producing file must
@@ -258,22 +266,21 @@ If the host has a counterexample, it preserves the statement and makes the
 linked proof explicit:
 
 ```markdown
-::: {.proof of="thm-main-primes-odd"}
-DISPROVED
-
+::: {.proof .disproof of="thm-main-primes-odd"}
 The number \(2\) is prime, because its only positive divisors are \(1\) and
 \(2\), but \(2\) is not odd. Hence it falsifies the universal statement.
 :::
 ```
 
-The marker selects `refutation` mode; it is not a verifier decision. A
-successful independent check records the local outcome `disproved` and
-structured evidence containing the summary, exact refutation, source, and
+The `.disproof` attribute selects `refutation` mode; it is not a verifier
+decision. A successful independent check records the local outcome `disproved`
+and structured evidence containing the summary, exact refutation, source, and
 verification identity. A failed proposed refutation records an
 `AI_DISPROOF_REJECTED` diagnostic and repair information. The verifier may
 instead discover a counterexample while checking an unmarked proof and return
 the same conclusive disproved outcome.
-Neither route edits the source marker.
+Neither route edits an author attribute. An accepted refutation writes
+`status="disproved"` onto the proof div, which is display only.
 
 A globally disproved fact is terminal evidence about a false statement, not a
 premise. Its machine dependency edges remain intact, while global composition
@@ -298,7 +305,7 @@ The runtime does not erase an earlier rejection because a later candidate
 passes. Exact decisions remain evidence keyed to their exact packet.
 
 If the protected statement appears false, the host preserves it and develops a
-counterexample or precise `DISPROVED` refutation for independent checking. It
+counterexample or precise `.disproof` refutation for independent checking. It
 must not weaken the statement to manufacture acceptance.
 
 ### Example rejection and repair
@@ -349,7 +356,7 @@ For current context, inspection:
 2. records the result under `local_verification` without changing any machine
    edge or upstream state;
 3. computes `global_verification` deterministically over the project graph;
-4. constructs a complete schema-v6 project manifest and graph;
+4. constructs a complete schema-v7 project manifest and graph;
 5. lets facts outside a narrow selection inherit their prior snapshot results
    when the `source_signature` and fact identities are unchanged;
 6. atomically publishes the content-addressed snapshot under
@@ -358,7 +365,8 @@ For current context, inspection:
    `diagnostics.json` when publication is safe.
 
 The host cannot bypass this path merely because it authored the proof. No step
-writes proof text or a status marker into the user's note.
+writes proof text into a note. The only source write is the display-only
+`status` attribute, which carries `verified`, `disproved`, or `rejected`.
 
 ### Example stale acceptance
 
@@ -386,7 +394,7 @@ qmd-prover may retain under `.qmd-prover/`:
 - exact verified, disproved, and rejected verifier records under
   `verification/checks/`;
 - verifier infrastructure failure reports under `verification/failures/`;
-- content-addressed schema-v6 graph snapshots under `graphs/`, with
+- content-addressed schema-v7 graph snapshots under `graphs/`, with
   `graphs/latest.json` naming the current one; and
 - the project `manifest.json`, `graph.json`, and `diagnostics.json`.
 

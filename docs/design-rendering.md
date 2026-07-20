@@ -51,8 +51,9 @@ User-authored QMD contains material the user chose to keep in notes:
 - bibliographic citations; and
 - ordinary Quarto cross-references.
 
-qmd-prover does not copy a verified proof, confirmed refutation, or status
-marker into these files.
+qmd-prover does not copy a verified proof or confirmed refutation into these
+files. The only thing it writes back is the display-only `status` attribute on
+the div of a fact it checked.
 A protected main goal therefore renders as the user's statement even when its
 current proof overlay and intermediate development live in other project
 files, conventionally under `workspace/`.
@@ -87,9 +88,9 @@ The inspector knows information that need not appear in mathematical prose:
 
 - every goal and fact in the project graph, with its origin (`main-goal`,
   `fact`, or `unresolved`);
-- machine state (`candidate`, `open`, `rejected`, `disproof-candidate`,
-  `revoked`) and verification state (`verified`, `disproved`, `blocked`,
-  `unverified`, `rejected`, `invalid`) for every fact;
+- the status of every fact — `open`, `unverified`, `rejected`, `blocked`,
+  `broken`, `abandoned`, `verified`, or `disproved`, as defined in
+  [Status model design](design-status.md);
 - dependency and reverse-dependency paths;
 - proof frontiers and cycles;
 - source-located diagnostics;
@@ -148,7 +149,7 @@ title: "Proof development: uniform index theorem"
 ## Current frontier
 
 - @lem-finite-stratification: verified
-- @lem-local-exponent-bound: candidate
+- @lem-local-exponent-bound: blocked
 - @lem-completion-preserves-index: open
 - @lem-universal-parity: disproved
 
@@ -161,7 +162,7 @@ title: "Proof development: uniform index theorem"
 ## Abandoned route
 
 The uniform-generator route is retained in
-local-theory/local-class-groups.qmd as a proof beginning with REJECTED.
+local-theory/local-class-groups.qmd as a proof block marked `.abandon`.
 ```
 
 This page describes working mathematics and current evidence. It does not
@@ -196,21 +197,21 @@ that goal is verified.
 
 **Abandoned route.**
 
-Rejected or inactive attempts can be rendered for research history, but they
-must remain visibly non-authoritative. A generated view may link to the
-`REJECTED` proof and its verifier repair hints. It must not use a rejected fact
-as a premise or count it as proof progress.
+Rejected or abandoned attempts can be rendered for research history, but they
+must remain visibly non-authoritative. A generated view may link to the rejected
+or abandoned proof and its verifier repair hints. It must not use a rejected or
+abandoned fact as a premise or count it as proof progress.
 
 Confirmed refutations are different from rejected proof attempts. A generated
 view may show the `disproved` statement together with its verified refutation
 evidence and source. It must still present the statement as false, never
 count it as a proved dependency, and visibly distinguish an independently
-confirmed disproof from a source-only `DISPROVED` candidate or a rejected
+confirmed disproof from an unchecked `.disproof` candidate or a rejected
 refutation.
 
-`VERIFIED` or `REVOKED` markers anywhere in source are structural errors
-(`PROTECTED_MARKER_FORBIDDEN`), never renderable status; a generated view
-reflects only recorded verification state.
+A generated view reflects only recorded verification state. The display-only
+`status` attribute in source repeats the last local verdict and is not that
+state.
 
 ## Dependency navigation
 
@@ -237,7 +238,7 @@ If render preparation produces
 ![Proof dependency graph](.qmd-prover/generated/dependencies.svg){fig-alt="A directed graph from protected goals to supporting lemmas and definitions."}
 ```
 
-The SVG is derived from a published schema-v6 project snapshot. Quarto decides
+The SVG is derived from a published schema-v7 project snapshot. Quarto decides
 how it is embedded or converted.
 
 ## Separation of concerns
@@ -272,7 +273,7 @@ notes and proof mathematics. They must not:
 - require users to edit generated status manually;
 - embed verifier metadata into proof prose;
 - copy proof overlays into protected user-note files;
-- treat source markers as current verification; or
+- treat the display-only `status` attribute as current verification; or
 - make the underlying project unusable when generated files are absent.
 
 Deleting generated rendering inputs must not lose mathematics, exact verifier

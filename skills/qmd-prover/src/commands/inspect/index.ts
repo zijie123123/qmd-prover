@@ -18,7 +18,7 @@ import type { GraphFindings } from '../../core/graph/findings.js';
 
 // The `inspect` command: project, fact, and path inspection. Each entry point
 // compiles the project, runs local conditional verification over the relevant
-// closure, publishes the snapshot, and returns a schema-v6 result. Mechanics
+// closure, publishes the snapshot, and returns a schema-v7 result. Mechanics
 // (compilation, the verification driver, graph traversal, snapshot persistence)
 // live in core; this module only composes them per inspection scope.
 
@@ -53,11 +53,11 @@ function emptyGraph(): DependencyGraph { return { schema_version: SCHEMA_VERSION
 
 function emptyVerification(): InspectionVerificationSummary {
   return {
-    available: false, eligible: 0, verifier_calls: 0, cache_hits: 0, cache_misses: 0, invalid_cache_entries: 0,
+    available: false, eligible: 0, verifier_calls: 0, cache_hits: 0, cache_misses: 0, unusable_cache_entries: 0,
     verifier_duration_ms: 0, verifier_tokens: 0,
-    local_verified: 0, local_disproved: 0, local_rejected: 0, local_errors: 0, local_not_run: 0,
-    global_verified: 0, global_disproved: 0, global_blocked: 0, global_unverified: 0,
-    global_rejected: 0, global_invalid: 0
+    local_verified: 0, local_disproved: 0, local_rejected: 0, local_not_run: 0,
+    global_verified: 0, global_disproved: 0, global_rejected: 0, global_blocked: 0, global_unverified: 0,
+    global_open: 0, global_broken: 0, global_abandoned: 0
   };
 }
 
@@ -70,9 +70,9 @@ function stalenessReport(ok: boolean, snapshotId?: string): StalenessReport {
 
 function unknownFact(id: string): SemanticResult {
   return {
-    id, file: '', kind: 'unknown', classes: [], title: '', date: '', origin: 'agent', status: 'missing', export: null,
+    id, file: '', kind: 'unknown', classes: [], title: '', date: '', origin: 'agent', intent: 'normal', mechanical: 'broken', status: 'missing', export: null,
     statement_text: '', statement_hash: '', title_hash: '', proof_hash: '', proof_present: false, proof_text: '',
-    refutation: false, abandon: false,
+    refutation: false, draft: false, abandon: false,
     construction_dependencies: [], dependencies: []
   };
 }
@@ -133,7 +133,7 @@ export async function inspectProject(root = process.cwd(), options: CompilerOpti
   const facts = run.facts.map((fact) => factCheck(fact, diagnostics));
   const goalIds = new Set(compilation.goals.map((goal) => goal.id));
   const ok = compilation.complete
-    && facts.every((fact) => fact.local_verification.status !== 'error')
+    && facts.every((fact) => fact.local_verification.reason !== 'verifier-error')
     && diagnostics.every((item) => item.severity !== 'error');
   return {
     schema_version: SCHEMA_VERSION,
@@ -172,8 +172,8 @@ function factFailure(id: string, diagnostics: Diagnostic[]): InspectFactResult {
     check: {
       id, status: fact.status,
       mechanical: { status: 'fail', references: [], reason },
-      local_verification: { status: 'not-run', reason: 'No local conditional verification is available.' },
-      global_verification: { status: 'invalid', blockers: [], reason },
+      local_verification: { status: 'not-run', reason: 'not-eligible', detail: 'The fact could not be read, so it was not sent to the verifier.' },
+      global_verification: { status: 'broken', blockers: [], reason },
       diagnostics
     },
     graph: emptyGraph(), verification: emptyVerification(),
@@ -222,7 +222,7 @@ export async function inspectFact(root: string, requested: string, options: Comp
   return {
     schema_version: SCHEMA_VERSION,
     operation: 'inspect-fact',
-    ok: check.mechanical.status === 'pass' && check.local_verification.status !== 'error',
+    ok: check.mechanical.status === 'pass' && check.local_verification.reason !== 'verifier-error',
     verified: check.global_verification.status === 'verified',
     disproved: check.global_verification.status === 'disproved',
     global_status: check.global_verification.status,
@@ -293,7 +293,7 @@ export async function inspectPath(root: string, requestedPath: string, options: 
   const facts = run.facts.filter((fact) => selectedIds.has(fact.id)).map((fact) => factCheck(fact, diagnostics));
   return {
     schema_version: SCHEMA_VERSION, operation: 'inspect-path',
-    ok: facts.every((fact) => fact.mechanical.status === 'pass' && fact.local_verification.status !== 'error')
+    ok: facts.every((fact) => fact.mechanical.status === 'pass' && fact.local_verification.reason !== 'verifier-error')
       && diagnostics.every((item) => item.severity !== 'error'),
     snapshot_id: snapshot.snapshot_id, snapshot_published: published,
     scope: { type: info.isDirectory() ? 'folder' : 'file', path: relative },

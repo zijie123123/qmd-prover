@@ -41,7 +41,7 @@ function graphSvg(graph: DependencyGraph): string {
     const position = positions.get(node.id);
     if (!position) return '';
     const href = `../../${node.file}#${node.id}`;
-    const local = node.local_verification?.outcome ?? node.local_verification?.status ?? 'not-run';
+    const local = node.local_verification?.status ?? 'not-run';
     const global = node.global_verification?.status ?? 'unverified';
     const title = `${node.id}: ${node.title} (local: ${local}; global: ${global})${node.disproof ? ` — ${node.disproof.refutation}` : ''}`;
     return `<a href="${escapeXml(href)}"><g><title>${escapeXml(title)}</title><rect x="${position.x}" y="${position.y}" width="360" height="48" rx="8" fill="#fff" stroke="#64748b"/><text x="${position.x + 12}" y="${position.y + 20}" font-family="sans-serif" font-size="13">${escapeXml(node.id)}</text><text x="${position.x + 12}" y="${position.y + 38}" font-family="sans-serif" font-size="11" fill="#586174">${escapeXml(`local ${local}; global ${global}`)}</text></g></a>`;
@@ -52,7 +52,7 @@ function graphSvg(graph: DependencyGraph): string {
 function statusQmd(compilation: Compilation): string {
   const tableText = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim();
   const rows = compilation.manifest.results.map((result) => {
-    const local = result.local_verification?.outcome ?? result.local_verification?.status ?? 'not-run';
+    const local = result.local_verification?.status ?? 'not-run';
     const global = result.global_verification?.status ?? 'unverified';
     return `| @${result.id} | ${local} | ${global} | ${result.disproof ? `${result.disproof.status}: ${tableText(result.disproof.refutation)}` : '—'} | \`${result.file}:${result.line ?? '?'}\` |`;
   }).join('\n');

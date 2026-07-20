@@ -26,7 +26,6 @@ function findingCounts(findings) {
         unused_exports: findings.unused_exports.length,
         isolated_facts: findings.isolated_facts.length,
         unreachable: findings.unreachable.applicable === false ? 'not-applicable' : findings.unreachable.facts.length,
-        invalid_evidence_dependents: findings.invalid_evidence_dependents.length,
         candidate_ready_for_ai: findings.candidate_ready_for_ai.length,
         heavily_reused: findings.heavily_reused.length
     };
@@ -46,7 +45,7 @@ function leanInspect(result, options) {
             ...(fact.file !== undefined ? { file: fact.file } : {}),
             ...(fact.line !== undefined ? { line: fact.line } : {}),
             mechanical: fact.mechanical?.status,
-            local: fact.local_verification?.outcome ?? fact.local_verification?.status,
+            local: fact.local_verification?.status,
             global: fact.global_verification?.status
         };
         // A disproved fact keeps its refutation evidence so the whole-project view still
@@ -140,7 +139,6 @@ function leanFindings(result) {
             roots: findings.unreachable.roots,
             facts: findings.unreachable.facts.map(refNode)
         },
-        invalid_evidence_dependents: findings.invalid_evidence_dependents.map((item) => ({ fact: refNode(item.fact), invalid_sources: item.invalid_sources })),
         candidate_ready_for_ai: findings.candidate_ready_for_ai.map(refNode),
         heavily_reused: findings.heavily_reused.map(reuseRef)
     };

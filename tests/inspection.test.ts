@@ -57,7 +57,8 @@ test('inspect path is uniform across folders and a goal without a proof is simpl
   assert.equal(open.ok, true, JSON.stringify(open.diagnostics));
   assert.equal(open.fact.status, 'open');
   assert.equal(open.check.local_verification.status, 'not-run');
-  assert.equal(open.check.global_verification.status, 'unverified');
+  assert.equal(open.check.local_verification.reason, 'nothing-to-check');
+  assert.equal(open.check.global_verification.status, 'open');
 });
 
 test('project inspection separates proven folders from folders with unproved local facts', async () => {
@@ -72,7 +73,7 @@ test('project inspection separates proven folders from folders with unproved loc
     const byId = new Map(inspected.facts.map((fact) => [fact.id, fact]));
     assert.equal(must(byId.get('lem-healthy')).global_verification.status, 'verified');
     assert.equal(must(byId.get('thm-main-healthy')).global_verification.status, 'verified');
-    assert.equal(must(byId.get('lem-malformed')).global_verification.status, 'unverified');
+    assert.equal(must(byId.get('lem-malformed')).global_verification.status, 'open');
     assert.equal(must(byId.get('thm-main-malformed')).global_verification.status, 'blocked');
   } finally { delete process.env.QMD_PROVER_VERIFIER; }
 });
@@ -142,7 +143,7 @@ test('citing a protected main goal is a legal dependency edge that stays blocked
     assert.ok(inspected.graph.edges.some((edge) => edge.from === 'lem-goal-consumer' && edge.to === 'thm-main-other-basis' && edge.checks?.scope === 'pass'));
     const consumer = must(inspected.facts.find((fact) => fact.id === 'lem-goal-consumer'));
     assert.equal(consumer.mechanical.status, 'pass');
-    assert.equal(consumer.local_verification.outcome, 'verified');
+    assert.equal(consumer.local_verification.status, 'verified');
     assert.equal(consumer.global_verification.status, 'blocked');
     assert.deepEqual(consumer.global_verification.blockers, ['thm-main-other-basis']);
   } finally { delete process.env.QMD_PROVER_VERIFIER; }
@@ -203,10 +204,87 @@ test('a mutated protected statement fails closed for the goal without blocking u
     assert.ok(mutated.diagnostics.some((item) => item.code === 'MAIN_STATEMENT_MUTATED'));
     const goalCheck = must(mutated.facts.find((fact) => fact.id === 'thm-main-stale-structured'));
     assert.equal(goalCheck.local_verification.status, 'not-run');
-    assert.equal(goalCheck.global_verification.status, 'invalid');
+    assert.equal(goalCheck.global_verification.status, 'broken');
     assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), firstCalls);
   } finally {
     delete process.env.QMD_PROVER_VERIFIER;
     delete process.env.QMD_PROVER_VERIFIER_COUNT;
   }
+});
+
+test('a .draft proof is never sent, stays open, and becomes checkable when the mark is removed', async () => {
+  const root = await project();
+  const file = path.join(root, 'work.qmd');
+  const countFile = path.join(root, 'draft-verifier-calls.txt');
+  await writeFile(file, [
+    result('lem-drafted', 'A half-written argument.', { proofText: 'A first step only.', draft: true }),
+    result('lem-written', 'A finished argument.', { proofText: 'A complete argument.' })
+  ].join('\n'));
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  process.env.QMD_PROVER_VERIFIER_COUNT = countFile;
+  try {
+    const drafted = await inspectProject(root, options);
+    assert.equal(drafted.ok, true, JSON.stringify(drafted.diagnostics));
+    const draft = must(drafted.facts.find((fact) => fact.id === 'lem-drafted'));
+    assert.equal(draft.mechanical.status, 'pass');
+    assert.equal(draft.local_verification.status, 'not-run');
+    assert.equal(draft.local_verification.reason, 'draft');
+    assert.equal(draft.global_verification.status, 'open');
+    // Only the finished proof reached the verifier; the draft cost nothing.
+    assert.deepEqual((await readFile(countFile, 'utf8')).trim().split('\n'), ['lem-written']);
+
+    await writeFile(file, [
+      result('lem-drafted', 'A half-written argument.', { proofText: 'A first step only.' }),
+      result('lem-written', 'A finished argument.', { proofText: 'A complete argument.' })
+    ].join('\n'));
+    const finished = await inspectProject(root, options);
+    const promoted = must(finished.facts.find((fact) => fact.id === 'lem-drafted'));
+    assert.equal(promoted.local_verification.status, 'verified');
+    assert.equal(promoted.global_verification.status, 'verified');
+  } finally {
+    delete process.env.QMD_PROVER_VERIFIER;
+    delete process.env.QMD_PROVER_VERIFIER_COUNT;
+  }
+});
+
+test('an empty proof block warns and leaves the fact open rather than broken', async () => {
+  const root = await project();
+  await writeFile(path.join(root, 'work.qmd'), `${result('lem-empty', 'A stated but unproved fact.')}\n::: {.proof of="lem-empty"}\n:::\n`);
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  try {
+    const inspected = await inspectProject(root, options);
+    assert.equal(inspected.ok, true, JSON.stringify(inspected.diagnostics));
+    const empty = must(inspected.facts.find((fact) => fact.id === 'lem-empty'));
+    assert.equal(empty.mechanical.status, 'pass');
+    assert.equal(empty.global_verification.status, 'open');
+    const warning = must(inspected.diagnostics.find((item) => item.code === 'PROOF_EMPTY'));
+    assert.equal(warning.severity, 'warning');
+  } finally { delete process.env.QMD_PROVER_VERIFIER; }
+});
+
+test('an abandoned attempt leaves the fact open; an abandoned fact resolves no references and blocks its citers', async () => {
+  const root = await project();
+  await writeFile(path.join(root, 'work.qmd'), [
+    // .abandon on the proof detaches that attempt only: the result keeps no active proof.
+    result('lem-dead-attempt', 'A fact whose only attempt was abandoned.', { proofText: 'A route that failed.', abandon: true }),
+    // .abandon on the result retires the whole fact, citations and all.
+    result('lem-dead-end', 'A route that went nowhere.', { proofText: 'Use @lem-never-existed.', extra: ' .abandon' }),
+    result('lem-live', 'A finished fact.', { proofText: 'A complete argument.' }),
+    result('lem-cites-dead', 'A fact leaning on the dead route.', { proofText: 'Use @lem-dead-end.' })
+  ].join('\n'));
+  process.env.QMD_PROVER_VERIFIER = verifier;
+  try {
+    const inspected = await inspectProject(root, options);
+    const byId = new Map(inspected.facts.map((fact) => [fact.id, fact]));
+    assert.equal(must(byId.get('lem-dead-attempt')).global_verification.status, 'open');
+    // The abandoned fact cites something that does not exist; that is nobody's problem.
+    assert.ok(!inspected.diagnostics.some((item) => item.id === 'lem-dead-end'));
+    // ...and contributes no edges, so its dangling citation never reaches the graph.
+    assert.ok(!inspected.graph.nodes.some((node) => node.id === 'lem-never-existed'));
+    assert.ok(!inspected.graph.edges.some((edge) => edge.from === 'lem-dead-end'));
+    assert.equal(must(byId.get('lem-dead-end')).global_verification.status, 'abandoned');
+    assert.equal(must(byId.get('lem-live')).global_verification.status, 'verified');
+    // An abandoned fact is not a premise, so citing it blocks.
+    assert.equal(must(byId.get('lem-cites-dead')).global_verification.status, 'blocked');
+  } finally { delete process.env.QMD_PROVER_VERIFIER; }
 });

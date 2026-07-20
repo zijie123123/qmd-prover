@@ -1,16 +1,18 @@
 export const AUX = '.qmd-prover';
 /** Stable output schema for every operation result and persisted snapshot. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 // The label model lives entirely in div attributes, never in body paragraphs. The author writes
-// two flags on a proof div; the engine projects one attribute back after inspection.
+// three flags; the engine projects one attribute back after inspection.
 /** Class flag: the proof div carries a proposed refutation, checked in refutation mode. */
 export const DISPROOF_CLASS = 'disproof';
+/** Class flag: the proof is deliberately unfinished — never checked, and the fact stays open. */
+export const DRAFT_CLASS = 'draft';
 /** Class flag: the proof (or fact) is detached — kept in the file for memory, never checked. */
 export const ABANDON_CLASS = 'abandon';
 /** Key the engine writes a checked fact's local verdict into; never read back, never trusted. */
 export const STATUS_ATTR = 'status';
-/** The two values the engine may project into a checked fact's `status` attribute. */
-export const STATUS_VALUES = ['verified', 'rejected'];
+/** The three conclusive verdicts the engine may project into a fact's `status` attribute. */
+export const STATUS_VALUES = ['verified', 'disproved', 'rejected'];
 export const SEMANTIC_PREFIX_PATTERN = /^(def|lem|thm|prp|cor)-/;
 export const SEMANTIC_ID_PATTERN = /^(def|lem|thm|prp|cor)-[A-Za-z0-9._:-]+$/;
 export const RESULT_KINDS = [

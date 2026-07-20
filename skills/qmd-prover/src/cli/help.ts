@@ -1,4 +1,4 @@
-import { KINDS, ORIGINS, STATUSES } from './filters.js';
+import { KINDS, ORIGINS, SETS, STATUSES } from './filters.js';
 
 // One function — `node` — holds every command's usage, prose, and place in the
 // tree, keyed by the command path as typed on the command line. No help text
@@ -190,10 +190,10 @@ function node(path: string): HelpNode | undefined {
     case 'dependency findings':
       return {
         usage: ['qmd-prover dependency findings [--print]'],
-        summary: 'Return all graph hygiene, readiness, staleness-impact, and reuse findings.',
+        summary: 'Return all graph hygiene, readiness, and reuse findings.',
         sections: {
           notes: [
-            'JSON returns per-category counts plus compact fact references. Categories: unused_imports/exports, isolated_facts (no dependency edges), unreachable (outside every goal closure), invalid_evidence_dependents, candidate_ready_for_ai, and heavily_reused.',
+            'JSON returns per-category counts plus compact fact references. Categories: unused_imports/exports, isolated_facts (no dependency edges), unreachable (outside every goal closure), candidate_ready_for_ai, and heavily_reused.',
             'The large itemized lists also have dedicated commands: `dependency ready`, `dependency reused`, `dependency isolated`, `dependency unreachable`.'
           ]
         }
@@ -219,8 +219,8 @@ function node(path: string): HelpNode | undefined {
     case 'dependency search':
       return {
         usage: [
-          'qmd-prover dependency search [QUERY] [--kind KIND] [--status STATUS] [--origin ORIGIN] [--path PATH]',
-          '    [--used-by @ID] [--depends-on @ID] [--affected-by @ID] [--stale-affected-by @ID]',
+          'qmd-prover dependency search [QUERY] [--kind KIND] [--status STATUS] [--set SET] [--origin ORIGIN] [--path PATH]',
+          '    [--used-by @ID] [--depends-on @ID] [--affected-by @ID]',
           '    [--related-to @ID] [--reverse] [--frontier-of @ID] [--cycle-participant] [--direct] [--print]'
         ],
         summary: 'Search fact IDs, titles, paths, statements, and proofs with graph-aware filters.',
@@ -233,10 +233,11 @@ function node(path: string): HelpNode | undefined {
             `--kind ${KINDS.join('|')}`,
             `--origin ${ORIGINS.join('|')}`,
             `--status ${STATUSES.join('|')}`,
+            `--set ${SETS.join('|')}`,
             '--path PATH       Match one file or directory prefix.',
             '--used-by @ID       Facts that @ID transitively depends on (its dependencies).',
             '--depends-on @ID    Facts that transitively depend on @ID (its dependents).',
-            '--affected-by @ID / --stale-affected-by @ID   Dependents of @ID (optionally only stale ones).',
+            '--affected-by @ID   Dependents of @ID.',
             '--frontier-of @ID   Facts on @ID’s unresolved proof frontier.',
             '--related-to @ID [--reverse]   Search dependencies (or reverse dependencies) of @ID.',
             '--direct          Restrict graph relationship filters to one edge instead of the transitive closure.',

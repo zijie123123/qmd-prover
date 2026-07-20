@@ -14,7 +14,7 @@ qmd-prover:
         - thm-consistent-model
 ---
 
-::: {.proof of="thm-main-godel-completeness"}
+::: {.proof of="thm-main-godel-completeness" status="verified"}
 Fix a first-order signature \(L\), a set \(\Gamma\) of \(L\)-sentences, and
 an \(L\)-sentence \(\varphi\), exactly as in the protected main statement.
 Assume \(\Gamma\models_L\varphi\) in the sense of @def-satisfaction.

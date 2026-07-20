@@ -8,7 +8,7 @@ import type { QmdProverConfig } from '../infrastructure/config.js';
 import type { ExternalPolicy } from '../infrastructure/external.js';
 import type { Compilation } from '../semantic/compiler.js';
 import type {
-  AiCheck, DisproofEvidence, GlobalVerification, GlobalVerificationStatus,
+  DisproofEvidence, GlobalVerification, GlobalVerificationStatus, LocalVerification,
   VerificationMode, VerificationOutcome, VerifierMetrics, VerifierReport, VerifierUsage
 } from '../shared/verdicts.js';
 

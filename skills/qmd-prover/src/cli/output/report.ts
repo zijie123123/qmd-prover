@@ -4,7 +4,7 @@ import type { GraphFindings } from '../../core/graph/findings.js';
 import type { InspectionVerificationSummary } from '../../core/graph/verify.js';
 import type { DependencyGraph, GraphNode } from '../../core/semantic/dependency-graph.js';
 import type { Manifest, SemanticResult } from '../../core/semantic/model.js';
-import type { AiCheck, GlobalVerification } from '../../core/shared/verdicts.js';
+import type { GlobalVerification, LocalVerification } from '../../core/shared/verdicts.js';
 import type { StalenessReport } from '../../core/shared/results.js';
 import { blockerPaths } from '../../core/graph/algorithms.js';
 import type { BlockerPath, FrontierItem } from '../../core/graph/algorithms.js';
@@ -27,7 +27,7 @@ function formatPath(ids: string[] | null | undefined): string {
 interface CheckedReportItem {
   id: string;
   mechanical: ProgrammaticFactCheck;
-  local_verification: AiCheck;
+  local_verification: LocalVerification;
   global_verification: GlobalVerification;
 }
 
@@ -39,7 +39,7 @@ interface ReportItem {
   line?: number;
   export?: string | null;
   mechanical?: ProgrammaticFactCheck;
-  local_verification?: AiCheck;
+  local_verification?: LocalVerification;
   global_verification?: GlobalVerification;
   fact?: GraphNode;
   direct_dependents?: number;
@@ -129,10 +129,6 @@ function reportFindings(lines: string[], findings: Partial<GraphFindings> | null
     lines.push(`  candidates ready for AI: ${findings.candidate_ready_for_ai.length}`);
     for (const item of findings.candidate_ready_for_ai) lines.push(`    @${item.id} [${item.kind}] ${item.file ?? ''}`.trimEnd());
   }
-  if (findings.invalid_evidence_dependents !== undefined) {
-    lines.push(`  invalid-evidence dependents: ${findings.invalid_evidence_dependents.length}`);
-    for (const item of findings.invalid_evidence_dependents) lines.push(`    @${item.fact.id} via ${item.invalid_sources.map((id) => `@${id}`).join(', ')}`);
-  }
   if (findings.heavily_reused !== undefined) {
     lines.push(`  heavily reused facts: ${findings.heavily_reused.length}`);
     for (const item of findings.heavily_reused.slice(0, 20)) {
@@ -170,7 +166,18 @@ export function printReport(input: OperationResult): string {
     lines.push(`errors: ${result.summary.errors ?? result.diagnostics?.filter((item) => item.severity === 'error').length ?? 0}`);
   }
   if (result.verification) {
-    lines.push(`verification: available=${result.verification.available}, calls=${result.verification.verifier_calls ?? 0}, cache-hits=${result.verification.cache_hits ?? 0}, time=${Math.round((result.verification.verifier_duration_ms ?? 0) / 1000)}s, tokens=${result.verification.verifier_tokens ?? 0}, local-verified=${result.verification.local_verified ?? 0}, local-disproved=${result.verification.local_disproved ?? 0}, local-rejected=${result.verification.local_rejected ?? 0}, local-errors=${result.verification.local_errors ?? 0}, local-not-run=${result.verification.local_not_run ?? 0}, global-verified=${result.verification.global_verified ?? 0}, global-disproved=${result.verification.global_disproved ?? 0}, global-blocked=${result.verification.global_blocked ?? 0}, global-unverified=${result.verification.global_unverified ?? 0}, global-rejected=${result.verification.global_rejected ?? 0}, global-invalid=${result.verification.global_invalid ?? 0}`);
+    lines.push(`verification: ${[
+      `available=${result.verification.available}`,
+      `calls=${result.verification.verifier_calls ?? 0}`,
+      `cache-hits=${result.verification.cache_hits ?? 0}`,
+      `time=${Math.round((result.verification.verifier_duration_ms ?? 0) / 1000)}s`,
+      `tokens=${result.verification.verifier_tokens ?? 0}`,
+      // Every local_*/global_* count, named from the summary itself so a new status cannot be
+      // silently dropped from this line.
+      ...Object.entries(result.verification)
+        .filter(([key]) => key.startsWith('local_') || key.startsWith('global_'))
+        .map(([key, value]) => `${key.replace(/_/g, '-')}=${value ?? 0}`)
+    ].join(', ')}`);
   }
   if (result.staleness) {
     lines.push(`staleness: ${result.staleness.ok ? 'checked' : 'failed'}, changed=${result.staleness.changed?.length ?? 0}, invalidated=${result.staleness.invalidated?.length ?? 0}`);
@@ -214,7 +221,7 @@ export function printReport(input: OperationResult): string {
   if (checks.length) {
     lines.push('checks:');
     for (const check of [...checks].sort((left, right) => left.id.localeCompare(right.id))) {
-      lines.push(`  @${check.id}: mechanical=${check.mechanical.status}${check.mechanical.reason ? ` (${check.mechanical.reason})` : ''}, local=${check.local_verification.status}${check.local_verification.outcome ? `, outcome=${check.local_verification.outcome}` : ''}${check.local_verification.source ? ` (${check.local_verification.source})` : ''}, global=${check.global_verification.status}`);
+      lines.push(`  @${check.id}: mechanical=${check.mechanical.status}${check.mechanical.reason ? ` (${check.mechanical.reason})` : ''}, local=${check.local_verification.status}${check.local_verification.reason ? ` (${check.local_verification.reason})` : ''}${check.local_verification.source ? ` (${check.local_verification.source})` : ''}, global=${check.global_verification.status}`);
       if (check.global_verification.blockers.length) lines.push(`    global blockers: ${check.global_verification.blockers.map((id) => `@${id}`).join(', ')}`);
       for (const reference of check.mechanical.references ?? []) {
         lines.push(`    -> @${reference.dependency}: existence=${reference.existence}, scope=${reference.scope}, cycle=${reference.cycle}`);
@@ -224,7 +231,8 @@ export function printReport(input: OperationResult): string {
         const tokens = local.metrics.usage?.total_tokens;
         lines.push(`    verifier metrics: ${local.metrics.cached ? 'cached; ' : ''}time=${(local.metrics.duration_ms / 1000).toFixed(1)}s${tokens != null ? `, tokens=${tokens}` : ''}`);
       }
-      if (local.reason) lines.push(`    local verification: ${local.reason}`);
+      // The `local=` line above already carries the reason code; this spells it out in words.
+      if (local.detail) lines.push(`    local verification: ${local.detail}`);
       if (local.error) lines.push(`    verifier error${local.code ? ` (${local.code})` : ''}: ${local.error}`);
       if (local.details?.command) lines.push(`    verifier command: ${local.details.command}`);
       if (local.details?.exit_code !== undefined || local.details?.signal) lines.push(`    verifier termination: exit=${local.details.exit_code ?? 'none'}, signal=${local.details.signal ?? 'none'}`);

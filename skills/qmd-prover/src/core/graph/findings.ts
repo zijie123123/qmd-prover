@@ -12,7 +12,6 @@ export interface GraphFindings {
   unused_exports: Array<{ id: string; export: string | null | undefined; file: string; line?: number }>;
   isolated_facts: GraphNode[];
   unreachable: { applicable: boolean; roots: string[]; facts: GraphNode[] };
-  invalid_evidence_dependents: Array<{ fact: GraphNode; invalid_sources: string[] }>;
   candidate_ready_for_ai: GraphNode[];
   heavily_reused: Array<{ fact: GraphNode; direct_dependents: number; transitive_dependents: number; verified_dependents: number }>;
 }
@@ -42,13 +41,6 @@ function findingSelection(options: SelectionOptions = {}): FindingSelection {
     file: (file) => !files || files.has(file),
     result: (result) => (!ids || ids.has(result.id)) && (!files || files.has(result.file))
   };
-}
-
-export function staleFactIds(snapshot: Pick<ProjectSnapshot, 'manifest' | 'diagnostics'>): Set<string> {
-  const ids = new Set<string>();
-  const evidenceCodes = new Set(['VERIFIED_RECORD_INVALID', 'VERIFIED_MARKER_MISSING', 'VERIFIED_DEPENDENCY_INVALID']);
-  for (const item of snapshot.diagnostics ?? []) if (item.id && evidenceCodes.has(item.code)) ids.add(item.id);
-  return ids;
 }
 
 function importTarget(importer: string, imported: string): string | null {
@@ -107,29 +99,11 @@ export function deriveGraphFindings(snapshot: ProjectSnapshot, options: Selectio
   const unreachableFacts = goalRoots.size === 0 ? [] : mathematicalNodes.filter((node) => selection.node(node) && !reachable.has(node.id))
     .sort((left, right) => left.id.localeCompare(right.id));
 
-  const localNonblockingCodes = new Set([
-    'DEPENDENCY_UNAVAILABLE', 'DEPENDENCY_CYCLE', 'IMPORT_CYCLE'
-  ]);
-  const localBlockingErrorIds = new Set(diagnostics.filter((item) => (
-    item.severity === 'error' && item.id && !localNonblockingCodes.has(item.code)
-  )).map((item) => item.id as string));
-  const localBlockingErrorFiles = new Set(diagnostics.filter((item) => (
-    item.severity === 'error' && !item.id && item.file && !localNonblockingCodes.has(item.code)
-  )).map((item) => item.file as string));
-  const candidateReadyForAi = mathematicalNodes.filter((node) => {
-    if (!selection.node(node) || node.local_verification?.status !== 'not-run') return false;
-    if (localBlockingErrorIds.has(node.id) || (node.file && localBlockingErrorFiles.has(node.file))) return false;
-    if (/proof|open|rejected|invalid|unavailable|stale/i.test(node.local_verification.reason ?? '')) return false;
-    return graph.edges.filter((edge) => edge.from === node.id).every((edge) => edge.checks?.existence === 'pass');
-  }).sort((left, right) => left.id.localeCompare(right.id));
-
-  const invalidRoots = staleFactIds({ manifest, diagnostics });
-  const invalidEvidenceDependents = mathematicalNodes.filter((node) => selection.node(node) && [...invalidRoots].some((root) => traverse(graph, root, true).has(node.id)))
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .map((node) => ({
-      fact: node,
-      invalid_sources: [...invalidRoots].filter((root) => traverse(graph, root, true).has(node.id)).sort()
-    }));
+  // The work an agent can hand to the verifier right now. `unverified` says exactly that: ready to
+  // be sent, and carrying no verdict — every other status is either not sendable or already judged.
+  const candidateReadyForAi = mathematicalNodes.filter((node) => (
+    selection.node(node) && node.status === 'unverified'
+  )).sort((left, right) => left.id.localeCompare(right.id));
 
   const heavilyReused = mathematicalNodes.filter((node) => selection.node(node)).map((node) => {
     const direct = new Set(incoming.get(node.id) ?? []);
@@ -153,7 +127,6 @@ export function deriveGraphFindings(snapshot: ProjectSnapshot, options: Selectio
     unused_exports: unusedExports,
     isolated_facts: isolatedFacts,
     unreachable: { applicable: goalRoots.size > 0, roots: [...goalRoots].sort(), facts: unreachableFacts },
-    invalid_evidence_dependents: invalidEvidenceDependents,
     candidate_ready_for_ai: candidateReadyForAi,
     heavily_reused: heavilyReused
   };

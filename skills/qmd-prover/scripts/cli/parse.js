@@ -1,5 +1,5 @@
 import { resolveHelpPath } from './help.js';
-import { KINDS, ORIGINS, STATUSES } from './filters.js';
+import { KINDS, ORIGINS, SETS, STATUSES } from './filters.js';
 import { boundedInteger } from '../core/graph/algorithms.js';
 const optionString = (value) => typeof value === 'string' ? value : undefined;
 /** Split off a `--print` flag, rejecting duplicates, and return the remaining args. */
@@ -167,7 +167,7 @@ function parseInspect(rest) {
     throw new Error('inspect requires project, fact, or path');
 }
 function parseDependencySearch(tail, print) {
-    const valueOptions = new Set(['kind', 'status', 'origin', 'path', 'related-to', 'frontier-of', 'used-by', 'depends-on', 'affected-by', 'stale-affected-by']);
+    const valueOptions = new Set(['kind', 'status', 'set', 'origin', 'path', 'related-to', 'frontier-of', 'used-by', 'depends-on', 'affected-by']);
     const flags = new Set(['reverse', 'direct', 'cycle-participant']);
     const extracted = optionValues(tail, valueOptions, flags);
     if (extracted.positionals.length > 1)
@@ -175,6 +175,7 @@ function parseDependencySearch(tail, print) {
     const filters = {
         kind: enumOption('kind', optionString(extracted.options.kind), KINDS),
         status: enumOption('status', optionString(extracted.options.status), STATUSES),
+        set: enumOption('set', optionString(extracted.options.set), SETS),
         origin: enumOption('origin', optionString(extracted.options.origin), ORIGINS),
         path: optionString(extracted.options.path),
         relatedTo: optionString(extracted.options.relatedto),
@@ -182,7 +183,6 @@ function parseDependencySearch(tail, print) {
         usedBy: optionString(extracted.options.usedby),
         dependsOn: optionString(extracted.options.dependson),
         affectedBy: optionString(extracted.options.affectedby),
-        staleAffectedBy: optionString(extracted.options.staleaffectedby),
         reverse: extracted.options.reverse === true,
         direct: extracted.options.direct === true,
         cycleParticipant: extracted.options.cycleparticipant === true

@@ -182,29 +182,32 @@ Use dependency operations to inspect the project graph, search facts, show paths
 
 ## Status and rendering
 
-- Workflow state lives in attributes on the `.proof` div, never in body prose. A proof div is a candidate checked by default; add `.disproof` to make it a proposed counterexample or refutation (checked in refutation mode), or `.abandon` to detach it from its result and keep it only for memory (never checked). Definitions cannot carry `.disproof`.
-- A local disproof is conditional on its direct dependencies and becomes globally disproved only when the complete upstream closure is globally verified. A verifier may also discover a refutation while checking an ordinary candidate.
-- After a check, the engine projects the fact's LOCAL verdict into a display-only `status` attribute (`verified` or `rejected`) on its div. It is excluded from every content hash, the verifier packet, the cache key, and the snapshot identity, and is never read back — so it never changes what is checked. Never hand-write it; read global state from a command instead.
+- Workflow state lives in div attributes, never in body prose. There are no body markers: `OPEN`, `REJECTED`, `DISPROVED`, and `VERIFIED` are ordinary words with no meaning in QMD source. A proof div is checked by default; add `.disproof` to make it a proposed counterexample or refutation (checked in refutation mode), `.draft` to say it is deliberately unfinished (never checked, the fact stays `open`), or `.abandon` to detach it from its result and keep it only for memory. `.abandon` on the result div retires the whole fact. Definitions cannot carry `.disproof`, and carry `.draft`/`.abandon` on their own div.
+- A local disproof is conditional on its direct dependencies and becomes globally disproved only when the complete upstream closure is globally verified. A verifier may also discover a refutation while checking an ordinary proof.
+- After a check, the engine projects the fact's LOCAL verdict into a display-only `status` attribute (`verified`, `disproved`, or `rejected`) on its div. It is excluded from every content hash, the verifier packet, the cache key, and the snapshot identity, and is never read back — so it never changes what is checked. Never hand-write it; read global state from a command instead.
 
 ### Every status a fact can carry
 
-A fact's `status` field summarizes two families. Before a conclusive check it shows a **machine status** derived from the QMD and the dependency graph; once checked (or once its mechanical layer fails) it shows a **verification outcome**.
+A fact's state has four fields — `intent` (what the author declared), `mechanical` (is it well formed), `local_verification` (what the AI said), and `global_verification` (what follows once dependencies are counted). The `status` field shown in lists is always the `global` one. Every fact holds exactly one, first match wins.
 
-| `status` | Family | Applies to | Meaning |
-|---|---|---|---|
-| `candidate` | machine | theorem-like with an active proof; every definition | Has content to check, awaiting a local verdict. |
-| `open` | machine | theorem-like only | No active proof yet — none written, or the only one is `.abandon`ed. |
-| `disproof-candidate` | machine | theorem-like only | Its active proof carries `.disproof`; awaiting a refutation check. |
-| `abandoned` | machine | theorem-like only | The proof is detached with `.abandon`; intentionally not checked. |
-| `missing` | machine | graph node | Cited by some fact but never declared — an unresolved dependency. |
-| `verified` | outcome | any | Mechanically valid, the local proof was accepted, and the entire dependency closure is globally verified. |
-| `disproved` | outcome | theorem-like only | A refutation (authored `.disproof` or verifier-discovered) was locally confirmed and its dependency closure is globally verified. |
-| `blocked` | outcome | any | The local proof or refutation was accepted, but some dependency is not yet globally verified (see its `blockers`). |
-| `rejected` | outcome | any | The verifier rejected the submitted proof or refutation. |
-| `unverified` | outcome | any | Mechanically valid, but no local verdict was produced — no verifier configured, or the fact was outside the checked selection. |
-| `invalid` | outcome | any | The mechanical layer failed: a shape/date/ID error, an unresolved or out-of-scope reference, or a dependency cycle. |
+| `status` | Holds when | What to do |
+|---|---|---|
+| `abandoned` | the fact carries `.abandon` | nothing; it is kept for memory only |
+| `broken` | the mechanical layer failed: a shape/date/ID error, an unresolved or out-of-scope reference, or a dependency cycle | repair the fact |
+| `open` | nothing to check: no proof block, an empty one, or a `.draft` proof | write the proof, or drop `.draft` |
+| `rejected` | the verifier found the proof or refutation wrong or incomplete | repair the argument |
+| `unverified` | the proof is ready but has no verdict: no verifier configured, the verifier failed, or the fact was outside the checked selection | run inspection, or repair the verifier |
+| `blocked` | this proof was accepted, but some dependency is not globally verified (see its `blockers`) | fix the upstream fact |
+| `verified` | the proof was accepted and the whole dependency closure is globally verified | nothing |
+| `disproved` | a refutation was accepted and the whole dependency closure is globally verified | nothing |
 
-A **definition** always has a construction to check, so it is `candidate` until checked and can only reach `verified`, `rejected`, `blocked`, `unverified`, or `invalid` — never `open`, `abandoned`, `disproof-candidate`, or `disproved`. Only a **theorem-like** result (theorem, lemma, proposition, corollary) uses the other states.
+`missing` also appears in list output, for an `@ID` that is cited but never declared. It is not a fact state; every fact citing one is `broken`.
+
+Only the AI verifier produces `verified`, `disproved`, and `rejected`. The mechanical layer can withhold a verdict but never grants one. Rule order matters: an accepted refutation resting on an unproved lemma is `blocked`, not `disproved`, and citing an `abandoned` fact blocks the citer, because an abandoned proof is not a premise.
+
+A **definition** is discharged by its own body rather than a proof block, so it is never `open` for want of a proof, and it cannot be `disproved`. Challenge a definition through a theorem-like claim about it.
+
+Four further groupings cut across `status` and overlap each other, so they are selected with `--set` rather than `--status`: `candidate` (everything not abandoned), `disproof-candidate` (intent is `disproof`), `ready` (eligible to be sent to the verifier), and `unbroken` (mechanically well formed). `--set ready` is the query for "what can the AI work on now".
 
 ### How to check a fact's status
 
@@ -219,10 +222,10 @@ qmd-prover inspect project       # every fact in the project
 Each fact reports three independent layers — read all three, because passing one does not imply passing another:
 
 - `mechanical` — machine structure only (shape, IDs, dates, imports, references, cycles, statement locks). Never consults an AI verdict.
-- `local_verification` — the conditional check of the submitted proof or refutation against its direct dependency *statements* (assumed true, their own proofs never inspected): `verified`, `rejected`, `disproved`, `not-run`, or `error`.
+- `local_verification` — the conditional check of the submitted proof or refutation against its direct dependency *statements* (assumed true, their own proofs never inspected): `verified`, `disproved`, `rejected`, or `not-run`. A `not-run` result always carries a `reason`: `nothing-to-check`, `draft`, `not-eligible`, `out-of-scope`, `no-backend`, or `verifier-error`.
 - `global_verification` — composes the whole upstream closure into the final outcome above; its `blockers` name the dependencies that are not yet verified.
 
-The single `status` field is the summary of these. For mathematical truth read `global_verification.status`, never `ok` (which reports only whether the operation and verifier ran without infrastructure errors). Use a fact as an established premise only when its global status is `verified`; a `disproved` fact is evidence about a false statement, not a usable dependency. To survey many facts at once, `dependency search --status STATUS` filters the published graph by any value in the table (`help dependency search` lists them), and `verification list` / `verification show` read the retained local verdict records.
+The single `status` field is the summary of these. For mathematical truth read `global_verification.status`, never `ok` (which reports only whether the operation and verifier ran without infrastructure errors). Use a fact as an established premise only when its global status is `verified`; a `disproved` fact is evidence about a false statement, not a usable dependency. To survey many facts at once, `dependency search --status STATUS` filters the published graph by any value in the table and `--set SET` by any of the four groupings (`help dependency search` lists both); `verification list` / `verification show` read the retained local verdict records.
 - Exact local verified, disproved, and rejected outcomes are cached by the target statement, submitted proof or refutation, direct dependency statements, semantic context, external basis, checker contract, and protocol. Dependency proof text and verification state are excluded; changing only an upstream proof triggers global recomposition rather than downstream AI calls.
 - `check staleness` is a read-only audit of verification caches against current sources, the external basis, and the checker contract. It never edits QMD.
 - Use `verification list` and `verification show` to discover and read retained verification records.

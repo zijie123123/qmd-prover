@@ -28,7 +28,7 @@ set of new constants, then \(\Sigma\), regarded as an \(L'\)-theory, is
 consistent.
 :::
 
-::: {.proof of="lem-pure-language-extension"}
+::: {.proof of="lem-pure-language-extension" status="verified"}
 Suppose \(\Sigma\), regarded as an \(L'\)-theory, were inconsistent.  By
 @lem-consistency-characterizations this yields \(\Sigma\vdash_{L'}\bot\),
 where \(\bot=(\forall z\,z=z)\wedge\neg(\forall z\,z=z)\) is a fixed sentence
@@ -50,7 +50,7 @@ For every consistent set \(\Sigma\) of \(L\)-sentences there are a language
 Henkin theory \(H\) of \(L^*\)-sentences with \(\Sigma\subseteq H\).
 :::
 
-::: {.proof of="lem-henkinization"}
+::: {.proof of="lem-henkinization" status="verified"}
 We use two standard set-theoretic construction principles, neither of which
 has logical model-existence content: the **well-ordering theorem** (every set
 can be well ordered) and **transfinite recursion** (a uniquely prescribed
@@ -90,7 +90,7 @@ of \(L\)-sentences, there is an \(L\)-structure \(\mathcal M\) such that
 \(\mathcal M\models\Sigma\).
 :::
 
-::: {.proof of="thm-consistent-model"}
+::: {.proof of="thm-consistent-model" status="verified"}
 Apply @lem-henkinization to obtain a consistent Henkin extension \(H\) in
 \(L^*\).  Apply @lem-maximal-consistent in that fixed language to extend
 \(H\) to a consistent, deductively closed, negation-complete theory \(T\).

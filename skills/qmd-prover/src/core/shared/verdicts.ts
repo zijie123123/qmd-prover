@@ -6,9 +6,41 @@
 
 /** How a fact is discharged: constructing a definition, proving, or refuting a claim. */
 export type VerificationMode = 'definition-construction' | 'proof' | 'refutation';
+/** The three conclusive verdicts a verifier can reach about one fact. */
 export type VerificationOutcome = 'verified' | 'disproved' | 'rejected';
+
+/**
+ * The `local` field of the status model: a conclusive verdict, or none yet. Only the AI
+ * verifier ever produces the three conclusive values; the mechanical layer may return a
+ * recorded verdict to `not-run` (staleness) but may never grant one.
+ */
+export type LocalVerificationStatus = VerificationOutcome | 'not-run';
+
+/** Why no verdict is on record. Required whenever the local status is `not-run`. */
+export type LocalNotRunReason =
+  | 'nothing-to-check'   // no proof block, or an empty one
+  | 'draft'              // the proof is marked `.draft`
+  | 'not-eligible'       // the fact is broken or abandoned
+  | 'out-of-scope'       // ready, but outside the selected fact/path closure
+  | 'no-backend'         // no verifier is configured
+  | 'verifier-error';    // the verifier failed, timed out, or returned an unusable report
+
+/** The `global` field: the one status string every list context shows. */
 export type GlobalVerificationStatus =
-  'verified' | 'disproved' | 'blocked' | 'unverified' | 'rejected' | 'invalid';
+  'verified' | 'disproved' | 'rejected' | 'blocked' | 'unverified' | 'open' | 'broken' | 'abandoned';
+
+/**
+ * What one row of a list context may show: a real fact's `global` status, or the placeholder for a
+ * cited @ID that resolves to nothing. `missing` is not a fact state — no fact ever holds it — but it
+ * occupies the same column, so it shares the type and the `--status` vocabulary.
+ */
+export type FactListStatus = GlobalVerificationStatus | 'missing';
+
+/** The `mechanical` field: is the fact well formed? Computed without any AI verifier. */
+export type MechanicalStatus = 'ok' | 'broken';
+
+/** The `intent` field: what the author declared through div attributes. */
+export type FactIntent = 'normal' | 'disproof' | 'draft' | 'abandoned';
 
 export interface GlobalVerification {
   status: GlobalVerificationStatus;
@@ -25,17 +57,19 @@ export interface DisproofEvidence {
 }
 
 /** A single verifier verdict recorded against a fact (local, before propagation). */
-export interface AiCheck {
-  status: 'pass' | 'fail' | 'error' | 'not-run';
+export interface LocalVerification {
+  status: LocalVerificationStatus;
+  /** Present exactly when `status` is `not-run`; the code the global composition reads. */
+  reason?: LocalNotRunReason;
+  /** One sentence elaborating `reason` for a human reader. Never parsed. */
+  detail?: string;
   source?: string;
-  reason?: string;
   cached?: boolean;
   fatal?: boolean;
   code?: string;
   error?: string;
   remediation?: string;
   report?: VerifierReport | null;
-  outcome?: VerificationOutcome;
   details?: {
     command?: string;
     exit_code?: number | null;
