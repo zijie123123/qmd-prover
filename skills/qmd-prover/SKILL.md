@@ -96,9 +96,13 @@ then available in every project:
 
 ```bash
 # From a checkout of github.com/powergiant/qmd-prover:
-npm install -g .        # users — installs the `qmd-prover` command globally
-npm link                # developers — same command, backed by your working checkout
+npm install -g .        # puts the `qmd-prover` command on PATH, backed by this checkout
+npm link                # equivalent — npm links a local folder either way
 ```
+
+Both forms symlink the checkout rather than copying it, so the folder must stay where it is, and
+`npm run build` must be rerun after editing `src/`. For a standalone copy that does not depend on
+the checkout, install the packed tarball instead: `npm install -g "$(npm pack)"`.
 
 Installing the skill is a separate, docs-only step. Once the command is on your `PATH` you never
 reinstall the engine — `qmd-prover install --global` only **copies the skill documentation**

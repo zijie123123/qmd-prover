@@ -551,8 +551,8 @@ states the change and accepts that affected cache keys will miss.
 ## Installation and requirements
 
 The engine and the skill install separately: the engine is the `qmd-prover`
-command (installed on the `PATH` via `npm install -g .`, or `npm link` for
-development), and the skill is the documentation the assistant reads. TypeScript
+command (installed on the `PATH` via `npm install -g .`, or the equivalent `npm
+link`), and the skill is the documentation the assistant reads. TypeScript
 source under `skills/qmd-prover/src/` is authoritative; `npm run build` emits
 Node-compatible ESM under `scripts/`, which `package.json` `bin` exposes as
 `qmd-prover`. The generated runtime has no third-party Node dependency.
@@ -569,9 +569,16 @@ From a source checkout, install the two halves — the engine on the `PATH`, the
 the docs-only skill via the engine's own `install` command:
 
 ```bash
-npm install -g .              # the `qmd-prover` command (developers: npm link)
+npm install -g .              # the `qmd-prover` command (npm link is equivalent)
 qmd-prover install --global   # the skill → ~/.claude/skills/qmd-prover (append --codex for Codex)
 ```
+
+npm links a local folder instead of packing and copying it, so `npm install -g .`
+symlinks the checkout into the global `node_modules` and the `files` whitelist in
+`package.json` never applies — the whole checkout, `src/` included, sits behind
+the command, and the running engine is whatever `scripts/` holds at the time.
+Only a tarball install (`npm install -g "$(npm pack)"`) yields the pruned,
+compiled-only copy that `files` describes.
 
 The engine carries the executable; the skill carries only documentation. A bare
 `qmd-prover install` scopes the skill to the current project instead of the host
@@ -636,8 +643,8 @@ external basis itself.
 
 ## Using the Node utilities directly
 
-The engine is the `qmd-prover` command, installed on the `PATH` (`npm install -g .`, or `npm link`
-for development). Run `qmd-prover version` to confirm the install and see its versions.
+The engine is the `qmd-prover` command, installed on the `PATH` (`npm install -g .`, or the
+equivalent `npm link`). Run `qmd-prover version` to confirm the install and see its versions.
 
 Initialize:
 

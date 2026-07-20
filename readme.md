@@ -211,7 +211,7 @@ cd qmd-prover
 npm install
 
 # 1. Install the engine once — puts the `qmd-prover` command on your PATH:
-npm install -g .                     # (developers: use `npm link` instead, backed by this checkout)
+npm install -g .                     # links this checkout onto your PATH — keep the folder
 
 # 2. Place the skill so your assistant can read it:
 qmd-prover install --global          # every project → ~/.claude/skills/qmd-prover
@@ -221,6 +221,12 @@ qmd-prover install                   # just this project (run from inside it)
 
 The engine needs only Node and Pandoc; the skill is documentation, so the two are versioned and
 installed independently. Run `qmd-prover version` to confirm the engine is on your `PATH`.
+
+`npm install -g .` does not copy the project anywhere — npm links a local folder rather than copying
+it, so the `qmd-prover` command points back at this checkout. Keep the folder where it is; deleting
+or moving it breaks the command. (`npm link` does the same thing, so either is fine.) If you would
+rather have a standalone copy that no longer depends on the checkout, install the packed tarball
+instead — `npm install -g "$(npm pack)"`.
 
 ### The basic commands to know
 
@@ -279,7 +285,7 @@ git clone https://github.com/powergiant/qmd-prover
 cd qmd-prover
 node --version        # must be >= 20
 npm install
-npm install -g .      # installs the `qmd-prover` command (developers: `npm link` instead)
+npm install -g .      # links this checkout onto PATH as the `qmd-prover` command; do not delete it after
 qmd-prover version    # confirm it is now on PATH; prints tool/schema/protocol/contract versions
 ```
 
@@ -378,7 +384,7 @@ examples/                a worked example project
 ```
 
 The `bin` in `package.json` maps the `qmd-prover` command to `skills/qmd-prover/scripts/qmd-prover.js`,
-so `npm install -g .` (or `npm link` for development) puts it on the `PATH`.
+so `npm install -g .` (or `npm link`, which is equivalent here) puts it on the `PATH`.
 
 ## Development
 
@@ -392,6 +398,13 @@ npm test        # AST-producing Pandoc adapter + mock verifiers; no real Pandoc 
 install [--global] [--codex]` then copies the docs-only skill into the assistant's skills directory.
 From a checkout without installing the engine, `tsx tooling/install-skill.ts [--local|--global]
 [--codex] [--dir <project>]` does the same copy. The source checkout stays the source of truth.
+
+Both `npm install -g .` and `npm link` symlink this folder into the global `node_modules`; npm links
+local paths rather than packing and copying them, so the `files` whitelist in `package.json` does not
+apply and the whole checkout — `src/`, `tests/`, `node_modules/` — sits behind the command. That also
+means the installed engine runs whatever is in `scripts/` right now, so rerun `npm run build` after
+editing `src/`. Only a tarball install (`npm install -g "$(npm pack)"`, or a future published
+package) produces the pruned, compiled-only copy that the `files` list describes.
 
 ## License
 

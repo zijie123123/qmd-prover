@@ -861,9 +861,13 @@ command on `PATH`, then place the docs-only skill globally (every project) or sc
 Install the engine (from a checkout of the repository):
 
 ```bash
-npm install -g .   # users — builds and installs the `qmd-prover` command globally
-npm link           # developers — the same command, backed by your working checkout (rebuild with `npm run build`)
+npm install -g .   # builds, then puts the `qmd-prover` command on PATH, backed by this checkout
+npm link           # equivalent — npm links a local folder either way
 ```
+
+Neither form copies the project: npm symlinks a local folder into the global `node_modules`, so the
+checkout must stay in place and `npm run build` must be rerun after editing `src/`. To get a
+standalone compiled copy instead, install the packed tarball: `npm install -g "$(npm pack)"`.
 
 Place the skill with the engine's own `install` command. Because `qmd-prover install` runs in your
 current directory (unlike an `npm run` script, which always executes in this repository), a bare
