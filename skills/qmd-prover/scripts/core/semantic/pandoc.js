@@ -16,10 +16,17 @@ function collect(child, input) {
             child.stdin.end(input);
     });
 }
+/**
+ * The reader format. `tex_math_single_backslash` is what makes `\(…\)` and `\[…\]` parse as math
+ * rather than as escaped brackets wrapped around raw TeX — without it every LaTeX delimiter a
+ * mathematical source actually uses collapses into loose `Str` fragments and dropped `Raw*` nodes,
+ * and the formulas vanish from every text projection. Quarto's own reader enables it too.
+ */
+const READER_FORMAT = 'markdown+fenced_divs+citations+tex_math_single_backslash';
 export async function readAst(file, { pandoc = process.env.QMD_PROVER_PANDOC || 'pandoc' } = {}) {
     let result;
     try {
-        result = await collect(spawn(pandoc, ['--from=markdown+fenced_divs+citations', '--to=json', file], { stdio: ['ignore', 'pipe', 'pipe'] }));
+        result = await collect(spawn(pandoc, [`--from=${READER_FORMAT}`, '--to=json', file], { stdio: ['ignore', 'pipe', 'pipe'] }));
     }
     catch (error) {
         if (asErrorLike(error).code === 'ENOENT') {
@@ -51,6 +58,18 @@ export function walk(value, visit) {
         for (const child of Object.values(value))
             walk(child, visit);
 }
+/** TeX-flavoured raw formats, whose content is source we want to keep rather than markup to drop. */
+const TEX_FORMATS = new Set(['tex', 'latex']);
+/**
+ * Render a `Math` node back to its LaTeX source, delimiters included. A statement is mostly formulas,
+ * so the text projection has to carry them verbatim; keeping the delimiters means a reader (human or
+ * model) can still tell display math from inline math and from the surrounding prose.
+ */
+function mathText(node) {
+    const content = asArray(node.c);
+    const body = asString(content.at(-1));
+    return asRecord(content[0]).t === 'DisplayMath' ? `\\[${body}\\]` : `\\(${body}\\)`;
+}
 export function inlineText(inlines = []) {
     let text = '';
     walk(inlines, (node) => {
@@ -58,8 +77,17 @@ export function inlineText(inlines = []) {
             text += asString(node.c);
         else if (node.t === 'Space' || node.t === 'SoftBreak' || node.t === 'LineBreak')
             text += ' ';
-        else if (node.t === 'Code' || node.t === 'Math')
+        else if (node.t === 'Math')
+            text += mathText(node);
+        else if (node.t === 'Code')
             text += asString(asArray(node.c).at(-1));
+        // Raw TeX is what an environment written out longhand (`\begin{equation}…`) parses to. It is
+        // content, not presentation, so it is kept verbatim; raw HTML and other formats stay dropped.
+        else if (node.t === 'RawInline' || node.t === 'RawBlock') {
+            const content = asArray(node.c);
+            if (TEX_FORMATS.has(asString(content[0])))
+                text += ` ${asString(content[1])} `;
+        }
     });
     return text.replace(/\s+/g, ' ').trim();
 }

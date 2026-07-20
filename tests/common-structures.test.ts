@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { divContent, inlineText, readAst } from '../skills/qmd-prover/src/core/semantic/pandoc.js';
+import type { PandocNode } from '../skills/qmd-prover/src/core/semantic/pandoc.js';
 import {
   asErrorLike, STATUS_VALUES, errorMessage, hasErrorCode, indexBy,
   KIND_BY_PREFIX, pushToMap, SEMANTIC_ID_PATTERN, uniqueSorted
@@ -45,4 +50,42 @@ test('shared collection and error helpers preserve deterministic runtime behavio
   assert.equal(errorMessage(failure), 'missing');
   assert.equal(hasErrorCode(failure, 'ENOENT'), true);
   assert.deepEqual(asErrorLike('failure'), { message: 'failure' });
+});
+
+// A mathematical statement lives mostly inside its formulas, so a text projection that drops them
+// is semantically empty. Both halves matter: the reader has to hand us `Math` nodes at all, and
+// `inlineText` has to render them back to source.
+test('inlineText keeps LaTeX math verbatim, with its delimiters', () => {
+  const math = (kind: string, body: string) => ({ t: 'Math', c: [{ t: kind }, body] });
+  const blocks = [{
+    t: 'Para',
+    c: [
+      { t: 'Str', c: 'defined' }, { t: 'Space' }, { t: 'Str', c: 'by' }, { t: 'Space' },
+      math('DisplayMath', '\\begin{aligned}\\partial_tg&=-2\\mathfrak E\\end{aligned}'),
+      { t: 'Space' }, { t: 'Str', c: 'with' }, { t: 'Space' },
+      math('InlineMath', '\\kappa\\ge0'), { t: 'Space' },
+      math('InlineMath', '|N_J|^2 e^{-f}')
+    ]
+  }];
+  assert.equal(
+    inlineText(blocks),
+    'defined by \\[\\begin{aligned}\\partial_tg&=-2\\mathfrak E\\end{aligned}\\] with \\(\\kappa\\ge0\\) \\(|N_J|^2 e^{-f}\\)'
+  );
+  // A longhand environment reaches us as raw TeX. That is content; raw HTML is not.
+  assert.equal(inlineText([{ t: 'RawBlock', c: ['tex', '\\begin{equation}x=1\\end{equation}'] }]), '\\begin{equation}x=1\\end{equation}');
+  assert.equal(inlineText([{ t: 'RawBlock', c: ['html', '<div>'] }]), '');
+});
+
+test('the Pandoc reader parses single-backslash TeX delimiters as math', async () => {
+  const pandoc = process.env.QMD_PROVER_PANDOC || 'pandoc';
+  const root = await mkdtemp(path.join(os.tmpdir(), 'qmd-prover-math-'));
+  const file = path.join(root, 'math.qmd');
+  await writeFile(file, '::: {#def-flow .definition name="Flow"}\nis defined by \\[\\partial_tg=-2\\mathfrak E\\] where \\(\\kappa\\ge0\\)\n:::\n');
+  const ast = await readAst(file, { pandoc }).catch((error: unknown) => errorMessage(error));
+  // Nothing to assert about the reader on a machine with no Pandoc; the projection test above still runs.
+  if (typeof ast === 'string') return assert.match(ast, /Pandoc is required/);
+  assert.equal(
+    inlineText(divContent(ast.blocks[0] as PandocNode).blocks),
+    'is defined by \\[\\partial_tg=-2\\mathfrak E\\] where \\(\\kappa\\ge0\\)'
+  );
 });
