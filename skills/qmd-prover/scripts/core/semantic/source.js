@@ -39,16 +39,27 @@ export function locateDivs(source) {
     }
     return found.sort((left, right) => left.start - right.start);
 }
+/**
+ * The searches below come in two forms. The `find*` pair takes an already-located list, so a caller
+ * with many lookups against one file scans it once; the `locate*` pair scans and searches in a
+ * single step, for the common case of one lookup.
+ */
+export function findDiv(divs, id) {
+    return divs.find((div) => div.attrs.id === id) ?? null;
+}
+/** Every `.proof` div targeting `target`, in document order (an abandoned attempt may sit beside the active proof). */
+export function findProofs(divs, target) {
+    const id = target.replace(/^@/, '');
+    return divs.filter((div) => div.attrs.classes.includes('proof') && div.attrs.values.of?.replace(/^@/, '') === id);
+}
 export function locateDiv(source, id) {
-    return locateDivs(source).find((div) => div.attrs.id === id) ?? null;
+    return findDiv(locateDivs(source), id);
 }
 export function locateProof(source, target) {
     return locateProofs(source, target)[0] ?? null;
 }
-/** Every `.proof` div targeting `target`, in document order (an abandoned attempt may sit beside the active proof). */
 export function locateProofs(source, target) {
-    const id = target.replace(/^@/, '');
-    return locateDivs(source).filter((div) => div.attrs.classes.includes('proof') && div.attrs.values.of?.replace(/^@/, '') === id);
+    return findProofs(locateDivs(source), target);
 }
 function body(source, div) {
     if (!div)
@@ -60,10 +71,11 @@ function body(source, div) {
 }
 export async function readLocatedBlock(file, id) {
     const source = await readFile(file, 'utf8');
-    const div = locateDiv(source, id);
+    const divs = locateDivs(source);
+    const div = findDiv(divs, id);
     if (!div)
         return null;
-    const proofDiv = locateProof(source, id);
+    const proofDiv = findProofs(divs, id)[0] ?? null;
     return {
         source,
         div,

@@ -5,7 +5,7 @@ import type { Compilation } from '../semantic/compiler.js';
 import { externalPolicyHash } from '../infrastructure/external.js';
 import { atomicJson, atomicWrite, relativePosix, sha256, stableJson } from '../infrastructure/files.js';
 import { auxLayout } from '../infrastructure/aux.js';
-import { locateDiv, locateProofs, readLocatedBlock, readLocatedProof, setStatusAttribute } from '../semantic/source.js';
+import { findDiv, findProofs, locateDivs, readLocatedBlock, readLocatedProof, setStatusAttribute } from '../semantic/source.js';
 import type { LocatedBlock, LocatedDiv } from '../semantic/source.js';
 import { buildVerifierPacket, checkerContract, configured, invokeVerifier, verificationContext, verificationKey, verificationOutcome } from '../verification/protocol.js';
 import { cachedDecision, verifierFailure } from '../verification/cache.js';
@@ -673,14 +673,16 @@ export async function writeStatusProjection(compilation: Compilation, run: Verif
     try { source = await readFile(absolute, 'utf8'); }
     catch { continue; }
     const edits: Array<{ div: LocatedDiv; status: FactStatusValue | null }> = [];
+    // Every fact in this file searches the same div list, so scan the source once for all of them.
+    const divs = locateDivs(source);
     for (const entry of perFact.filter((item) => item.file === file)) {
       if (entry.kind === 'definition') {
-        const div = locateDiv(source, entry.id);
+        const div = findDiv(divs, entry.id);
         if (div) edits.push({ div, status: entry.status });
         continue;
       }
       // The active proof carries the verdict; any abandoned attempt beside it is cleared.
-      const proofs = locateProofs(source, entry.id);
+      const proofs = findProofs(divs, entry.id);
       const active = proofs.find((div) => div.startLine === entry.proofLine) ?? proofs[0];
       for (const div of proofs) edits.push({ div, status: div === active ? entry.status : null });
     }

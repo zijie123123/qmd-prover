@@ -4,7 +4,7 @@ import { atomicJson, cleanId, readJson, relativePosix, sha256, stableJson } from
 import { auxLayout, scaffoldAux } from '../infrastructure/aux.js';
 import { loadConfig, pandocCommand } from '../infrastructure/config.js';
 import { divContent, inlineText, metaValue, normalizedAst, readAst, references, walk } from './pandoc.js';
-import { locateDiv, locateProof } from './source.js';
+import { findDiv, findProofs, locateDivs } from './source.js';
 import {
   ABANDON_CLASS, DISPROOF_CLASS, DRAFT_CLASS, KIND_BY_PREFIX, RESULT_KINDS, SCHEMA_VERSION,
   SEMANTIC_ID_PATTERN, SEMANTIC_PREFIX_PATTERN
@@ -222,36 +222,45 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
       try {
         const [ast, source] = await Promise.all([readAst(file.absolute, { pandoc: project.pandoc }), readFile(file.absolute, 'utf8')]);
         const entries = semanticDivs(ast);
+        // Line numbers come from the raw source, not the AST, so every entry needs a lookup against
+        // it. Scan the file once here and search that list per entry.
+        const divs = locateDivs(source);
         const imports = importsFromMeta(ast, file.relative, diagnostics);
         const fileResults: SemanticResult[] = [];
         const fileProofs: ParsedProof[] = [];
         for (const entry of entries) {
           const { id, classes, values } = entry.attribute;
+          const blocks = entry.blocks;
+          const target = cleanId(String(values.of ?? ''));
+          const located = entry.type === 'proof' ? (target ? findProofs(divs, target)[0] ?? null : null) : findDiv(divs, id);
+          const line = located?.startLine;
+          const text = inlineText(blocks);
+          const hash = sha256(stableJson(normalizedAst(blocks), 0));
+          const present = text.length > 0 || blocks.some((block) => block.t !== 'Null');
+          const dependencies = references(blocks);
+          const abandon = classes.includes(ABANDON_CLASS);
+          const draft = classes.includes(DRAFT_CLASS);
+          const disproof = classes.includes(DISPROOF_CLASS);
           if (entry.type === 'proof') {
             // A proof entry becomes a proof record plus its own structural diagnostics.
             const parsedProof = (() => {
               const diagnostics: Diagnostic[] = [];
-              const target = cleanId(String(values.of ?? ''));
-              const located = target ? locateProof(source, target) : null;
-              const line = located?.startLine;
-              const blocks = entry.blocks;
-              const abandon = classes.includes(ABANDON_CLASS);
               const proof: ParsedProof = {
                 target, file: file.relative, line,
-                refutation: classes.includes(DISPROOF_CLASS),
-                draft: classes.includes(DRAFT_CLASS),
+                refutation: disproof,
+                draft,
                 abandon,
-                proof_hash: sha256(stableJson(normalizedAst(blocks), 0)),
-                proof_present: inlineText(blocks).length > 0 || blocks.some((block) => block.t !== 'Null'),
-                proof_text: inlineText(blocks),
-                dependencies: references(blocks),
+                proof_hash: hash,
+                proof_present: present,
+                proof_text: text,
+                dependencies,
                 blocks
               };
               if (!target) diagnostics.push(diagnostic('error', 'PROOF_TARGET_MISSING', 'A .proof block requires an of attribute', file.relative, line));
               // An empty proof block says the same thing as no proof block: the fact is open. That is a
               // legitimate state, so this is a warning — it exists only so a block emptied by a bad edit
               // stays visible. An abandoned or drafted proof is expected to be incomplete, so it is silent.
-              if (!abandon && !proof.draft && !proof.proof_present) diagnostics.push(diagnostic('warning', 'PROOF_EMPTY', `Proof of @${target || '?'} is empty; @${target || '?'} is open`, file.relative, line, target));
+              if (!abandon && !draft && !present) diagnostics.push(diagnostic('warning', 'PROOF_EMPTY', `Proof of @${target || '?'} is empty; @${target || '?'} is open`, file.relative, line, target));
               return { proof, diagnostics };
             })();
             fileProofs.push(parsedProof.proof);
@@ -263,16 +272,11 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
           // A result entry becomes a semantic-result record plus its own validation diagnostics.
           const parsedResult = (() => {
             const diagnostics: Diagnostic[] = [];
-            const located = locateDiv(source, id);
-            const line = located?.startLine;
             const semanticKinds = classes.filter((item): item is ResultKind => RESULT_KINDS.includes(item as ResultKind));
             const kind = entry.kind ?? 'unknown';
             const title = String(values.name ?? '');
             const date = String(values.date ?? '');
-            const blocks = entry.blocks;
-            const statementText = inlineText(blocks);
-            const statementHash = sha256(stableJson(normalizedAst(blocks), 0));
-            const constructionDependencies = kind === 'definition' ? references(blocks) : [];
+            const constructionDependencies = kind === 'definition' ? dependencies : [];
             const result: SemanticResult = {
               id, file: file.relative, line, kind, classes: [...classes].sort(), title, date,
               origin: id.startsWith(config.goals['id-prefix']) ? 'user' : 'agent',
@@ -280,16 +284,16 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
               mechanical: 'ok',
               status: 'open',
               export: values.export == null ? null : String(values.export),
-              statement_text: statementText,
-              statement_hash: statementHash,
+              statement_text: text,
+              statement_hash: hash,
               title_hash: sha256(title),
               proof_hash: sha256(stableJson(normalizedAst([]), 0)),
               proof_present: false,
               proof_text: '',
               refutation: false,
               // A definition carries its own `.draft`; a theorem-like inherits it from its linked proof.
-              draft: kind === 'definition' && classes.includes(DRAFT_CLASS),
-              abandon: classes.includes(ABANDON_CLASS),
+              draft: kind === 'definition' && draft,
+              abandon,
               construction_dependencies: constructionDependencies,
               dependencies: constructionDependencies
             };
@@ -303,10 +307,10 @@ export async function compileProject(root = process.cwd(), options: CompilerOpti
             if (!date) diagnostics.push(diagnostic('error', 'RESULT_DATE_MISSING', `${id} requires an ISO introduction date attribute in YYYY-MM-DD form`, file.relative, line, id));
             else if (!validIntroductionDate(date)) diagnostics.push(diagnostic('error', 'RESULT_DATE_INVALID', `${id} introduction date must be a real date in YYYY-MM-DD form`, file.relative, line, id));
             if (result.export !== null && result.export !== id) diagnostics.push(diagnostic('error', 'EXPORT_ID_MISMATCH', `${id} must set export="${id}" when it is imported by another file`, file.relative, line, id));
-            if (statementText.length === 0 && blocks.every((block) => block.t === 'Null')) diagnostics.push(diagnostic('error', 'STATEMENT_MISSING', `${id} requires a nonempty statement body`, file.relative, line, id));
+            if (!present) diagnostics.push(diagnostic('error', 'STATEMENT_MISSING', `${id} requires a nonempty statement body`, file.relative, line, id));
             // The refutation flag belongs on a linked .proof block, never on a result body; a
             // definition cannot be refuted at all (challenge a theorem-like claim about it instead).
-            if (classes.includes(DISPROOF_CLASS)) diagnostics.push(diagnostic('error', 'RESULT_DISPROOF_FORBIDDEN', `${id} must not carry .disproof on its result body; put .disproof on its linked .proof block`, file.relative, line, id));
+            if (disproof) diagnostics.push(diagnostic('error', 'RESULT_DISPROOF_FORBIDDEN', `${id} must not carry .disproof on its result body; put .disproof on its linked .proof block`, file.relative, line, id));
             const legacyHeaders = blocks.filter((block) => block.t === 'Header' && ['statement', 'uses', 'proof'].includes(inlineText(asArray(block.c)[2]).toLowerCase()));
             if (legacyHeaders.length) diagnostics.push(diagnostic('error', 'LEGACY_RESULT_SECTIONS', `${id} must use a result body and a separate linked .proof block, not Statement/Uses/Proof headings`, file.relative, line, id));
             return { result, diagnostics };

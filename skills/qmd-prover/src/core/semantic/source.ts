@@ -66,18 +66,31 @@ export function locateDivs(source: string): LocatedDiv[] {
   return found.sort((left, right) => left.start - right.start);
 }
 
+/**
+ * The searches below come in two forms. The `find*` pair takes an already-located list, so a caller
+ * with many lookups against one file scans it once; the `locate*` pair scans and searches in a
+ * single step, for the common case of one lookup.
+ */
+export function findDiv(divs: LocatedDiv[], id: string): LocatedDiv | null {
+  return divs.find((div) => div.attrs.id === id) ?? null;
+}
+
+/** Every `.proof` div targeting `target`, in document order (an abandoned attempt may sit beside the active proof). */
+export function findProofs(divs: LocatedDiv[], target: string): LocatedDiv[] {
+  const id = target.replace(/^@/, '');
+  return divs.filter((div) => div.attrs.classes.includes('proof') && div.attrs.values.of?.replace(/^@/, '') === id);
+}
+
 export function locateDiv(source: string, id: string): LocatedDiv | null {
-  return locateDivs(source).find((div) => div.attrs.id === id) ?? null;
+  return findDiv(locateDivs(source), id);
 }
 
 export function locateProof(source: string, target: string): LocatedDiv | null {
   return locateProofs(source, target)[0] ?? null;
 }
 
-/** Every `.proof` div targeting `target`, in document order (an abandoned attempt may sit beside the active proof). */
 export function locateProofs(source: string, target: string): LocatedDiv[] {
-  const id = target.replace(/^@/, '');
-  return locateDivs(source).filter((div) => div.attrs.classes.includes('proof') && div.attrs.values.of?.replace(/^@/, '') === id);
+  return findProofs(locateDivs(source), target);
 }
 
 function body(source: string, div: LocatedDiv | null): LocatedBody | null {
@@ -90,9 +103,10 @@ function body(source: string, div: LocatedDiv | null): LocatedBody | null {
 
 export async function readLocatedBlock(file: string, id: string): Promise<LocatedBlock | null> {
   const source = await readFile(file, 'utf8');
-  const div = locateDiv(source, id);
+  const divs = locateDivs(source);
+  const div = findDiv(divs, id);
   if (!div) return null;
-  const proofDiv = locateProof(source, id);
+  const proofDiv = findProofs(divs, id)[0] ?? null;
   return {
     source,
     div,
