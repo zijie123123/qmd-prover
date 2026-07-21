@@ -191,6 +191,30 @@ test('inspector supports fact, path, search, and lowest-frontier queries on a na
   assert.equal(search.snapshot_id, projectInspection.snapshot_id);
 });
 
+test('the frontier keeps a drafted fact that sits above another drafted fact', async () => {
+  const root = await project();
+  // Two routes out of one goal. The drafted route stacks `.draft` on `.draft`, so both
+  // are `open`: proving the lower one leaves the upper one just as unfinished, and both
+  // are obligations. The written route is only `unverified`, which a lower obligation
+  // does explain, so it still collapses to its base.
+  await writeFile(path.join(root, 'goal.qmd'), [
+    result('thm-main-draft-stack', 'The final claim.', { proofText: 'Use @thm-draft-stack-upper and @lem-written-middle.' }),
+    result('thm-draft-stack-upper', 'The upper drafted claim.', { proofText: 'Use @lem-draft-stack-lower.', draft: true }),
+    result('lem-draft-stack-lower', 'The lower drafted claim.', { proofText: 'Sketch only.', draft: true }),
+    result('lem-written-middle', 'The written middle claim.', { proofText: 'Use @lem-written-base.' }),
+    result('lem-written-base', 'The written base claim.', { proofText: 'Immediate.' })
+  ].join('\n'));
+  const inspection = await inspectProject(root, options);
+  assert.equal(inspection.ok, true);
+  const statusOf = (id: string) => must(inspection.graph.nodes.find((node) => node.id === id)).global_verification?.status;
+  assert.equal(statusOf('thm-draft-stack-upper'), 'open');
+  assert.equal(statusOf('lem-draft-stack-lower'), 'open');
+  assert.equal(statusOf('lem-written-middle'), 'unverified');
+  const frontier = await analyzeDependencies(root, 'frontier', ['@thm-main-draft-stack'], options);
+  assert.deepEqual(must(frontier.frontier).map((item) => item.fact.id), ['lem-draft-stack-lower', 'lem-written-base', 'thm-draft-stack-upper']);
+  assert.deepEqual(must(frontier.frontier).find((item) => item.fact.id === 'thm-draft-stack-upper')?.path, ['thm-main-draft-stack', 'thm-draft-stack-upper']);
+});
+
 test('dependency findings expose unused declarations, reachability, reuse, and deterministic alternative paths', async () => {
   const root = await project();
   await writeFile(path.join(root, 'main.qmd'), result('thm-main-paths', 'Both routes reach the goal.'));

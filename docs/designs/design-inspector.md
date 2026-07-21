@@ -470,9 +470,17 @@ For a selected fact:
 1. Traverse its aggregate dependency closure.
 2. Find open, ready, rejected, disproved, broken, abandoned, missing, or
    otherwise unusable facts.
-3. Remove a blocked fact from the frontier when a lower unresolved dependency
-   already explains the block.
-4. Return the lowest unresolved claims with paths from the selected result.
+3. Remove a blocked or unverified fact from the frontier when a lower unresolved
+   dependency already explains it. Only these two values are explained from
+   below: `blocked` is caused by an unverified dependency, and `unverified`
+   means a written proof that no verdict has reached yet, which arrives in the
+   same bottom-up order.
+4. Keep every other unresolved fact however deep it sits. `open`, `rejected`,
+   `disproved`, `broken`, `abandoned`, and missing describe the fact itself, so
+   resolving anything beneath such a fact leaves it exactly as unresolved. A
+   drafted proof stacked above another drafted proof is two obligations, not
+   one.
+5. Return the resulting claims with paths from the selected result.
 
 The frontier is a useful next-obligation set, not merely every unverified node.
 

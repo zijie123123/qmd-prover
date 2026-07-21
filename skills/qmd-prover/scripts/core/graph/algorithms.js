@@ -140,6 +140,16 @@ export function requireNode(graph, requested) {
         throw new Error(`Unknown fact in dependency snapshot: @${id}`);
     return node;
 }
+/**
+ * Only these two global values describe a fact that a lower obligation explains:
+ * `blocked` is caused by an unverified dependency, and `unverified` means the proof
+ * is written but no verdict has been produced yet, which is the bottom-up order the
+ * frontier already walks. Every other unresolved value -- `open`, `rejected`,
+ * `disproved`, `broken`, `abandoned`, and a node with no status at all -- is caused
+ * by the fact itself, so resolving anything beneath it cannot resolve it and it must
+ * stay on the frontier however deep it sits. See docs/designs/design-inspector.md.
+ */
+const EXPLAINED_BY_LOWER = new Set(['blocked', 'unverified']);
 export function frontier(graph, requested) {
     const target = requireNode(graph, requested);
     const closure = new Set([target.id, ...traverse(graph, target.id)]);
@@ -147,6 +157,8 @@ export function frontier(graph, requested) {
     const unresolved = [...closure].filter((id) => nodes.get(id)?.global_verification?.status !== 'verified');
     const cycleSets = (graph.cycles ?? []).map((cycle) => new Set(cycle.slice(0, -1)));
     const sameCycle = (left, right) => cycleSets.some((cycle) => cycle.has(left) && cycle.has(right));
-    const lowest = unresolved.filter((id) => ![...traverse(graph, id)].some((dependency) => dependency !== id && unresolved.includes(dependency) && !sameCycle(id, dependency)));
+    const explainedByLower = (id) => EXPLAINED_BY_LOWER.has(nodes.get(id)?.global_verification?.status ?? '')
+        && [...traverse(graph, id)].some((dependency) => dependency !== id && unresolved.includes(dependency) && !sameCycle(id, dependency));
+    const lowest = unresolved.filter((id) => !explainedByLower(id));
     return lowest.sort().map((id) => ({ fact: nodes.get(id) ?? { id, status: 'missing' }, path: shortestPath(graph, target.id, id) }));
 }
