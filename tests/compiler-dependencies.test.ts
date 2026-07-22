@@ -5,6 +5,7 @@ import test from 'node:test';
 import { readJson, stableJson } from '../skills/qmd-prover/src/core/infrastructure/files.js';
 import { inspectFact, inspectPath, inspectProject } from '../skills/qmd-prover/src/commands/inspect/index.js';
 import { analyzeDependencies } from '../skills/qmd-prover/src/commands/dependency/index.js';
+import { printReport } from '../skills/qmd-prover/src/cli/output/report.js';
 import { compileProject, theoremBundle } from '../skills/qmd-prover/src/core/semantic/compiler.js';
 import { document, must, options, project, result, proof } from './support.js';
 
@@ -251,4 +252,13 @@ test('dependency findings expose unused declarations, reachability, reuse, and d
     ['thm-main-paths', 'lem-path-left', 'def-path-base'],
     ['thm-main-paths', 'lem-path-right', 'def-path-base']
   ]);
+
+  // `dependency isolated` returns GraphNodes under `facts`, whose `mechanical` is the bare string
+  // `'ok'`. The printed report must render them as an `isolated facts:` list, never as a verifier
+  // `checks:` block reading `mechanical=undefined`.
+  const isolatedReport = printReport(await analyzeDependencies(root, 'isolated', [], options));
+  assert.match(isolatedReport, /isolated facts:/);
+  assert.match(isolatedReport, /@lem-isolated \[lemma, open\]/);
+  assert.doesNotMatch(isolatedReport, /mechanical=undefined/);
+  assert.doesNotMatch(isolatedReport, /^checks:/m);
 });

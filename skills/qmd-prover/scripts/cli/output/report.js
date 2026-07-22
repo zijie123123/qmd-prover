@@ -164,7 +164,12 @@ export function printReport(input) {
             lines.push(`${node.disproof?.status ?? 'conditional'} disproof @${node.id}: ${node.disproof?.refutation}`);
         }
     }
-    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => item.mechanical !== undefined
+    // Only a real inspection check item is rendered here. `result.facts` is overloaded: `inspect`
+    // fills it with check items whose `mechanical` is an object `{status, references, …}`, while
+    // `dependency isolated`/`unreachable` fill it with GraphNodes whose `mechanical` is the bare
+    // string `'ok'`/`'broken'`. Requiring the object shape keeps those graph nodes out, so they no
+    // longer print a spurious `checks:` block reading `mechanical=undefined`.
+    const checks = result.check ? [result.check] : (result.facts ?? []).filter((item) => typeof item.mechanical === 'object' && item.mechanical !== null
         && item.local_verification !== undefined && item.global_verification !== undefined);
     if (checks.length) {
         lines.push('checks:');
