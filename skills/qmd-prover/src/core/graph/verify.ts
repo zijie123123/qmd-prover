@@ -19,7 +19,7 @@ import type {
   LocalVerificationStatus, VerificationMode, VerifierMetrics, VerifierReport
 } from '../shared/verdicts.js';
 import type { ReferenceCheck, SemanticResult } from '../semantic/model.js';
-import { projectSourceSignature, readPublishedSnapshot } from './snapshot.js';
+import { describeSourceDrift, projectSourceSignature, readPublishedSnapshot } from './snapshot.js';
 
 export interface InspectionVerificationSummary {
   available: boolean;
@@ -389,7 +389,10 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
       }
       catch (error) {
         const failure = verifierFailure(error, result.id);
-        failure.code = String(asErrorLike(error).code ?? 'SOURCE_STALE');
+        // Only the explicit disappeared-block throws above carry SOURCE_STALE. Any other error
+        // here (a transient read failure, resource exhaustion) is an infrastructure failure and
+        // must not masquerade as evidence that the sources changed.
+        failure.code = String(asErrorLike(error).code ?? 'PACKET_READ_FAILED');
         failure.failed_target = result.id;
         outcomes.set(result.id, failure);
         continue;
@@ -442,23 +445,41 @@ export async function verifyFacts(compilation: Compilation, context: Verificatio
           continue;
         }
 
-        let contextCurrent = false;
+        // The call happened whether or not its verdict survives the freshness check below, so its
+        // cost is tallied first; a discarded verdict must not read back as "the verifier never ran".
+        if (metrics) {
+          tally.verifier_duration_ms += metrics.duration_ms;
+          tally.verifier_tokens += metrics.usage?.total_tokens ?? 0;
+        }
+
+        // Freshness: the verdict is only trustworthy if the sources it judged are still the sources
+        // on disk. A failed recompile proves nothing about the sources, so it is reported as its own
+        // infrastructure failure — never as SOURCE_STALE.
+        let drift: string | null = null;
+        let recompileFailure: string | null = null;
         try {
           const currentCompilation = await compileProject(root, { ...options, write: false });
           const currentContext = await verificationContext(currentCompilation);
-          contextCurrent = projectSourceSignature(currentCompilation, currentContext.contextHash) === initialSourceSignature;
-        } catch { contextCurrent = false; }
-        if (!contextCurrent) {
-          fatal = verifierFailure(Object.assign(new Error(`Project sources or verification context changed while @${result.id} was being checked`), { code: 'SOURCE_STALE' }), result.id);
+          if (projectSourceSignature(currentCompilation, currentContext.contextHash) !== initialSourceSignature) {
+            drift = describeSourceDrift(compilation, context.contextHash, currentCompilation, currentContext.contextHash)
+              ?? 'project sources changed in an unclassified way';
+          }
+        } catch (error) {
+          recompileFailure = String(asErrorLike(error).message ?? error);
+        }
+        if (recompileFailure) {
+          fatal = verifierFailure(Object.assign(new Error(`Could not confirm project sources were unchanged while @${result.id} was being checked: the freshness recompile failed (${recompileFailure}). The verdict was discarded unrecorded; this is an infrastructure failure, not evidence that sources changed`), { code: 'FRESHNESS_CHECK_FAILED' }), result.id);
           fatal.failed_target = result.id;
           outcomes.set(result.id, fatal);
           tally.stopped_after = result.id;
           continue;
         }
-
-        if (metrics) {
-          tally.verifier_duration_ms += metrics.duration_ms;
-          tally.verifier_tokens += metrics.usage?.total_tokens ?? 0;
+        if (drift) {
+          fatal = verifierFailure(Object.assign(new Error(`Project sources or verification context changed while @${result.id} was being checked: ${drift}`), { code: 'SOURCE_STALE' }), result.id);
+          fatal.failed_target = result.id;
+          outcomes.set(result.id, fatal);
+          tally.stopped_after = result.id;
+          continue;
         }
         const record = {
           schema_version: SCHEMA_VERSION,
@@ -706,6 +727,11 @@ export async function writeStatusProjection(compilation: Compilation, run: Verif
     let source: string;
     try { source = await readFile(absolute, 'utf8'); }
     catch { continue; }
+    // Compare-and-swap guard: project a verdict only onto the exact bytes this run compiled and
+    // verified. If the file changed underneath the inspection — a concurrent edit, however it
+    // happened — writing anything based on this run would stamp a verdict onto content it never
+    // judged, or clobber the newer edit. Authored mathematics always outranks a display attribute.
+    if (compilation.sourceHashes[file] !== sha256(source)) continue;
     const edits: Array<{ div: LocatedDiv; status: FactStatusValue | null }> = [];
     // Every fact in this file searches the same div list, so scan the source once for all of them.
     const divs = locateDivs(source);

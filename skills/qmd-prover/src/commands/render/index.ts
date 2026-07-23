@@ -81,6 +81,7 @@ export async function renderProject(root = process.cwd(), options: CompilerOptio
     },
     goals: snapshot.manifest.results.filter((result) => result.origin === 'user'),
     notes: snapshot.notes,
+    sourceHashes: compiled.sourceHashes,
     complete: compiled.complete,
     ok: snapshot.diagnostics.every((item) => item.severity !== 'error')
   };

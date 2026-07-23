@@ -68,6 +68,37 @@ export function projectSourceSignature(compilation: Compilation, contextHash: st
   return sha256(stableJson({ context_hash: contextHash, compilation: compilationSource(compilation) }, 0));
 }
 
+/**
+ * Name what makes two compilations' source signatures differ, or null when they are identical.
+ * The mid-run freshness check uses this so a genuine SOURCE_STALE failure can say which input
+ * changed, instead of only reporting that one opaque hash differs from another.
+ */
+export function describeSourceDrift(before: Compilation, beforeContext: string, after: Compilation, afterContext: string): string | null {
+  if (projectSourceSignature(before, beforeContext) === projectSourceSignature(after, afterContext)) return null;
+  const changes: string[] = [];
+  if (beforeContext !== afterContext) changes.push('the verification context (external basis or checker contract)');
+  const list = (ids: string[]): string => {
+    const shown = ids.slice(0, 5).map((id) => `@${id}`).join(', ');
+    return ids.length > 5 ? `${shown}, …` : shown;
+  };
+  const byId = (compilation: Compilation): Map<string, string> => new Map(
+    (compilationSource(compilation) as { results: Array<{ id: string }> }).results.map((result) => [result.id, stableJson(result, 0)])
+  );
+  const beforeResults = byId(before);
+  const afterResults = byId(after);
+  const added = [...afterResults.keys()].filter((id) => !beforeResults.has(id)).sort();
+  const removed = [...beforeResults.keys()].filter((id) => !afterResults.has(id)).sort();
+  const edited = [...beforeResults.keys()].filter((id) => afterResults.has(id) && afterResults.get(id) !== beforeResults.get(id)).sort();
+  if (added.length) changes.push(`results appeared: ${list(added)}`);
+  if (removed.length) changes.push(`results disappeared: ${list(removed)}`);
+  if (edited.length) changes.push(`result content changed: ${list(edited)}`);
+  if (stableJson(before.manifest.proofs, 0) !== stableJson(after.manifest.proofs, 0)) changes.push('proof blocks changed');
+  if (stableJson(before.manifest.files, 0) !== stableJson(after.manifest.files, 0)) changes.push('the source file listing changed');
+  if (stableJson(before.diagnostics, 0) !== stableJson(after.diagnostics, 0)) changes.push('compiler diagnostics changed');
+  if (before.complete !== after.complete) changes.push('parse completeness changed');
+  return changes.length ? changes.join('; ') : 'project sources changed in an unclassified way';
+}
+
 export function buildProjectSnapshot(compilation: Compilation, contextHash: string, diagnostics: Diagnostic[] = compilation.diagnostics): ProjectSnapshot {
   const results = compilation.manifest.results;
   const nodes: GraphNode[] = [

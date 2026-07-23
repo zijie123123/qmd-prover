@@ -708,7 +708,9 @@ All import diagnostics are file-scoped and break every fact declared in the file
 | `AI_DISPROOF_REJECTED` | **warning** | The verifier did not validate a proposed refutation. Repair the counterexample or remove `.disproof`. |
 | `VERIFIER_FAILED` | error | The verifier CLI crashed, timed out, or returned an unusable report. Repair the backend; the local result stays unverified. |
 | `AI_CHECK_FAILED` | error | Fallback for a verifier error carrying no more specific code. |
-| `SOURCE_STALE` | error | Sources or verifier context changed while a check was running, or a block vanished mid-inspection. Fatal for the run: discard the result and reinspect the affected scope. |
+| `SOURCE_STALE` | error | Sources or verifier context changed while a check was running, or a block vanished mid-inspection. The message names what changed. Fatal for the run: discard the result and reinspect the affected scope. |
+| `PACKET_READ_FAILED` | error | Reading a fact's source blocks for the verifier packet failed for an infrastructure reason (not a source change). Rerun the inspection. |
+| `FRESHNESS_CHECK_FAILED` | error | The post-check freshness recompile itself failed, so the verdict could not be confirmed against the sources and was discarded. Not evidence of a source change; rerun the inspection. |
 | `CACHE_WRITE_FAILED` | error | The verification record could not be written. Fatal for the run; check disk permissions under `.qmd-prover/`. |
 
 #### Command-level

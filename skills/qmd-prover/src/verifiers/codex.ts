@@ -16,7 +16,7 @@
 // No qmd-prover code changes are needed to point it at a different model or executable —
 // only config.
 
-import { runAdapter, runProcess } from './lib.js';
+import { codexStateRemediation, runAdapter, runProcess } from './lib.js';
 
 /** `codex exec` prints a "tokens used\n<N>" line (grouped digits) to stderr; pull out the count. */
 function parseCodexTokens(stderr: string): number | undefined {
@@ -42,7 +42,9 @@ await runAdapter(async (prompt, options) => {
 
   const result = await runProcess(executable, args);
   if (result.code !== 0) {
-    throw new Error(`codex exited ${result.code ?? `signal ${result.signal}`}: ${result.stderr.trim() || result.stdout.trim()}`);
+    const remediation = codexStateRemediation(result.stderr);
+    const detail = result.stderr.trim() || result.stdout.trim();
+    throw new Error(`codex exited ${result.code ?? `signal ${result.signal}`}: ${detail}${remediation ? `\n${remediation}` : ''}`);
   }
   // `codex exec` prints the final assistant message (often the bare JSON) to stdout, and a
   // token-usage line to stderr; report the token count so qmd-prover can record it.

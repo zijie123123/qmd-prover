@@ -95,9 +95,65 @@ export function runProcess(command: string, args: string[], input?: string): Pro
   });
 }
 
-/** Find the first balanced {...} JSON object that carries a "verdict" field. */
-export function extractVerdict(text: string): Record<string, unknown> | null {
+/**
+ * Repair the two ways a model reliably breaks JSON when its strings carry mathematics:
+ * TeX escapes that are not valid JSON escapes (`\(`, `\xi`, …) and raw control characters
+ * (literal newlines or tabs inside a string). Both are rewritten to their escaped forms;
+ * every already-valid escape is left untouched, so valid JSON passes through byte-for-byte.
+ */
+export function repairJsonEscapes(candidate: string): string {
+  let repaired = '';
+  let inString = false;
+  for (let index = 0; index < candidate.length; index += 1) {
+    const char = candidate[index];
+    if (!inString) {
+      if (char === '"') inString = true;
+      repaired += char;
+      continue;
+    }
+    if (char === '\\') {
+      const next = candidate[index + 1] ?? '';
+      if ('"\\/bfnrt'.includes(next)) { repaired += char + next; index += 1; }
+      else if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(candidate.slice(index + 2, index + 6))) { repaired += candidate.slice(index, index + 6); index += 5; }
+      else repaired += '\\\\';
+      continue;
+    }
+    if (char === '"') { inString = false; repaired += char; continue; }
+    if (char < ' ') {
+      const short: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f' };
+      repaired += short[char] ?? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      continue;
+    }
+    repaired += char;
+  }
+  return repaired;
+}
+
+/** What scanning the model output for a verdict produced. */
+export interface VerdictExtraction {
+  verdict: Record<string, unknown> | null;
+  /** Set when a balanced object mentioning "verdict" was found but could not be parsed even after repair. */
+  malformed: { candidate: string; error: string } | null;
+}
+
+/**
+ * Find the first balanced {...} object carrying a "verdict" field. Objects that are not strictly
+ * valid JSON get one repair attempt (see repairJsonEscapes) before being given up on; a candidate
+ * that still fails is reported as malformed rather than pretending no verdict was present.
+ */
+export function findVerdict(text: string): VerdictExtraction {
   const source = String(text ?? '');
+  let malformed: VerdictExtraction['malformed'] = null;
+  const attempt = (candidate: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && 'verdict' in parsed) return parsed as Record<string, unknown>;
+      return null;
+    } catch (error) {
+      if (!malformed && candidate.includes('"verdict"')) malformed = { candidate, error: (error as Error).message };
+      return null;
+    }
+  };
   for (let start = 0; start < source.length; start += 1) {
     if (source[start] !== '{') continue;
     let depth = 0;
@@ -116,16 +172,20 @@ export function extractVerdict(text: string): Record<string, unknown> | null {
       else if (char === '}') {
         depth -= 1;
         if (depth === 0) {
-          try {
-            const parsed: unknown = JSON.parse(source.slice(start, end + 1));
-            if (parsed && typeof parsed === 'object' && 'verdict' in parsed) return parsed as Record<string, unknown>;
-          } catch { /* not this object; keep scanning */ }
+          const candidate = source.slice(start, end + 1);
+          const parsed = attempt(candidate) ?? attempt(repairJsonEscapes(candidate));
+          if (parsed) return { verdict: parsed, malformed: null };
           break;
         }
       }
     }
   }
-  return null;
+  return { verdict: null, malformed };
+}
+
+/** Back-compatible view of findVerdict: the parsed verdict object, or null. */
+export function extractVerdict(text: string): Record<string, unknown> | null {
+  return findVerdict(text).verdict;
 }
 
 function normalizeVerdict(object: Record<string, unknown>): VerifierReport {
@@ -142,6 +202,22 @@ function normalizeVerdict(object: Record<string, unknown>): VerifierReport {
     repair_hints: string(object.repair_hints),
     refutation: string(object.refutation)
   };
+}
+
+/**
+ * Recognize the Codex CLI failing to open its own state directory (usually `~/.codex`) because
+ * the surrounding sandbox exposes it read-only, and return a short instruction the calling agent
+ * can act on. Returns '' for any other failure.
+ */
+export function codexStateRemediation(stderr: string): string {
+  const text = String(stderr ?? '');
+  const statePattern = /attempt to write a readonly database|state[_\d]*\.sqlite|failed to initialize in-process app-server client/i;
+  if (!statePattern.test(text)) return '';
+  return [
+    'Codex could not write its own state directory (usually ~/.codex); the mathematics was never reviewed.',
+    'To fix: rerun with write access to that directory, or point Codex at a writable location by setting',
+    'CODEX_HOME to a writable directory before invoking qmd-prover, e.g.: CODEX_HOME="$(mktemp -d)" qmd-prover inspect …'
+  ].join(' ');
 }
 
 /**
@@ -191,8 +267,19 @@ export async function runAdapter(invoke: AdapterInvoke): Promise<void> {
   const usage = typeof result === 'string' ? undefined : result.usage;
   debugDump(packet, 'output', String(output ?? ''));
 
-  const verdict = extractVerdict(output);
-  if (!verdict) return fail('verifier adapter: model output contained no JSON object with a "verdict" field', String(output).slice(0, 2000));
+  const extraction = findVerdict(output);
+  const verdict = extraction.verdict;
+  if (!verdict) {
+    // Distinguish "the model returned no verdict at all" from "it returned one we could not parse":
+    // the second is an adapter-side serialization problem, and its payload is the evidence.
+    if (extraction.malformed) {
+      return fail(
+        `verifier adapter: model output contained a JSON-shaped object with a "verdict" field, but it is not valid JSON even after escape repair (${extraction.malformed.error})`,
+        extraction.malformed.candidate.slice(0, 2000)
+      );
+    }
+    return fail('verifier adapter: model output contained no JSON object with a "verdict" field', String(output).slice(0, 2000));
+  }
   // qmd-prover reads `usage` from the emitted JSON as metrics; it is not part of the verdict schema.
   const emitted = usage ? { ...normalizeVerdict(verdict), usage } : normalizeVerdict(verdict);
   debugDump(packet, 'verdict', JSON.stringify(emitted, null, 2));

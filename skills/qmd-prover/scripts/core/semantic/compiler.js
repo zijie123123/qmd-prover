@@ -177,9 +177,13 @@ export async function compileProject(root = process.cwd(), options = {}) {
         const files = [];
         const results = [];
         const proofs = [];
+        const sourceHashes = {};
         for (const file of project.discovered) {
             try {
                 const [ast, source] = await Promise.all([readAst(file.absolute, { pandoc: project.pandoc }), readFile(file.absolute, 'utf8')]);
+                // Raw byte identity of the file as compiled, so later write-backs can refuse to touch
+                // a file that changed underneath this compilation.
+                sourceHashes[file.relative] = sha256(source);
                 const entries = semanticDivs(ast);
                 // Line numbers come from the raw source, not the AST, so every entry needs a lookup against
                 // it. Scan the file once here and search that list per entry.
@@ -313,7 +317,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
                 diagnostics.push(diagnostic('error', 'PARSE_ERROR', errorMessage(error), file.relative));
             }
         }
-        return { files, results, proofs, diagnostics };
+        return { files, results, proofs, diagnostics, sourceHashes };
     })();
     // Index results and proofs by id/export/target, reporting duplicate declarations.
     const indexed = (() => {
@@ -626,6 +630,7 @@ export async function compileProject(root = process.cwd(), options = {}) {
         root: project.root, config: project.config,
         manifest: output.manifest, graph: output.graph, diagnostics: output.diagnostics,
         summary: output.summary, goals: output.goals, notes: output.notes,
+        sourceHashes: parsed.sourceHashes,
         ok: output.ok, complete: output.complete
     };
 }

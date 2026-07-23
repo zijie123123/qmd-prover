@@ -72,7 +72,9 @@ The project-level codes introduced by unified inspection are:
 | `DUPLICATE_ID` | One explicit ID is declared more than once anywhere in the project. The single ID namespace is ambiguous, so inspection and dependency analysis stop before verification or snapshot publication. |
 | `MAIN_STATEMENT_MUTATED` | A protected main goal's statement no longer matches the identity recorded in `.qmd-prover/statement-locks.json`. The lock is created as soon as the goal's own file is error-free; later drift is reported without rewriting the note. |
 | `MAIN_TITLE_MUTATED` | A protected main goal's title drifted from its locked identity. |
-| `SOURCE_STALE` | Project sources, protected-goal locks, the external basis, or the checker contract changed while an independent check was running. The result is not accepted or cached, and the run stops. |
+| `SOURCE_STALE` | Project sources, protected-goal locks, the external basis, or the checker contract changed while an independent check was running. The diagnostic names the drifted component. The result is not accepted or cached, and the run stops. |
+| `PACKET_READ_FAILED` | Reading a fact's source blocks for the verifier packet failed for an infrastructure reason. Distinct from `SOURCE_STALE`: it carries no evidence that sources changed. |
+| `FRESHNESS_CHECK_FAILED` | The post-check freshness recompile failed, so the verdict could not be confirmed against the sources and was discarded unrecorded. Distinct from `SOURCE_STALE`: it carries no evidence that sources changed. |
 | `CACHE_WRITE_FAILED` | An exact decision record could not be written. The run stops rather than ever report an uncached result as verified. |
 | `VERIFIER_FAILED` | A configured verifier failed to launch, timed out, or returned malformed output. A structured failure record is written under `.qmd-prover/verification/failures/` and the remaining uncached checks in the run are skipped. |
 | `AI_CHECK_FAILED` | One fact's local conditional check ended in an infrastructure error rather than a verdict. The fact keeps its machine status and composes as `unverified`. |
